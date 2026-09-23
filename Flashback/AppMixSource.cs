@@ -210,9 +210,11 @@ public sealed class AppMixSource : IRecordingAudio
     }
 
     // Lists apps that currently own an audio session on a playback device, for the mixer UI.
-    internal static IReadOnlyList<string> ActiveApps(string deviceId)
+    internal static IReadOnlyList<string> ActiveApps(string deviceId) => ActiveAppPaths(deviceId).Keys.ToList();
+    // App name -> executable path (for its icon), for apps with an audio session on the device.
+    internal static SortedDictionary<string, string?> ActiveAppPaths(string deviceId)
     {
-        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = new SortedDictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         try
         {
             using var enumerator = new MMDeviceEnumerator();
@@ -224,12 +226,32 @@ public sealed class AppMixSource : IRecordingAudio
                 if (session.IsSystemSoundsSession || session.State == NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateExpired) continue;
                 int pid = (int)session.GetProcessID;
                 if (pid <= 0 || pid == Environment.ProcessId) continue;
-                try { using var process = Process.GetProcessById(pid); if (!process.ProcessName.Equals("Flashback", StringComparison.OrdinalIgnoreCase)) names.Add(process.ProcessName); } catch { }
+                try
+                {
+                    using var process = Process.GetProcessById(pid);
+                    if (!process.ProcessName.Equals("Flashback", StringComparison.OrdinalIgnoreCase)) names.TryAdd(process.ProcessName, ExecutablePath(pid));
+                }
+                catch { }
             }
         }
         catch { }
-        return names.ToList();
+        return names;
     }
+    // Limited-query access works for most apps, including anti-cheat protected games.
+    internal static string? ExecutablePath(int pid)
+    {
+        IntPtr handle = OpenProcess(0x1000, false, pid);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var buffer = new System.Text.StringBuilder(1024); int size = buffer.Capacity;
+            return QueryFullProcessImageName(handle, 0, buffer, ref size) ? buffer.ToString() : null;
+        }
+        finally { CloseHandle(handle); }
+    }
+    [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool QueryFullProcessImageName(IntPtr process, int flags, System.Text.StringBuilder name, ref int size);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
 }
 
 // Windows application loopback: an IAudioClient that captures one process tree.

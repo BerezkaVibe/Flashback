@@ -41,7 +41,7 @@ public partial class TrimWindow
     private async void CompressGo_Click(object sender, RoutedEventArgs e)
     {
         CompressPopup.IsOpen = false; lastCompressMb = CompressSlider.Value;
-        await CompressAsync(CompressSlider.Value, CompressCopy.IsChecked == true);
+        await CompressAsync(CompressSlider.Value);
     }
 
     private void UpdateAddButton()
@@ -66,17 +66,67 @@ public partial class TrimWindow
         DesktopMix.Value = 100; MicrophoneMix.Value = 100;
         var names = media.HasSeparateTracks ? new[] { ("Desktop", 1), ("Microphone", 2) } : media.HasAudio ? new[] { ("Audio", 0) } : Array.Empty<(string, int)>();
         Timeline.Lanes = names.Select(n => new AudioLane(n.Item1, Array.Empty<float>(), false, media.HasSeparateTracks)).ToArray();
-        if (names.Length == 0 || !previewEnabled) return;
-        string path = source;
+        laneTracks = names.Select(n => n.Item2).ToArray(); waveformsLoaded = false;
+        if (Timeline.LanesExpanded) await LoadWaveformsAsync(token);
+    }
+    private int[] laneTracks = Array.Empty<int>();
+    private bool waveformsLoaded;
+    // Waveforms decode only once the audio dropdown is opened, and never on the UI thread.
+    private async Task LoadWaveformsAsync(CancellationToken token)
+    {
+        if (waveformsLoaded || laneTracks.Length == 0 || !previewEnabled) return;
+        waveformsLoaded = true; string path = source; var tracks = laneTracks;
         try
         {
-            var peaks = await Task.WhenAll(names.Select(n => AudioWaveforms.LoadAsync(path, n.Item2, token)));
+            var peaks = await Task.Run(() => Task.WhenAll(tracks.Select(t => AudioWaveforms.LoadAsync(path, t, token))), token);
             if (token.IsCancellationRequested || path != source) return;
-            Timeline.Lanes = names.Select((n, i) => new AudioLane(n.Item1, peaks[i], LaneMuted(i), media.HasSeparateTracks)).ToArray();
+            Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Peaks = peaks[i], Muted = LaneMuted(i) }).ToArray();
         }
         catch (OperationCanceledException) { }
         catch { /* Waveforms are a visual aid; trimming works without them. */ }
     }
+    private async void LanesToggleRequested()
+    {
+        Timeline.LanesExpanded = !Timeline.LanesExpanded;
+        if (Timeline.LanesExpanded && waveformLoad != null) await LoadWaveformsAsync(waveformLoad.Token);
+    }
+
+    // Cut out: black out the picture or mute one audio lane for a stretch, keeping its time.
+    private bool userMuted;
+    private void CutTool_Click(object sender, RoutedEventArgs e)
+    {
+        if (source.Length == 0 || exportCancellation != null) return;
+        Timeline.CutMode = !Timeline.CutMode;
+        CutToolButton.SetResourceReference(Control.BorderBrushProperty, Timeline.CutMode ? "Accent" : "Outline");
+        CutToolButton.SetResourceReference(Control.ForegroundProperty, Timeline.CutMode ? "Accent" : "Ink");
+        if (Timeline.CutMode && Timeline.Lanes.Count > 0 && !Timeline.LanesExpanded) LanesToggleRequested();
+        StatusLabel.Text = Timeline.CutMode ? "Drag across the video to black it out, or across an audio lane to mute it. Click a cut to restore it." : "Cut out tool off.";
+    }
+    private void CutAdded(CutRegion cut)
+    {
+        // Overlapping cuts on the same lane merge into one.
+        var same = Timeline.Cuts.Where(c => c.Lane == cut.Lane && c.End >= cut.Start && c.Start <= cut.End).ToList();
+        var merged = new CutRegion(cut.Lane, same.Select(c => c.Start).Append(cut.Start).Min(), same.Select(c => c.End).Append(cut.End).Max());
+        Timeline.Cuts = Timeline.Cuts.Except(same).Append(merged).OrderBy(c => c.Lane).ThenBy(c => c.Start).ToArray();
+        string what = cut.Lane < 0 ? "Video blacked out" : $"{Timeline.Lanes[cut.Lane].Name} muted";
+        StatusLabel.Text = $"{what} from {KeepSection.TimeText(merged.Start)} to {KeepSection.TimeText(merged.End)}.";
+        ApplyPreviewCuts(); UpdateExportHint();
+    }
+    private void CutRemoved(CutRegion cut)
+    {
+        Timeline.Cuts = Timeline.Cuts.Where(c => c != cut).ToArray();
+        StatusLabel.Text = "Cut removed."; ApplyPreviewCuts(); UpdateExportHint();
+    }
+    // The preview shows cuts as they will export: black picture, or silence (all audio).
+    private void ApplyPreviewCuts()
+    {
+        bool black = false, mute = false;
+        foreach (var c in Timeline.Cuts)
+            if (playhead >= c.Start && playhead < c.End) { if (c.Lane < 0) black = true; else mute = true; }
+        CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
+        Player.IsMuted = userMuted || mute;
+    }
+    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.CutMode = false; CutToolButton.SetResourceReference(Control.BorderBrushProperty, "Outline"); CutToolButton.SetResourceReference(Control.ForegroundProperty, "Ink"); }
     private bool LaneMuted(int lane) => media.HasSeparateTracks && (lane == 0 ? DesktopMix.Value : MicrophoneMix.Value) < .5;
     private void LaneToggled(int lane)
     {
@@ -133,8 +183,8 @@ public partial class TrimWindow
     }
     private void ResetCrop() { CropArea.Crop = null; CropArea.Aspect = 0; CropArea.Editing = false; CropArea.Visibility = CropBar.Visibility = Visibility.Collapsed; CropButton.SetResourceReference(Control.ForegroundProperty, "Ink"); }
 
-    // Saves an MP4 at the chosen size next to the original, optionally copied for pasting.
-    private async Task CompressAsync(double limit, bool copy)
+    // Saves an MP4 at the chosen size next to the original.
+    private async Task CompressAsync(double limit)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         KeepSection[] ranges;
@@ -147,21 +197,41 @@ public partial class TrimWindow
         // Never spend more than ~24 Mbps: beyond that a bigger file looks no better than the recording.
         double target = Math.Min(limit, Math.Ceiling(seconds * (24_000_000 + 128000) / 8 / 1_000_000 / .92));
         ShareExportOptions options;
-        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100 }; options.Validate(); }
+        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
         string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" â€” {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");
         for (int i = 2; File.Exists(destination); i++) destination = Path.Combine(folder, $"{name} {i}.mp4");
         var result = await RunExportAsync(destination, ranges, options, rough: false);
         if (result == null) return;
-        string size = $"{new FileInfo(result.Path).Length / 1_000_000d:0.#} MB";
-        if (!copy) { StatusLabel.Text = $"Saved {Path.GetFileName(result.Path)} ({size})."; return; }
+        StatusLabel.Text = $"Saved {Path.GetFileName(result.Path)} ({new FileInfo(result.Path).Length / 1_000_000d:0.#} MB).";
+    }
+
+    // Copy: export with the current options into a small cache and put the file on the
+    // clipboard, so a clip can be pasted into Discord or a chat without a save dialog.
+    private async void CopyExport_Click(object sender, RoutedEventArgs e)
+    {
+        if (source.Length == 0 || exportCancellation != null) return;
+        ShareExportOptions options; KeepSection[] ranges;
+        try { options = ExportOptions(); ranges = ExportRanges(); } catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
+        bool rough = ExportMode.SelectedIndex == 1 && !NeedsReencode(options);
+        string folder = Path.Combine(Storage.Root, "Copied");
+        try { Directory.CreateDirectory(folder); PruneCopies(folder); } catch (Exception ex) { StatusLabel.Text = "Couldn't prepare the copy folder. " + ex.Message; return; }
+        string destination = Path.Combine(folder, $"{Path.GetFileNameWithoutExtension(source)} — clip {DateTime.Now:HH-mm-ss}{options.Extension}");
+        var result = await RunExportAsync(destination, ranges, options, rough);
+        if (result == null) return;
         try
         {
             Clipboard.SetFileDropList(new StringCollection { result.Path });
-            StatusLabel.Text = $"Copied {Path.GetFileName(result.Path)} ({size}). Paste it anywhere with Ctrl+V.";
+            StatusLabel.Text = $"Copied ({new FileInfo(result.Path).Length / 1_000_000d:0.#} MB). Paste it anywhere with Ctrl+V.";
         }
-        catch { StatusLabel.Text = $"Saved {Path.GetFileName(result.Path)} ({size}), but it couldn't be copied. Drag it in from its folder instead."; }
+        catch { StatusLabel.Text = "The clip is ready but couldn't be placed on the clipboard. Try Copy again."; }
+    }
+    // Keeps the ten newest copies and anything from the last day; older ones are removed.
+    private static void PruneCopies(string folder)
+    {
+        var old = new DirectoryInfo(folder).GetFiles().OrderByDescending(f => f.LastWriteTimeUtc).Skip(10).Where(f => DateTime.UtcNow - f.LastWriteTimeUtc > TimeSpan.FromDays(1));
+        foreach (var file in old) try { file.Delete(); } catch { }
     }
     private KeepSection[] ExportRanges() =>
         ClipEditor.Validate(sections.Count > 0 ? sections : new[] { new KeepSection(KeepSection.Parse(StartBox.Text), KeepSection.Parse(EndBox.Text)) }, media.Duration).ToArray();
@@ -192,5 +262,5 @@ public partial class TrimWindow
         }
     }
     private void SetEditingEnabled(bool enabled) =>
-        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = enabled;
+        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = enabled;
 }

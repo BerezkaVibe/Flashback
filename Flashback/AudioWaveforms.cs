@@ -28,17 +28,17 @@ internal static class AudioWaveforms
         try
         {
             int read;
-            while ((read = await stream.ReadAsync(buffer, token)) > 0)
+            while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
             {
                 int i = 0;
                 if (carry >= 0) { Add((short)(carry | buffer[0] << 8)); i = 1; carry = -1; }
                 for (; i + 1 < read; i += 2) Add((short)(buffer[i] | buffer[i + 1] << 8));
                 if (i < read) carry = buffer[i];
             }
-            await process.WaitForExitAsync(token);
+            await process.WaitForExitAsync(token).ConfigureAwait(false);
         }
         catch { try { process.Kill(true); } catch { } throw; }
-        await errors;
+        await errors.ConfigureAwait(false);
         if (inBlock > 0) peaks.Add(peak);
         return peaks.ToArray();
 

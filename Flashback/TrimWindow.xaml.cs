@@ -38,6 +38,7 @@ public partial class TrimWindow : Window
         Timeline.Duration = media.Duration; Timeline.End = media.Duration; Timeline.FrameRate = media.FrameRate;
         Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
         Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
+        Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
         Timeline.DragStarted += Pause;
         Timeline.DragCompleted += FlushSeek;
@@ -65,7 +66,7 @@ public partial class TrimWindow : Window
         bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
         if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current trim selection. Your original video is unchanged.","Open video")) return false;
         if(!FlushProject()) return false; projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
-        sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop();
+        sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; PreviewRate=1; Player.SpeedRatio=1;
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
@@ -120,6 +121,7 @@ public partial class TrimWindow : Window
     {
         playhead = Math.Clamp(time, 0, media.Duration); Timeline.Position = playhead; if (!Timeline.IsDragging) Timeline.Reveal(playhead); Timeline.InvalidateVisual();
         PositionLabel.Text = $"{KeepSection.TimeText(playhead)} / {KeepSection.TimeText(media.Duration)}";
+        if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
     }
     internal void SeekTo(double time, bool defer = false)
     {

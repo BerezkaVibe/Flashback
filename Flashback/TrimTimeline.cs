@@ -9,6 +9,8 @@ namespace Flashback;
 
 // One waveform lane under the video track. Peaks hold 100 samples per second (0..1).
 internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool Toggleable);
+// A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
+internal sealed record CutRegion(int Lane, double Start, double End);
 
 internal sealed class TrimTimeline : FrameworkElement
 {
@@ -44,12 +46,26 @@ internal sealed class TrimTimeline : FrameworkElement
     // Double-clicking a kept block selects that section.
     internal event Action<int>? SectionPicked;
     internal int SelectedSection = -1;
-    private enum Drag { None, Start, End, Playhead, Pan }
+    // Cut tool: dragging over the video track or an audio lane marks a cut; clicking one removes it.
+    internal bool CutMode;
+    private IReadOnlyList<CutRegion> cuts = Array.Empty<CutRegion>();
+    internal IReadOnlyList<CutRegion> Cuts { get => cuts; set { cuts = value; cutsVersion++; InvalidateVisual(); } }
+    private int cutsVersion, cutLane;
+    private double cutAnchor, cutEnd;
+    private CutRegion? cutCandidate;
+    internal event Action<CutRegion>? CutAdded, CutRemoved;
+    private enum Drag { None, Start, End, Playhead, Pan, Cut }
     private Drag drag;
     private double grabOffset;
     private const double Inset = 16, RulerHeight = 22, TrackTop = 26, TrackHeight = 32, LaneHeight = 24, LaneGap = 4, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 6;
-    private double ScrollTop => LanesTop + lanes.Count * (LaneHeight + LaneGap) + 2;
+    // Audio lanes fold under a small "Audio" strip so they only take room (and load) when opened.
+    internal bool LanesExpanded { get => lanesExpanded; set { lanesExpanded = value; lanesVersion++; Height = PreferredHeight; InvalidateVisual(); } }
+    private bool lanesExpanded;
+    internal event Action? LanesToggleRequested;
+    private double ToggleHeight => lanes.Count > 0 ? 18 : 0;
+    private double LaneTop(int i) => LanesTop + ToggleHeight + i * (LaneHeight + LaneGap);
+    private double ScrollTop => LanesTop + ToggleHeight + (lanesExpanded ? lanes.Count * (LaneHeight + LaneGap) : 0) + 2;
     internal double PreferredHeight => Math.Max(80, ScrollTop + ScrollHeight + 4);
     private static readonly Brush Track = Brush("#252D36"), Kept = Brush("#456D5D"), Accent = Brush("#9CE2C1"), Ink = Brush("#EDF0F3"), Muted = Brush("#9DA6B1");
     private static readonly Brush EndAccent = Brush("#F3BF84"), Tick = Brush("#4A5561"), LaneFill = Brush("#1A2027"), Wave = Brush("#7FA8C9"), WaveMuted = Brush("#3A444F");
@@ -71,7 +87,7 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
         if (Duration <= 0 || ActualWidth <= 2*Inset) return;
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, IsKeyboardFocusWithin, SectionsKey(), SelectedSection);
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, IsKeyboardFocusWithin, SectionsKey(), SelectedSection, cutsVersion);
         if (cache == null || !Equals(cacheKey, key))
         {
             cache = new DrawingGroup();
@@ -79,6 +95,8 @@ internal sealed class TrimTimeline : FrameworkElement
             cache.Freeze(); cacheKey = key;
         }
         dc.DrawDrawing(cache);
+        if (drag == Drag.Cut && Math.Abs(cutEnd - cutAnchor) > 1e-6)
+            DrawCut(dc, cutLane, Math.Min(cutAnchor, cutEnd), Math.Max(cutAnchor, cutEnd), VisualTreeHelper.GetDpi(this).PixelsPerDip);
         double playhead = XAt(Position);
         if (Position >= ViewStart - 1e-9 && Position <= ViewStart + Span + 1e-9)
         {
@@ -110,7 +128,9 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.DrawRoundedRectangle(edge.Color, null, new Rect(x-6, TrackTop-5, 12, TrackHeight+10), 3, 3);
             dc.DrawLine(new Pen(Track, 1), new Point(x, TrackTop+8), new Point(x, TrackTop+TrackHeight-8));
         }
-        for (int i = 0; i < lanes.Count; i++) DrawLane(dc, lanes[i], LanesTop + i * (LaneHeight + LaneGap), width, dpi);
+        DrawLaneToggle(dc, dpi);
+        if (lanesExpanded) for (int i = 0; i < lanes.Count; i++) DrawLane(dc, lanes[i], LaneTop(i), width, dpi);
+        foreach (var cut in cuts) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
         if (ZoomFactor > 1.001)
         {
             // A slim scrollbar shows where the zoomed view sits in the whole clip.
@@ -180,11 +200,39 @@ internal sealed class TrimTimeline : FrameworkElement
         dc.DrawRoundedRectangle(Track, lane.Toggleable ? new Pen(lane.Muted ? Tick : Accent, 1) : null, chip, 4, 4);
         dc.DrawText(name, new Point(chip.X + 6, chip.Y + 1));
     }
+    private static readonly Brush CutFill = Brush("#99B42C38"), CutEdge = Brush("#E5484D");
+    // Band rectangle for the video track (-1) or an audio lane.
+    private Rect Band(int lane) => lane < 0 ? new Rect(Inset, TrackTop, ActualWidth - 2 * Inset, TrackHeight)
+        : new Rect(Inset, LaneTop(lane), ActualWidth - 2 * Inset, LaneHeight);
+    private int BandAt(Point p)
+    {
+        if (p.Y >= TrackTop - 4 && p.Y <= TrackTop + TrackHeight + 4) return -1;
+        if (lanesExpanded) for (int i = 0; i < lanes.Count; i++) { var b = Band(i); if (p.Y >= b.Top && p.Y <= b.Bottom) return i; }
+        return -2;
+    }
+    private Rect ToggleArea => new(Inset, LanesTop, 170, ToggleHeight);
+    private void DrawLaneToggle(DrawingContext dc, double dpi)
+    {
+        if (lanes.Count == 0) return;
+        int audioCuts = cuts.Count(c => c.Lane >= 0);
+        string text = (lanesExpanded ? "▾ Audio" : "▸ Audio") + (lanes.Count > 1 ? $" · {lanes.Count} tracks" : "") + (!lanesExpanded && audioCuts > 0 ? $" · {audioCuts} muted" : "");
+        dc.DrawText(Text(text, 11, lanesExpanded ? Ink : Muted, dpi), new Point(Inset + 2, LanesTop + 1));
+    }
+    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi)
+    {
+        if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && !lanesExpanded)) return;
+        var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
+        var area = new Rect(x, band.Top, w, band.Height);
+        dc.DrawRoundedRectangle(CutFill, new Pen(CutEdge, 1), area, 3, 3);
+        var label = Text(lane < 0 ? "blacked out" : "muted", 10, Ink, dpi);
+        if (w >= label.Width + 8) dc.DrawText(label, new Point(x + 4, band.Top + (band.Height - label.Height) / 2));
+    }
     private int LaneAt(Point p)
     {
         for (int i = 0; i < lanes.Count; i++)
         {
-            double top = LanesTop + i * (LaneHeight + LaneGap);
+            if (!lanesExpanded) break;
+            double top = LaneTop(i);
             if (p.Y >= top && p.Y <= top + LaneHeight && p.X <= Inset + 110) return i;
         }
         return -1;
@@ -196,6 +244,13 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnMouseLeftButtonDown(e);
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
+        if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
+        if (CutMode && BandAt(point) is int band and > -2)
+        {
+            double t = Snap(TimeAt(point.X));
+            cutCandidate = cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t <= c.End);
+            drag = Drag.Cut; cutLane = band; cutAnchor = cutEnd = t; CaptureMouse(); e.Handled = true; return;
+        }
         int lane = LaneAt(point);
         if (lane >= 0 && lanes[lane].Toggleable) { LaneToggled?.Invoke(lane); e.Handled = true; return; }
         if (e.ClickCount == 2 && point.Y >= TrackTop && point.Y <= TrackTop + TrackHeight)
@@ -223,7 +278,19 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseMove(e);
         var p=e.GetPosition(this);
-        if (IsMouseCaptured) { if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X); return; }
+        if (IsMouseCaptured)
+        {
+            if (drag == Drag.Cut) { cutEnd = Snap(TimeAt(p.X)); InvalidateVisual(); }
+            else if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X);
+            return;
+        }
+        if (lanes.Count > 0 && ToggleArea.Contains(p)) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
+        if (CutMode && BandAt(p) > -2)
+        {
+            Cursor = Cursors.Cross;
+            ToolTip = "Drag to cut out this stretch; click a cut to restore it";
+            return;
+        }
         int lane = LaneAt(p);
         Cursor = lane >= 0 && lanes[lane].Toggleable ? Cursors.Hand
             : p.Y>=TrackTop-7 && p.Y<=TrackTop+TrackHeight+7 && Math.Min(Math.Abs(p.X-XAt(Start)),Math.Abs(p.X-XAt(End)))<=14 ? Cursors.SizeWE : Cursors.Hand;
@@ -234,12 +301,20 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseLeftButtonUp(e);
         if (!IsMouseCaptured) return;
+        if (drag == Drag.Cut)
+        {
+            double a = Math.Min(cutAnchor, cutEnd), b = Math.Max(cutAnchor, cutEnd);
+            // A drag makes a cut; a plain click on an existing cut restores that stretch.
+            if (b - a >= .05) CutAdded?.Invoke(new CutRegion(cutLane, a, b));
+            else if (cutCandidate != null) CutRemoved?.Invoke(cutCandidate);
+            cutCandidate = null; ReleaseMouseCapture(); InvalidateVisual(); e.Handled = true; return;
+        }
         if (drag != Drag.Pan) MoveTo(e.GetPosition(this).X);
         ReleaseMouseCapture(); e.Handled=true;
     }
     protected override void OnLostMouseCapture(MouseEventArgs e)
     { base.OnLostMouseCapture(e); EndDrag(); }
-    internal void EndDrag() { if (drag == Drag.None) return; bool pan = drag == Drag.Pan; drag=Drag.None; if (!pan) DragCompleted?.Invoke(); }
+    internal void EndDrag() { if (drag == Drag.None) return; bool quiet = drag is Drag.Pan or Drag.Cut; drag=Drag.None; if (!quiet) DragCompleted?.Invoke(); }
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);

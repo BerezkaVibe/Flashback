@@ -17,7 +17,7 @@ public partial class TrimWindow
         bool changed=rate!=PreviewRate; PreviewRate=rate; Player.SpeedRatio=rate;
         // A live rate change can leave audio offset from video; restart from the playhead to realign.
         if (changed && playing) StartPlayback(playhead, previewSection);
-        StatusLabel.Text=$"Preview {rate:0.##}× · {(Player.IsMuted ? "muted" : $"volume {Player.Volume:P0}")}";
+        StatusLabel.Text=$"Preview {rate:0.##}× · {(userMuted ? "muted" : $"volume {Player.Volume:P0}")}";
     }
     private void StepFrame(int direction)
     {
@@ -87,7 +87,7 @@ public partial class TrimWindow
             case TrimAction.Faster: StepPreviewRate(1); break;
             case TrimAction.MuchSlower: StepPreviewRate(-2); break;
             case TrimAction.MuchFaster: StepPreviewRate(2); break;
-            case TrimAction.Mute: Player.IsMuted=!Player.IsMuted; SetPreviewRate(PreviewRate); break;
+            case TrimAction.Mute: userMuted=!userMuted; ApplyPreviewCuts(); SetPreviewRate(PreviewRate); break;
             case TrimAction.VolumeUp or TrimAction.VolumeDown:
                 Player.Volume=Math.Clamp(Player.Volume+(action==TrimAction.VolumeUp ? .1 : -.1),0,1); SetPreviewRate(PreviewRate); break;
             case TrimAction.PreviousFrame or TrimAction.FrameBack: StepFrame(-1); break;

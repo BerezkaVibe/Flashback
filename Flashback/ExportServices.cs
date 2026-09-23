@@ -24,6 +24,8 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     internal double DesktopVolume { get; init; } = 1;
     internal double MicrophoneVolume { get; init; } = 1;
     internal bool CustomMix => Math.Abs(DesktopVolume - 1) > .001 || Math.Abs(MicrophoneVolume - 1) > .001;
+    // Lane -1 blacks out the picture; audio lanes follow the trimmer: combined, or desktop then microphone.
+    internal IReadOnlyList<CutRegion> Cuts { get; init; } = Array.Empty<CutRegion>();
     internal bool HasVideo => Format != ExportFormat.Mp3;
     internal bool IsGif => Format == ExportFormat.Gif;
     internal string Extension => Format switch { ExportFormat.Mov => ".mov", ExportFormat.Gif => ".gif", ExportFormat.Mp3 => ".mp3", _ => ".mp4" };
@@ -101,19 +103,31 @@ internal static class ExportServices
             // Seek each input at the demuxer before decoding. Only retained sections enter the graph.
             // Thread counts are capped per input; no preview decoder or thumbnail job is started here.
             var inputs = new List<string>(); var filters = new List<string>(); var labels = "";
-            bool mixTracks = audio && media.HasSeparateTracks && options.CustomMix;
+            bool mixTracks = audio && media.HasSeparateTracks && (options.CustomMix || options.Cuts.Any(c => c.Lane >= 0));
             for (int i = 0; i < ranges.Count; i++)
             {
                 var range = ranges[i]; string trim = $"atrim=duration={Number(range.Duration)},asetpts=PTS-STARTPTS";
+                // Cuts inside this section, as times relative to its start: black video or silence.
+                string? Window(int lane)
+                {
+                    var parts = options.Cuts.Where(c => c.Lane == lane && c.End > range.Start && c.Start < range.End)
+                        .Select(c => $"between(t,{Number(Math.Max(0, c.Start - range.Start))},{Number(Math.Min(range.Duration, c.End - range.Start))})").ToList();
+                    return parts.Count == 0 ? null : string.Join("+", parts);
+                }
+                string Mute(int lane) => Window(lane) is { } w ? $",volume=0:enable='{w}'" : "";
                 inputs.AddRange(new[] { "-threads", "1", "-ss", Number(range.Start), "-t", Number(range.Duration), "-i", source });
-                if (video) { filters.Add($"[{i}:v:0]trim=duration={Number(range.Duration)},setpts=PTS-STARTPTS[v{i}]"); labels += $"[v{i}]"; }
+                if (video)
+                {
+                    string blackout = Window(-1) is { } w ? $",drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{w}'" : "";
+                    filters.Add($"[{i}:v:0]trim=duration={Number(range.Duration)},setpts=PTS-STARTPTS{blackout}[v{i}]"); labels += $"[v{i}]";
+                }
                 if (mixTracks)
                 {
-                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes.
-                    filters.Add($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0[a{i}]");
+                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
+                    filters.Add($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0[a{i}]");
                     labels += $"[a{i}]";
                 }
-                else if (audio) { filters.Add($"[{i}:a:0]{trim}[a{i}]"); labels += $"[a{i}]"; }
+                else if (audio) { filters.Add($"[{i}:a:0]{trim}{Mute(0)}[a{i}]"); labels += $"[a{i}]"; }
             }
             filters.Add(labels + $"concat=n={ranges.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
             if (video)

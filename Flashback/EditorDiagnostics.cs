@@ -63,6 +63,18 @@ internal static class EditorDiagnostics
             };
             Check(valid && new FileInfo(output).Length > 1000, $"{format} export writes a valid file");
         }
+        // Cut out: 1.0-2.0 s of the source is blacked out and muted; the section keeps its full length.
+        var censored = Path.Combine(folder, "Censored.mp4");
+        await ExportServices.PreciseAsync(source, censored, new[] { new KeepSection(.5, 3.5) }, null, CancellationToken.None, true,
+            new ShareExportOptions { Cuts = new[] { new CutRegion(-1, 1, 2), new CutRegion(0, 1, 2) } });
+        string pixel = Path.Combine(Storage.Root, "cut-pixel.rgb"), cutPcm = Path.Combine(Storage.Root, "cut-audio.pcm"), openPcm = Path.Combine(Storage.Root, "open-audio.pcm");
+        await Ffmpeg("-y", "-ss", "1", "-i", censored, "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", pixel);
+        await Ffmpeg("-y", "-ss", "0.7", "-t", "0.6", "-i", censored, "-f", "s16le", "-ac", "1", cutPcm);
+        await Ffmpeg("-y", "-ss", "2.0", "-t", "0.6", "-i", censored, "-f", "s16le", "-ac", "1", openPcm);
+        short Loudest(string file) { var b = File.ReadAllBytes(file); short max = 0; for (int i = 0; i + 1 < b.Length; i += 2) max = Math.Max(max, Math.Abs(BitConverter.ToInt16(b, i))); return max; }
+        var dark = File.ReadAllBytes(pixel);
+        Check(Math.Abs(ClipMedia.Read(censored).Duration - 3) < .15 && dark.All(v => v < 24), "Cut out blacks out the picture without removing time");
+        Check(Loudest(cutPcm) < 200 && Loudest(openPcm) > 1000, "Cut out mutes audio only inside the cut");
         var tracks = Path.Combine(folder, "Three tracks.mp4");
         await Ffmpeg("-y", "-f", "lavfi", "-i", "color=gray:s=320x180:r=30:d=3", "-f", "lavfi", "-i", "sine=f=440:d=3", "-f", "lavfi", "-i", "sine=f=660:d=3", "-f", "lavfi", "-i", "sine=f=880:d=3",
             "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", tracks);

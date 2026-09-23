@@ -159,6 +159,10 @@ public partial class App : Application
             var audioSettingsImage = new RenderTargetBitmap(880, 780, 96, 96, PixelFormats.Pbgra32); audioSettingsImage.Render(canvas);
             var audioSettingsPng = new PngBitmapEncoder(); audioSettingsPng.Frames.Add(BitmapFrame.Create(audioSettingsImage));
             using (var file = File.Create(Path.Combine(Storage.Root, "ui-audio-settings.png"))) audioSettingsPng.Save(file);
+            preview.OpenAppMixForRender(); canvas.UpdateLayout(); await Task.Delay(150); canvas.UpdateLayout();
+            var mixerImage = new RenderTargetBitmap(880, 780, 96, 96, PixelFormats.Pbgra32); mixerImage.Render(canvas);
+            var mixerPng = new PngBitmapEncoder(); mixerPng.Frames.Add(BitmapFrame.Create(mixerImage));
+            using (var file = File.Create(Path.Combine(Storage.Root, "ui-audio-mixer.png"))) mixerPng.Save(file);
             preview.HotkeySettings.IsSelected = true; canvas.UpdateLayout(); await Task.Delay(150); canvas.UpdateLayout();
             var hotkeyImage = new RenderTargetBitmap(880, 780, 96, 96, PixelFormats.Pbgra32); hotkeyImage.Render(canvas);
             var hotkeyPng = new PngBitmapEncoder(); hotkeyPng.Frames.Add(BitmapFrame.Create(hotkeyImage));
