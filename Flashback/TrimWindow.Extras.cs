@@ -22,6 +22,7 @@ public partial class TrimWindow
     }
     private void Compress_Click(object sender, RoutedEventArgs e)
     {
+        ExportMenuPopup.IsOpen = false;
         if (source.Length == 0 || exportCancellation != null) return;
         double original = Math.Max(2, Math.Ceiling(SelectionMb()));
         CompressSlider.Maximum = original;
@@ -47,8 +48,10 @@ public partial class TrimWindow
     private void UpdateAddButton()
     {
         int selected = SectionsList.SelectedIndex;
-        AddSectionButton.Content = selected >= 0 ? $"Update section {selected + 1}" : "Add section  " + TrimShortcuts.Display(keys[TrimAction.AddSection]);
-        AddSectionButton.ToolTip = selected >= 0 ? "Replace the selected section with the marked range" : "Keep the marked range as a new section";
+        string key = TrimShortcuts.Display(keys[TrimAction.AddSection]);
+        AddSectionButton.Content = selected >= 0 ? "\uE73E" : "\uE710";
+        AddSectionButton.ToolTip = selected >= 0 ? $"Update section {selected + 1} to the marked range · {key}" : $"Add section: keep the marked range · {key}";
+        System.Windows.Automation.AutomationProperties.SetName(AddSectionButton, selected >= 0 ? $"Update section {selected + 1}" : "Add section");
     }
     private void RemoveChip_Click(object sender, RoutedEventArgs e)
     {
@@ -99,10 +102,12 @@ public partial class TrimWindow
         Timeline.CutMode = !Timeline.CutMode;
         ShowCutTool();
         if (Timeline.CutMode && Timeline.Lanes.Count > 0 && !Timeline.LanesExpanded) LanesToggleRequested();
-        StatusLabel.Text = Timeline.CutMode ? "Drag across the video to black it out, or across an audio lane to mute it. Click a cut to restore it." : "Cut out tool off.";
+        StatusLabel.Text = !Timeline.CutMode ? "Cut out tool off."
+            : "Drag across the video to black it out, or across an audio lane to mute it. Click a cut to restore it." + (SectionsList.SelectedIndex >= 0 ? $" Cuts stay inside section {SectionsList.SelectedIndex + 1}." : "");
     }
     private void CutAdded(CutRegion cut)
     {
+        Snapshot();
         // Overlapping cuts on the same lane merge into one.
         var same = Timeline.Cuts.Where(c => c.Lane == cut.Lane && c.End >= cut.Start && c.Start <= cut.End).ToList();
         var merged = new CutRegion(cut.Lane, same.Select(c => c.Start).Append(cut.Start).Min(), same.Select(c => c.End).Append(cut.End).Max());
@@ -113,6 +118,7 @@ public partial class TrimWindow
     }
     private void CutRemoved(CutRegion cut)
     {
+        Snapshot();
         Timeline.Cuts = Timeline.Cuts.Where(c => c != cut).ToArray();
         StatusLabel.Text = "Cut removed."; ApplyPreviewCuts(); UpdateExportHint();
     }
@@ -216,6 +222,7 @@ public partial class TrimWindow
     // clipboard, so a clip can be pasted into Discord or a chat without a save dialog.
     private async void CopyExport_Click(object sender, RoutedEventArgs e)
     {
+        ExportMenuPopup.IsOpen = false;
         if (source.Length == 0 || exportCancellation != null) return;
         ShareExportOptions options; KeepSection[] ranges;
         try { options = ExportOptions(); ranges = ExportRanges(); } catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
@@ -265,8 +272,33 @@ public partial class TrimWindow
             CancelExportButton.Visibility = Visibility.Collapsed; UpdateSummary(); exportFinished.TrySetResult(); if (closeAfterCancel) Close();
         }
     }
+    // Export's small arrow opens Copy and Compress.
+    private long exportMenuClosedAt;
+    private void ExportMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Diagnostics.Stopwatch.GetElapsedTime(exportMenuClosedAt).TotalMilliseconds < 250) return;
+        ExportMenuPopup.IsOpen = true;
+    }
+    private void ExportMenuPopup_Closed(object? sender, EventArgs e) => exportMenuClosedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+
+    // Exact start/end fields stay hidden until the time readout is clicked, and tuck away
+    // again once focus leaves them. The row itself only shows when it has something in it.
+    private void Position_Click(object sender, RoutedEventArgs e)
+    {
+        bool show = RangeFields.Visibility != Visibility.Visible;
+        RangeFields.Visibility = show ? Visibility.Visible : Visibility.Collapsed; UpdateRangeRow();
+        if (show) { StartBox.Focus(); StartBox.SelectAll(); }
+    }
+    private void RangeFields_FocusChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (RangeFields.IsKeyboardFocusWithin) return;
+        RangeFields.Visibility = Visibility.Collapsed; UpdateRangeRow();
+    }
+    private void UpdateRangeRow() =>
+        RangeControls.Visibility = RangeFields.Visibility == Visibility.Visible || SectionsRow.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
+
     private void SetEditingEnabled(bool enabled) =>
-        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = enabled;
+        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = ExportMenuButton.IsEnabled = AddSectionButton.IsEnabled = enabled;
 
     // Preview speed: a log-scale slider from 0.1x to 4x (so 1x sits near the middle) plus quick presets.
     private bool syncingSpeed;

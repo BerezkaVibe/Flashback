@@ -80,6 +80,18 @@ internal static class TrimInteractionDiagnostics
             Check(trim.PreviewRate==2,"Space keeps the chosen speed");
             trim.SpeedSlider.Value=0;
             Check(trim.PreviewRate==1 && (string)trim.SpeedButton.Content=="1×","Speed returns to normal");
+            var cutAdded=typeof(TrimWindow).GetMethod("CutAdded",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
+            var before=trim.Timeline.Cuts.Count;
+            cutAdded.Invoke(trim,new object[]{new CutRegion(-1,1,2)});
+            Check(trim.Timeline.Cuts.Count==before+1,"Cut out adds a cut");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(trim.Timeline.Cuts.Count==before,"Undo removes the last cut out");
+            trim.HandleKey(Key.Y,ModifierKeys.Control,false);
+            Check(trim.Timeline.Cuts.Count==before+1,"Redo brings the cut out back");
+            trim.Timeline.Sections=new[]{new KeepSection(3,5)}; trim.Timeline.SelectedSection=0;
+            var limit=typeof(TrimTimeline).GetMethod("CutLimit",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
+            Check((double)limit.Invoke(trim.Timeline,new object[]{1.0})! == 3 && (double)limit.Invoke(trim.Timeline,new object[]{9.0})! == 5,"Cut outs stay inside the selected section");
+            trim.Timeline.SelectedSection=-1;
             double spanBefore=trim.Timeline.VisibleDuration;
             trim.Timeline.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice,0,120){RoutedEvent=UIElement.MouseWheelEvent});
             Check(trim.Timeline.VisibleDuration<spanBefore-.01,"Scroll wheel zooms the timeline in");

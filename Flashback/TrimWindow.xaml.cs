@@ -26,7 +26,9 @@ public partial class TrimWindow : Window
     private readonly bool previewEnabled;
     private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
-    private readonly Stack<KeepSection[]> undo = new(), redo = new();
+    // Undo covers both kept sections and cut-outs.
+    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts);
+    private readonly Stack<EditState> undo = new(), redo = new();
     private int previewSection = -1;
     public event Action<ClipResult>? Exported;
     public TrimWindow(string? path = null, bool renderOnly = false)
@@ -148,7 +150,7 @@ public partial class TrimWindow : Window
     {
         if (ExportButton == null || media == null) return;
         Timeline.Sections = sections; Timeline.InvalidateVisual();
-        SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed;
+        SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed; UpdateRangeRow();
         TotalLabel.Text = sections.Count > 0 ? $"{sections.Count} sections · {sections.Sum(s => s.Duration):0.##} s" : $"Selected range · {Math.Max(0,Timeline.End-Timeline.Start):0.##} s";
         ProjectChanged(); UpdateExportHint();
         ExportButton.IsEnabled = source.Length>0 && exportCancellation == null && (sections.Count > 0 || Timeline.End-Timeline.Start >= .1);
@@ -221,12 +223,16 @@ public partial class TrimWindow : Window
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
-    private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(sections.ToArray()); redo.Clear(); }
+    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray());
+    private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
-    private void Restore(Stack<KeepSection[]> from, Stack<KeepSection[]> to)
+    private void Restore(Stack<EditState> from, Stack<EditState> to)
     {
         if (exportCancellation != null || from.Count == 0) return;
-        Pause(); to.Push(sections.ToArray()); var saved = from.Pop(); sections.Clear(); foreach(var s in saved) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0;
+        Pause(); to.Push(CurrentEdit()); var saved = from.Pop();
+        if (!saved.Sections.SequenceEqual(sections))
+        { sections.Clear(); foreach(var s in saved.Sections) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0; }
+        Timeline.Cuts = saved.Cuts; ApplyPreviewCuts(); UpdateExportHint();
     }
     private void Split_Click(object sender, RoutedEventArgs e)
     {

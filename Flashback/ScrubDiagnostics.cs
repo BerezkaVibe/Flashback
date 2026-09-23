@@ -62,6 +62,13 @@ internal static class ScrubDiagnostics
             // Put the start handle right on a labelled second so the shot shows the label stepping aside.
             trim.SeekTo(4); trim.HandleKey(System.Windows.Input.Key.I, System.Windows.Input.ModifierKeys.None, true);
             trim.SeekTo(duration / 2); await Task.Delay(500); Shot(trim, "trim-audio-folded.png");
+            // Two kept sections and a blacked-out stretch, to show the shading of what gets cut.
+            var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            foreach (var (a, b) in new[] { (5.0, 15.0), (25.0, 32.0) })
+            { trim.StartBox.Text = a.ToString(); trim.EndBox.Text = b.ToString(); typeof(TrimWindow).GetMethod("Add_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() }); }
+            typeof(TrimWindow).GetMethod("CutAdded", flags)!.Invoke(trim, new object[] { new CutRegion(-1, 8, 10) });
+            trim.SeekTo(12); await Task.Delay(500); Shot(trim, "trim-sections.png");
+            typeof(TrimWindow).GetMethod("Clear_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() });
             await Sweep("audio folded");
             typeof(TrimWindow).GetMethod("LanesToggleRequested", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(trim, null);
             until.Restart();

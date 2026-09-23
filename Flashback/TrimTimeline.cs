@@ -58,7 +58,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private enum Drag { None, Start, End, Playhead, Pan, Cut }
     private Drag drag;
     private double grabOffset;
-    private const double Inset = 20, TrackTop = 8, TrackHeight = 36, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
+    private const double Inset = 20, TrackTop = 8, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 4;
     // Audio lanes fold away behind a chevron beside the video track, so they only take room (and load) when opened.
     internal bool LanesExpanded
@@ -95,7 +95,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private double Snap(double t) => Math.Clamp(Math.Round(t * FrameRate) / FrameRate, 0, Duration);
     public TrimTimeline()
     {
-        Focusable = true; Cursor = Cursors.Hand; Height = PreferredHeight;
+        Focusable = true; FocusVisualStyle = null; Cursor = Cursors.Hand; Height = PreferredHeight;
         staticLayer.CacheMode = new BitmapCache { SnapsToDevicePixels = true };
         AddVisualChild(staticLayer); AddVisualChild(liveLayer);
     }
@@ -114,7 +114,7 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         if (Duration <= 0 || ActualWidth <= 2*Inset)
         { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, IsKeyboardFocusWithin, SectionsKey(), SelectedSection, cutsVersion, toggleHover);
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover);
         if (!Equals(cacheKey, key))
         {
             using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
@@ -129,6 +129,23 @@ internal sealed class TrimTimeline : FrameworkElement
             live.DrawLine(InkPen, new Point(playhead, 2), new Point(playhead, ScrollTop - 2));
             live.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 0, 10, 7), 2, 2);
         }
+    }
+    // Everything that will not be exported (outside the sections, or outside Start-End when there are
+    // none) is shaded, so the part being kept stands out.
+    private static readonly Brush Dim = Brush("#A00A0D11");
+    private void DimOutsideKept(DrawingContext dc, Rect band, double radius)
+    {
+        var kept = Sections.Count > 0 ? Sections.Select(s => (s.Start, s.End)).OrderBy(k => k.Start).ToList() : new List<(double Start, double End)> { (Start, End) };
+        kept.Add((double.MaxValue, double.MaxValue));
+        dc.PushClip(new RectangleGeometry(band, radius, radius));
+        double from = ViewStart;
+        foreach (var (a, b) in kept)
+        {
+            double x0 = XAt(from), x1 = XAt(Math.Min(a, ViewStart + Span));
+            if (x1 > x0 + .5) dc.DrawRectangle(Dim, null, new Rect(x0, band.Top, x1 - x0, band.Height));
+            from = Math.Max(from, Math.Min(b, ViewStart + Span));
+        }
+        dc.Pop();
     }
     private int SectionsKey() { int hash = Sections.Count; foreach (var s in Sections) hash = HashCode.Combine(hash, s.Start, s.End); return hash; }
     private void DrawStatic(DrawingContext dc)
@@ -146,6 +163,7 @@ internal sealed class TrimTimeline : FrameworkElement
             if (block.Width >= number.Width + 8) dc.DrawText(number, new Point(block.X + 5, block.Bottom - number.Height - 1));
         }
         DrawRuler(dc, width, dpi);
+        DimOutsideKept(dc, new Rect(Inset, TrackTop, width, TrackHeight), 6);
         dc.DrawRoundedRectangle(null, new Pen(Accent, 1.5), new Rect(XAt(Start), TrackTop-2, Math.Max(1, XAt(End)-XAt(Start)), TrackHeight+4), 3, 3);
         foreach (var edge in new[] { (Time: Start, Color: Accent), (Time: End, Color: EndAccent) })
         {
@@ -161,7 +179,7 @@ internal sealed class TrimTimeline : FrameworkElement
             // Lanes slide out from under the video track and fade in as they open.
             dc.PushClip(new RectangleGeometry(new Rect(0, LanesTop, ActualWidth, LanesSpan * LaneReveal)));
             dc.PushOpacity(LaneReveal);
-            for (int i = 0; i < lanes.Count; i++) DrawLane(dc, lanes[i], LaneTop(i), width, dpi);
+            for (int i = 0; i < lanes.Count; i++) { DrawLane(dc, lanes[i], LaneTop(i), width, dpi); DimOutsideKept(dc, new Rect(Inset, LaneTop(i), width, LaneHeight), 4); }
             foreach (var cut in cuts) if (cut.Lane >= 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
             dc.Pop(); dc.Pop();
         }
@@ -172,7 +190,6 @@ internal sealed class TrimTimeline : FrameworkElement
             double left = Inset + ViewStart / Duration * width, thumb = Math.Max(12, Span / Duration * width);
             dc.DrawRoundedRectangle(Accent, null, new Rect(Math.Min(left, Inset + width - thumb), ScrollTop, thumb, ScrollHeight), 3, 3);
         }
-        if (IsKeyboardFocusWithin) dc.DrawRoundedRectangle(null, new Pen(Muted, 1), new Rect(1, 1, Math.Max(1, ActualWidth-2), Math.Max(1,ActualHeight-2)), 7, 7);
     }
     private static readonly double[] Steps = { .01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
     // The ruler sits inside the top of the video track. Major ticks at least ~80 px apart get small labels;
@@ -283,9 +300,10 @@ internal sealed class TrimTimeline : FrameworkElement
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
         dc.DrawRoundedRectangle(CutFill, new Pen(CutEdge, 1), area, 3, 3);
-        var label = Text(lane < 0 ? "blacked out" : "muted", 10, Ink, dpi);
-        if (w >= label.Width + 8) dc.DrawText(label, new Point(x + 4, band.Top + (band.Height - label.Height) / 2));
     }
+    // With a section selected, cut-outs stay inside it so they can be placed precisely.
+    private double CutLimit(double t) =>
+        SelectedSection >= 0 && SelectedSection < Sections.Count ? Math.Clamp(t, Sections[SelectedSection].Start, Sections[SelectedSection].End) : t;
     private int LaneAt(Point p)
     {
         for (int i = 0; i < lanes.Count; i++)
@@ -296,8 +314,6 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         return -1;
     }
-    protected override void OnGotKeyboardFocus(KeyboardFocusChangedEventArgs e) { base.OnGotKeyboardFocus(e); InvalidateVisual(); }
-    protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e) { base.OnLostKeyboardFocus(e); InvalidateVisual(); }
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
@@ -308,7 +324,7 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             double t = Snap(TimeAt(point.X));
             cutCandidate = cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t <= c.End);
-            drag = Drag.Cut; cutLane = band; cutAnchor = cutEnd = t; CaptureMouse(); e.Handled = true; return;
+            drag = Drag.Cut; cutLane = band; cutAnchor = cutEnd = CutLimit(t); CaptureMouse(); e.Handled = true; return;
         }
         int lane = LaneAt(point);
         if (lane >= 0 && lanes[lane].Toggleable) { LaneToggled?.Invoke(lane); e.Handled = true; return; }
@@ -339,7 +355,7 @@ internal sealed class TrimTimeline : FrameworkElement
         var p=e.GetPosition(this);
         if (IsMouseCaptured)
         {
-            if (drag == Drag.Cut) { cutEnd = Snap(TimeAt(p.X)); InvalidateVisual(); }
+            if (drag == Drag.Cut) { cutEnd = CutLimit(Snap(TimeAt(p.X))); InvalidateVisual(); }
             else if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X);
             return;
         }
