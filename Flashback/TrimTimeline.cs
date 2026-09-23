@@ -47,15 +47,22 @@ internal sealed class TrimTimeline : FrameworkElement
     // Double-clicking a kept block selects that section.
     internal event Action<int>? SectionPicked;
     internal int SelectedSection = -1;
-    // Cut tool: dragging over the video track or an audio lane marks a cut; clicking one removes it.
-    internal bool CutMode;
+    // Cut tool: a thin cutter line follows the pointer over the video track or an audio lane.
+    // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
+    // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
+    internal bool CutMode { get => cutMode; set { cutMode = value; pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    private bool cutMode, cutPress;
+    private (int Lane, double Time)? pendingCut, cutHover;
+    private Point pressPoint;
+    private const double PlayheadLock = 3;
     private IReadOnlyList<CutRegion> cuts = Array.Empty<CutRegion>();
     internal IReadOnlyList<CutRegion> Cuts { get => cuts; set { cuts = value; cutsVersion++; InvalidateVisual(); } }
-    private int cutsVersion, cutLane;
-    private double cutAnchor, cutEnd;
-    private CutRegion? cutCandidate;
+    private int cutsVersion;
+    internal bool HasPendingCut => pendingCut != null;
+    internal void CancelPendingCut() { pendingCut = null; InvalidateVisual(); }
+    private double CutTimeAt(double x) => Math.Abs(x - XAt(Position)) <= PlayheadLock ? Position : Snap(TimeAt(x));
     internal event Action<CutRegion>? CutAdded, CutRemoved;
-    private enum Drag { None, Start, End, Playhead, Pan, Cut }
+    private enum Drag { None, Start, End, Playhead, Pan }
     private Drag drag;
     private double grabOffset;
     private const double Inset = 20, TrackTop = 8, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
@@ -121,8 +128,16 @@ internal sealed class TrimTimeline : FrameworkElement
             cacheKey = key;
         }
         using var live = liveLayer.RenderOpen();
-        if (drag == Drag.Cut && Math.Abs(cutEnd - cutAnchor) > 1e-6)
-            DrawCut(live, cutLane, Math.Min(cutAnchor, cutEnd), Math.Max(cutAnchor, cutEnd), VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        if (cutMode)
+        {
+            if (pendingCut is { } from)
+            {
+                double to = cutHover?.Time ?? from.Time;
+                if (Math.Abs(to - from.Time) > 1e-6) DrawCut(live, from.Lane, Math.Min(from.Time, to), Math.Max(from.Time, to), 0);
+                DrawCutter(live, from.Lane, from.Time);
+            }
+            if (cutHover is { } hover) DrawCutter(live, pendingCut?.Lane ?? hover.Lane, hover.Time);
+        }
         double playhead = XAt(Position);
         if (Position >= ViewStart - 1e-9 && Position <= ViewStart + Span + 1e-9)
         {
@@ -301,9 +316,34 @@ internal sealed class TrimTimeline : FrameworkElement
         var area = new Rect(x, band.Top, w, band.Height);
         dc.DrawRoundedRectangle(CutFill, new Pen(CutEdge, 1), area, 3, 3);
     }
-    // With a section selected, cut-outs stay inside it so they can be placed precisely.
-    private double CutLimit(double t) =>
-        SelectedSection >= 0 && SelectedSection < Sections.Count ? Math.Clamp(t, Sections[SelectedSection].Start, Sections[SelectedSection].End) : t;
+    // The cutter: red, or white while it is locked onto the playhead.
+    private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
+    private void DrawCutter(DrawingContext dc, int lane, double t)
+    {
+        if (t < ViewStart || t > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
+        var band = Band(lane); double x = XAt(t);
+        dc.DrawLine(Math.Abs(t - Position) < 1e-9 ? LockedCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
+    }
+    private void PlaceCutPoint(Point p)
+    {
+        int band = pendingCut?.Lane ?? BandAt(p);
+        if (band < -1) return;
+        double t = CutTimeAt(p.X);
+        if (pendingCut is not { } from) pendingCut = (band, t);
+        else
+        {
+            pendingCut = null;
+            double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
+            if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9) CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
+        }
+        InvalidateVisual();
+    }
+    private void UpdateCutHover(Point p)
+    {
+        int band = pendingCut?.Lane ?? BandAt(p);
+        (int, double)? next = cutMode && band > -2 ? (band, CutTimeAt(p.X)) : null;
+        if (!Equals(next, cutHover)) { cutHover = next; InvalidateVisual(); }
+    }
     private int LaneAt(Point p)
     {
         for (int i = 0; i < lanes.Count; i++)
@@ -320,11 +360,10 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
-        if (CutMode && BandAt(point) is int band and > -2)
+        if (cutMode && (pendingCut != null || BandAt(point) > -2))
         {
-            double t = Snap(TimeAt(point.X));
-            cutCandidate = cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t <= c.End);
-            drag = Drag.Cut; cutLane = band; cutAnchor = cutEnd = CutLimit(t); CaptureMouse(); e.Handled = true; return;
+            // Wait to see whether this is a click (place a cut point) or a drag (move the playhead).
+            cutPress = true; pressPoint = point; CaptureMouse(); e.Handled = true; return;
         }
         int lane = LaneAt(point);
         if (lane >= 0 && lanes[lane].Toggleable) { LaneToggled?.Invoke(lane); e.Handled = true; return; }
@@ -355,17 +394,23 @@ internal sealed class TrimTimeline : FrameworkElement
         var p=e.GetPosition(this);
         if (IsMouseCaptured)
         {
-            if (drag == Drag.Cut) { cutEnd = CutLimit(Snap(TimeAt(p.X))); InvalidateVisual(); }
-            else if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X);
+            if (cutPress)
+            {
+                if ((p - pressPoint).Length <= 3) return;
+                cutPress = false; BeginDrag(pressPoint); DragStarted?.Invoke();
+            }
+            if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X);
+            UpdateCutHover(p);
             return;
         }
+        UpdateCutHover(p);
         bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
-        if (CutMode && BandAt(p) > -2)
+        if (cutMode && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
-            ToolTip = "Drag to cut out this stretch; click a cut to restore it";
+            ToolTip = pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
             return;
         }
         int lane = LaneAt(p);
@@ -374,25 +419,32 @@ internal sealed class TrimTimeline : FrameworkElement
         ToolTip = lane >= 0 ? (lanes[lane].Toggleable ? $"Click to {(lanes[lane].Muted ? "include" : "mute")} {lanes[lane].Name.ToLowerInvariant()} audio in exports" : "Record with separate tracks to adjust desktop and microphone audio separately")
             : "Click to seek; drag the edges to trim. Wheel zooms · Shift+wheel pans · Ctrl+wheel changes speed";
     }
-    protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); if (toggleHover) { toggleHover = false; InvalidateVisual(); } }
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (toggleHover || (cutHover != null && !IsMouseCaptured)) { toggleHover = false; if (!IsMouseCaptured) cutHover = null; InvalidateVisual(); }
+    }
+    protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonDown(e);
+        if (!cutMode) return;
+        // Right-click cancels a half-placed cut, or restores the cut under the pointer.
+        if (pendingCut != null) { CancelPendingCut(); e.Handled = true; return; }
+        var p = e.GetPosition(this); int band = BandAt(p); double t = TimeAt(p.X);
+        var hit = cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t <= c.End);
+        if (hit != null) { CutRemoved?.Invoke(hit); e.Handled = true; }
+    }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
         if (!IsMouseCaptured) return;
-        if (drag == Drag.Cut)
-        {
-            double a = Math.Min(cutAnchor, cutEnd), b = Math.Max(cutAnchor, cutEnd);
-            // A drag makes a cut; a plain click on an existing cut restores that stretch.
-            if (b - a >= .05) CutAdded?.Invoke(new CutRegion(cutLane, a, b));
-            else if (cutCandidate != null) CutRemoved?.Invoke(cutCandidate);
-            cutCandidate = null; ReleaseMouseCapture(); InvalidateVisual(); e.Handled = true; return;
-        }
+        if (cutPress) { cutPress = false; ReleaseMouseCapture(); PlaceCutPoint(pressPoint); e.Handled = true; return; }
         if (drag != Drag.Pan) MoveTo(e.GetPosition(this).X);
         ReleaseMouseCapture(); e.Handled=true;
     }
     protected override void OnLostMouseCapture(MouseEventArgs e)
     { base.OnLostMouseCapture(e); EndDrag(); }
-    internal void EndDrag() { if (drag == Drag.None) return; bool quiet = drag is Drag.Pan or Drag.Cut; drag=Drag.None; if (!quiet) DragCompleted?.Invoke(); }
+    internal void EndDrag() { if (drag == Drag.None) return; bool quiet = drag is Drag.Pan; drag=Drag.None; if (!quiet) DragCompleted?.Invoke(); }
     // Wheel zooms around the pointer, Shift+wheel pans, Ctrl+wheel steps the preview speed.
     // Deltas are scaled rather than counted, so touchpads and free-spinning wheels stay smooth.
     internal event Action<int>? SpeedStepRequested;

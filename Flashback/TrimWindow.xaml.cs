@@ -265,6 +265,13 @@ public partial class TrimWindow : Window
         // Open and save work anywhere, including while typing a timestamp.
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
+        // Esc drops a half-placed cut first, then leaves the cut tool.
+        if (key==Key.Escape && modifiers==ModifierKeys.None && Timeline.CutMode)
+        {
+            if (Timeline.HasPendingCut) { Timeline.CancelPendingCut(); StatusLabel.Text="Cut cancelled."; }
+            else CutTool_Click(this,new RoutedEventArgs());
+            return true;
+        }
         if (action==TrimAction.ShortcutGuide) { if(!repeated) RunAction(action.Value); return true; }
         if (action==null)
         {

@@ -103,7 +103,7 @@ public partial class TrimWindow
         ShowCutTool();
         if (Timeline.CutMode && Timeline.Lanes.Count > 0 && !Timeline.LanesExpanded) LanesToggleRequested();
         StatusLabel.Text = !Timeline.CutMode ? "Cut out tool off."
-            : "Drag across the video to black it out, or across an audio lane to mute it. Click a cut to restore it." + (SectionsList.SelectedIndex >= 0 ? $" Cuts stay inside section {SectionsList.SelectedIndex + 1}." : "");
+            : "Click two spots on the video or an audio lane to cut that stretch out. Drag to move the playhead; the cutter locks onto it. Right-click a cut to restore it · Esc cancels.";
     }
     private void CutAdded(CutRegion cut)
     {

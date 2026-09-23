@@ -88,10 +88,19 @@ internal static class TrimInteractionDiagnostics
             Check(trim.Timeline.Cuts.Count==before,"Undo removes the last cut out");
             trim.HandleKey(Key.Y,ModifierKeys.Control,false);
             Check(trim.Timeline.Cuts.Count==before+1,"Redo brings the cut out back");
-            trim.Timeline.Sections=new[]{new KeepSection(3,5)}; trim.Timeline.SelectedSection=0;
-            var limit=typeof(TrimTimeline).GetMethod("CutLimit",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
-            Check((double)limit.Invoke(trim.Timeline,new object[]{1.0})! == 3 && (double)limit.Invoke(trim.Timeline,new object[]{9.0})! == 5,"Cut outs stay inside the selected section");
-            trim.Timeline.SelectedSection=-1;
+            // Click-click cutting: first click starts, second finishes; a drag moves the playhead instead.
+            var tl=trim.Timeline; tl.Fit(); trim.UpdateLayout(); trim.SeekTo(6); tl.CutMode=true;
+            var place=typeof(TrimTimeline).GetMethod("PlaceCutPoint",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
+            int cutsBefore=tl.Cuts.Count;
+            place.Invoke(tl,new object[]{new Point(tl.XAt(3),26)});
+            Check(tl.HasPendingCut && tl.Cuts.Count==cutsBefore,"First cut click only marks the start");
+            place.Invoke(tl,new object[]{new Point(tl.XAt(6)+2,26)});
+            var made=tl.Cuts[tl.Cuts.Count-1];
+            Check(!tl.HasPendingCut && made.Lane==-1 && Math.Abs(made.Start-3)<.02 && Math.Abs(made.End-6)<1e-9,"Second click finishes the cut and locks onto the playhead within 3 px");
+            place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); trim.HandleKey(Key.Escape,ModifierKeys.None,true);
+            Check(!tl.HasPendingCut && tl.CutMode,"Esc cancels a half-placed cut and keeps the tool on");
+            trim.HandleKey(Key.Escape,ModifierKeys.None,true);
+            Check(!tl.CutMode,"A second Esc leaves the cut tool");            trim.Timeline.SelectedSection=-1;
             double spanBefore=trim.Timeline.VisibleDuration;
             trim.Timeline.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice,0,120){RoutedEvent=UIElement.MouseWheelEvent});
             Check(trim.Timeline.VisibleDuration<spanBefore-.01,"Scroll wheel zooms the timeline in");
