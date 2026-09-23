@@ -69,7 +69,7 @@
      </StackPanel></ScrollViewer></TabItem>
      <TabItem Header="Notifications" Style="{StaticResource SideTab}"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,0,12,0">
       <TextBlock Text="Notifications" Style="{StaticResource SettingsHeading}"/>
-      <CheckBox x:Name="OverlayCheck" Content="Show clip requested, saved and error banners"/><CheckBox x:Name="FullscreenOverlayCheck" Content="Use RTSS for exclusive-fullscreen notifications"/><TextBlock Text="Requires RTSS running with its in-game display enabled." FontSize="12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+      <CheckBox x:Name="OverlayCheck" Content="Show clip requested, saved and error banners"/>
       <Grid Margin="0,12,0,12"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="20"/><ColumnDefinition/></Grid.ColumnDefinitions>
        <StackPanel><TextBlock Text="Overlay corner" Style="{StaticResource Caption}"/><ComboBox x:Name="OverlayCornerBox"/></StackPanel>
        <StackPanel Grid.Column="2"><TextBlock Text="Show result for" Style="{StaticResource Caption}"/><ComboBox x:Name="OverlayDurationBox"/></StackPanel>

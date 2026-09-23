@@ -47,7 +47,6 @@ public sealed class Settings
     public bool Notifications { get; set; }
     public string ExternalEditorPath { get; set; } = "";
     public bool OverlayEnabled { get; set; } = true;
-    public bool FullscreenNotifications { get; set; } = true;
     public bool ShowSavingOverlay { get; set; } = true;
     public string OverlayCorner { get; set; } = "Top right";
     public int OverlaySeconds { get; set; } = 3;

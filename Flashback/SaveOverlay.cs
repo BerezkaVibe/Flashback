@@ -14,15 +14,11 @@ public enum SaveFeedback { Saving, Saved, Failed, Preview }
 public sealed class SaveOverlay : IDisposable
 {
     private OverlayWindow? window;
-    private readonly FullscreenOsd fullscreen = new();
     public static IntPtr CurrentMonitor() => NativeOverlay.MonitorFromWindow(NativeOverlay.GetForegroundWindow(), 2);
     public void Show(SaveFeedback state, string detail, Settings options, IntPtr monitor)
     {
         if (!options.OverlayEnabled)
         { Dispose(); return; } // Never leave a previous clip's success flag visible during a new save.
-        if (options.FullscreenNotifications && fullscreen.Show(state, options.OverlaySeconds))
-        { window?.Close(); window = null; return; }
-        fullscreen.Dispose();
         if (window == null)
         {
             var created = new OverlayWindow();
@@ -31,7 +27,7 @@ public sealed class SaveOverlay : IDisposable
         }
         window.Present(state, detail, options, monitor);
     }
-    public void Dispose() { fullscreen.Dispose(); window?.Close(); window = null; }
+    public void Dispose() { window?.Close(); window = null; }
 }
 
 internal sealed class OverlayWindow : Window

@@ -17,7 +17,6 @@ internal static class OverlayDiagnostics
         Directory.CreateDirectory(Storage.Root);
         var passed = new List<string>();
         void Check(bool okay, string message) { if (!okay) throw new Exception(message); passed.Add(message); }
-        FullscreenOsdDiagnostics.Run(Check);
         var legacy = JsonSerializer.Deserialize<Settings>("{\"Hotkey\":\"Alt+F8\",\"Notifications\":true}")!;
         legacy.Validate();
         Check(legacy.OverlayEnabled && legacy.OverlaySeconds == 3 && legacy.Notifications, "Old settings retain preferences and gain overlay defaults");

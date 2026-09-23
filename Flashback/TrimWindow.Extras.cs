@@ -244,7 +244,6 @@ public partial class TrimWindow
         try
         {
             var progress = new Progress<double>(p => ExportProgress.Value = p);
-            if (!rough) await WaitForCaptureAsync(exportCancellation.Token);
             StatusLabel.Text = "Exporting selected sectionsâ€¦";
             var result = rough
                 ? await FastClipExport.ExportAsync(source, destination, ranges, progress, exportCancellation.Token)

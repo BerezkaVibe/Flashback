@@ -143,11 +143,6 @@ public partial class TrimWindow
         }
         catch(ArgumentException ex) { ModeHint.Text=ex.Message; }
     }
-    private async Task WaitForCaptureAsync(CancellationToken token)
-    {
-        while(WaitForRecording.IsChecked==true && Application.Current.Windows.OfType<MainWindow>().Any(w=>w.RecordingActive))
-        { StatusLabel.Text="Export queued. Pause recording or uncheck the wait option to begin."; await Task.Delay(500,token); }
-    }
     private async void Snapshot_Click(object sender,RoutedEventArgs e)
     {
         if(source.Length==0 || exportCancellation!=null) return;

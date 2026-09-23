@@ -38,7 +38,7 @@ Display capture retries indefinitely, with bounded memory and capped retry delay
 
 - Save: Ctrl + Shift + F8. Start/pause: Ctrl + Shift + F9.
 - Click a shortcut field and press a key; Ctrl, Alt and Shift are optional. Escape cancels. Apply to activate it. Single-key shortcuts work globally, including while typing. If another app owns the shortcut, Flashback listens for the same key in the background. Both apps may respond. Windows-reserved shortcuts and elevated/protected apps can still impose restrictions.
-- The optional overlay appears immediately when Save replay or its hotkey is pressed, then updates with success or failure; saving runs in the background. Choose its corner and duration in Settings. Windows notifications are separate. Exclusive fullscreen requires RTSS running with its OSD enabled for the game; enable the RTSS option in Settings. RTSS is not bundled. When it is absent, the regular windowed/borderless banner is used. RTSS notifications use its global layout, may appear in captured frames, and depend on game compatibility.
+- The optional overlay appears immediately when Save replay or its hotkey is pressed, then updates with success or failure; saving runs in the background. Choose its corner and duration in Settings. Windows notifications are separate. Banners show over borderless and windowed games.
 - Startup and automatic buffering are optional and off by default.
 
 ## Clips and trimming

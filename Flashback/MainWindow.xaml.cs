@@ -120,7 +120,7 @@ public partial class MainWindow : Window
         AudioCheck.IsChecked = settings.DesktopAudio; CursorCheck.IsChecked = settings.ShowCursor;
         FolderBox.Text = settings.OutputFolder; GameBox.Text = settings.GameOverride; HotkeyBox.Text = settings.Hotkey;
         PauseHotkeyBox.Text = settings.PauseHotkey; LoadTrimShortcuts(settings);
-        OverlayCheck.IsChecked = settings.OverlayEnabled; FullscreenOverlayCheck.IsChecked = settings.FullscreenNotifications;
+        OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
         UpdateCheck.IsChecked = settings.CheckForUpdates; SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
@@ -146,7 +146,7 @@ public partial class MainWindow : Window
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
         StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
-        PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, FullscreenNotifications = FullscreenOverlayCheck.IsChecked == true, ShowSavingOverlay = true,
+        PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath
     };
