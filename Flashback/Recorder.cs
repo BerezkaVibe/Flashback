@@ -68,6 +68,15 @@ public sealed class Recorder : IAsyncDisposable
         if (audio != null) audio.Muted = desktopMuted;
         if (microphone != null) microphone.Muted = microphoneMuted;
     }
+    // Locks and volumes apply to the running sources without restarting the buffer.
+    public void SetAudioLive(Settings next)
+    {
+        settings.DesktopLocked = next.DesktopLocked; settings.MicrophoneLocked = next.MicrophoneLocked;
+        settings.DesktopVolume = next.DesktopVolume; settings.MicrophoneVolume = next.MicrophoneVolume;
+        if (audio != null) { audio.Hold = next.DesktopLocked; audio.Gain = next.DesktopVolume / 100.0; }
+        if (microphone != null) { microphone.Hold = next.MicrophoneLocked; microphone.Gain = next.MicrophoneVolume / 100.0; }
+    }
+    internal string? LiveDeviceId(bool mic) => (mic ? microphone : audio)?.DeviceId;
     public Recorder(string? ffmpeg = null)
     {
         FfmpegPath = ffmpeg ?? Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe");
@@ -142,13 +151,13 @@ public sealed class Recorder : IAsyncDisposable
             stage = "initializing desktop audio";
             if (settings.DesktopAudio && !synthetic)
             {
-                audio = new AudioLoopback(settings.AudioDeviceId) { Muted = settings.DesktopMuted };
+                audio = new AudioLoopback(settings.AudioDeviceId, hold: settings.DesktopLocked) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 };
                 LastStartupReport += $"Audio source: {audio.DeviceName}; {(string.IsNullOrEmpty(settings.AudioDeviceId) ? "follow Windows default" : "fixed playback device")}\n";
             }
             stage = "initializing microphone";
             if (settings.MicrophoneAudio && !synthetic)
             {
-                microphone = new AudioLoopback(settings.MicrophoneDeviceId, microphone: true) { Muted = settings.MicrophoneMuted };
+                microphone = new AudioLoopback(settings.MicrophoneDeviceId, microphone: true, hold: settings.MicrophoneLocked) { Muted = settings.MicrophoneMuted, Gain = settings.MicrophoneVolume / 100.0 };
                 LastStartupReport += $"Microphone: {microphone.DeviceName}; {(string.IsNullOrEmpty(settings.MicrophoneDeviceId) ? "follow Windows communications default" : "fixed input device")}\n";
             }
             stage = "configuring display capture";
@@ -316,7 +325,7 @@ public sealed class Recorder : IAsyncDisposable
         args.AddRange(new[] { "-g", (s.FrameRate * 2).ToString(), "-bf", "0", "-force_key_frames", "expr:gte(t,n_forced*2)", "-fps_mode", "cfr", "-r", s.FrameRate.ToString() });
         if (audioInputs.Count > 0)
         {
-            args.AddRange(new[] { "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000" });
+            args.AddRange(new[] { "-c:a", "aac", "-b:a", s.AudioBitrate + "k", "-ac", "2", "-ar", "48000" });
             if (audioInputs.Count == 1) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" });
         }
         args.AddRange(new[] { "-f", "segment", "-segment_time", "2", "-segment_time_delta", "0.02", "-segment_format", "mpegts", "-segment_list", "segments.csv", "-segment_list_type", "csv", "-segment_list_size", (s.ReplaySeconds / 2 + 12).ToString(), "-reset_timestamps", "1", "part-%09d.ts" });

@@ -24,12 +24,18 @@ public sealed class Settings
     public bool DesktopMuted { get; set; }
     public bool MicrophoneMuted { get; set; }
     public string MicrophoneDeviceId { get; set; } = "";
+    public bool DesktopLocked { get; set; }
+    public bool MicrophoneLocked { get; set; }
+    public int DesktopVolume { get; set; } = 100;
+    public int MicrophoneVolume { get; set; } = 100;
+    public int AudioBitrate { get; set; } = 160;
     public bool ShowCursor { get; set; }
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Flashback");
     public string GameOverride { get; set; } = "";
     public string Hotkey { get; set; } = "Ctrl+Shift+F8";
     public string PauseHotkey { get; set; } = "Ctrl+Shift+F9";
     public string TrimAddHotkey { get; set; } = "+";
+    public Dictionary<string, string> TrimKeys { get; set; } = new();
     public bool StartWithWindows { get; set; }
     public bool StartBufferOnLaunch { get; set; }
     public bool Notifications { get; set; }
@@ -50,20 +56,21 @@ public sealed class Settings
         if (string.IsNullOrWhiteSpace(OutputFolder) || !Path.IsPathFullyQualified(OutputFolder)) throw new ArgumentException("Choose an absolute output folder.");
         if (OutputFolder.IndexOfAny(new[] { '\r', '\n' }) >= 0) throw new ArgumentException("Invalid output folder.");
         Hotkeys.Parse(Hotkey);
-        TrimShortcuts.Validate(TrimAddHotkey);
         if (!VideoEncoder.Preferences.Contains(Encoder)) throw new ArgumentException("Choose a supported hardware encoder.");
         var pause = Hotkeys.Parse(PauseHotkey);
         if (pause == Hotkeys.Parse(Hotkey)) throw new ArgumentException("Save and pause need different hotkeys.");
-        if (TrimAddHotkey != "+" && (Hotkeys.Parse(TrimAddHotkey)==pause || Hotkeys.Parse(TrimAddHotkey)==Hotkeys.Parse(Hotkey)))
-            throw new ArgumentException("Choose an add-section shortcut different from the global save and recording shortcuts.");
+        TrimShortcuts.Validate(this);
         if (!new[] { "Top right", "Top left", "Bottom right", "Bottom left" }.Contains(OverlayCorner)) throw new ArgumentException("Choose an overlay corner.");
+        if (DesktopVolume < 0 || DesktopVolume > 200 || MicrophoneVolume < 0 || MicrophoneVolume > 200) throw new ArgumentException("Choose a recording volume from 0% to 200%.");
+        if (!AudioBitrates.Contains(AudioBitrate)) throw new ArgumentException("Choose a supported audio quality.");
         if (OverlaySeconds < 2 || OverlaySeconds > 8) throw new ArgumentException("Choose an overlay duration from 2 to 8 seconds.");
     }
     public bool RequiresBufferRestart(Settings other) => ReplaySeconds != other.ReplaySeconds || FrameRate != other.FrameRate
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
         || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
-        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder;
+        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate;
+    public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
     public int BitrateMbps => (int)Math.Round((Quality switch { "Compact" => 8, "High" => 24, _ => 14 }) * (Height switch { 720 => 0.6, 1440 => 1.7, 2160 => 3.0, 0 => 2.0, _ => 1.0 }) * Math.Max(0.65, FrameRate / 60.0));
     public double EstimatedBufferMb => BitrateMbps * (ReplaySeconds + 12) / 8.0 * 1.1;
 }
@@ -79,10 +86,11 @@ public static class Storage
         {
             if (!File.Exists(ConfigPath)) return new();
             var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(ConfigPath)) ?? new();
-            if (TrimShortcuts.IsReserved(s.TrimAddHotkey))
+            try { TrimShortcuts.Validate(s); }
+            catch (ArgumentException)
             {
-                s.TrimAddHotkey="+";
-                warning="The add-section shortcut is now + because its old key is reserved by the trimmer. Other preferences were preserved; see the shortcut guide.";
+                s.TrimAddHotkey="+"; s.TrimKeys.Clear();
+                warning="Trimmer shortcuts were reset to their defaults because two of them shared a key. Other preferences were preserved.";
             }
             s.Validate();
             return s;

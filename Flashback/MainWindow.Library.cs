@@ -101,7 +101,7 @@ public partial class MainWindow
     {
         if (SelectedClip is not { } clip) return;
         if (trimWindow != null) { Tell("Close the trimmer before deleting a clip."); return; }
-        if (MessageBox.Show(this, "Send this clip to the Recycle Bin?\n\n" + Path.GetFileName(clip.Path), "Delete clip", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        if (!ThemedDialog.Confirm(this, "Delete this clip?", Path.GetFileName(clip.Path) + " goes to the Recycle Bin.", "Move to Recycle Bin", "Keep")) return;
         try
         {
             // Let Windows show any further prompts, including volumes without a Recycle Bin.

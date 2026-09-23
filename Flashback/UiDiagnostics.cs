@@ -47,21 +47,21 @@ internal static class UiDiagnostics
             while(hit!=null) {if(hit==target)return true;hit=VisualTreeHelper.GetParent(hit);}return false;
         }
         window.SetRecordingAppearance(true);
-        Check(((SolidColorBrush)window.ToggleButton.Background).Color==ResourceColor("RecordingRed"),"Active recording button uses red with readable text");
+        Check(((SolidColorBrush)window.RecordDot.Fill).Color==ResourceColor("RecordingLight") && ((SolidColorBrush)window.ToggleButton.BorderBrush).Color==ResourceColor("RecordingLight"),"Active recording shows a red light and outline");
         window.SetRecordingAppearance(false);
-        Check(((SolidColorBrush)window.ToggleButton.Background).Color==ResourceColor("Accent"),"Stopped recording button restores the chosen accent");
+        Check(((SolidColorBrush)window.RecordDot.Fill).Color==ResourceColor("IdleLight"),"Stopped recording shows a grey light");
         Check(window.MainTabs.SelectedIndex == 0 && window.StatusTitle.ActualHeight > 0, "Capture content is visible on first launch");
         Check(window.LibraryTab.IsSelected && window.HotkeyLabel.TranslatePoint(new Point(), canvas).Y < window.MainTabs.TranslatePoint(new Point(), canvas).Y, "Home contains clips with recording status and shortcut in the header");
         Check(((SolidColorBrush)window.StatusTitle.Foreground).Color.R > 140, "Capture text inherits the readable dark theme");
         Render("capture.png"); Render("capture-small.png", 744, 601);
         Check(window.ToggleButton.TranslatePoint(new Point(), canvas).X + window.ToggleButton.ActualWidth <= canvas.ActualWidth, "Recording controls stay inside the minimum window width");
         Click(window.SettingsNav); Layout();
-        Check(window.MainTabs.SelectedIndex == 1 && window.PageTitle.Text == "Settings" && window.HotkeyBox.ActualHeight > 0, "Gear opens settings with direct shortcut entry");
-        window.RecordingSettings.IsExpanded = true; window.FeedbackCard.IsExpanded = false; Layout();
+        Check(window.MainTabs.SelectedIndex == 1 && window.PageTitle.Text == "Settings" && window.RecordingSettings.IsSelected && window.DisplayBox.ActualHeight > 0, "Gear opens settings on the video tab");
+        window.RecordingSettings.IsSelected = true; Layout();
         Check(window.DisplayBox.ActualHeight > 0 && window.EncoderBox.ActualHeight > 0, "Display and hardware encoder choices remain accessible in settings");
         Check(window.LengthSlider.Value==60 && window.LengthSlider.TickFrequency==5 && window.LengthSlider.IsSnapToTickEnabled,"Replay slider shows the saved duration and snaps to five seconds");
-        var header=Find<ToggleButton>(window.RecordingSettings).First();
-        Check(header.ActualHeight>=52 && Hits(header,header,new Point(4,4)),"Settings header padding is part of its full clickable target");
+        var header=window.RecordingSettings;
+        Check(header.ActualHeight>=40 && Hits(header,header,new Point(4,4)),"Settings tab rows are clickable across their full height");
         var dropdown=(ToggleButton)window.DisplayBox.Template.FindName("DropToggle",window.DisplayBox);
         Check(window.DisplayBox.ActualHeight>=44 && Hits(window.DisplayBox,dropdown,new Point(4,4)),"Dropdown edges are clickable and rows are at least 44 pixels high");
         Check(((SolidColorBrush)dropdown.Background).Color==ResourceColor("AppBackground"),"Video/display dropdown follows the app background");
@@ -70,8 +70,8 @@ internal static class UiDiagnostics
         window.LengthSlider.Value=35;Layout();
         Check(window.ReplayLengthLabel.Text.Contains("35"),"Replay slider immediately labels five-second values");
         Render("video-settings.png");
-        window.RecordingSettings.IsExpanded = false; window.AudioSettings.IsExpanded = true; Layout();
-        var check=Find<CheckBox>(window.AudioSettings).First();
+        window.AudioSettings.IsSelected = true; Layout();
+        var check=window.AudioCheck;
         Check(check.ActualHeight>=36 && Hits(check,check,new Point(3,2)),"Audio switches accept clicks above and below their visible track");
         Render("audio-settings.png");
         var before = Storage.Load(out _);

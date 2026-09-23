@@ -24,7 +24,7 @@ public partial class TrimWindow : Window
     private double playhead;
     private long seekIssued;
     private readonly bool previewEnabled;
-    private readonly string addSectionHotkey;
+    private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
     private readonly Stack<KeepSection[]> undo = new(), redo = new();
     private int previewSection = -1;
@@ -32,9 +32,8 @@ public partial class TrimWindow : Window
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
         InitializeComponent(); WindowTheme.Attach(this); previewEnabled = !renderOnly;
-        addSectionHotkey = Storage.Load(out _).TrimAddHotkey;
-        AddSectionButton.Content = "Add section  " + addSectionHotkey;
-        AddSectionButton.ToolTip = "Add the marked range · " + addSectionHotkey;
+        LoadKeys();
+        Activated += (_, _) => LoadKeys();
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         Timeline.Duration = media.Duration; Timeline.End = media.Duration; Timeline.FrameRate = media.FrameRate;
         TimelineMap.Timeline=Timeline; Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
@@ -64,7 +63,7 @@ public partial class TrimWindow : Window
         var imported=TrimImport.Read(new[] { path });
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
         bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
-        if (confirmChanges && edited && MessageBox.Show(this,"Open another video and discard this trim selection?\nYour original video is unchanged.","Open video",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes) return false;
+        if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current trim selection. Your original video is unchanged.","Open video")) return false;
         if(!FlushProject()) return false; projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
@@ -245,38 +244,20 @@ public partial class TrimWindow : Window
     internal bool HandleKey(Key key, ModifierKeys modifiers, bool timelineFocused, bool editingText = false, bool repeated = false)
     {
         if (exportCancellation!=null) return false;
-        if (repeated && !editingText && key is not (Key.Left or Key.Right or Key.Up or Key.Down or Key.OemComma or Key.OemPeriod or Key.J or Key.L)) return true;
-        if (!editingText && modifiers==ModifierKeys.Shift && key==Key.OemQuestion) { ShortcutGuide_Click(this,new RoutedEventArgs()); return true; }
-        if(modifiers==ModifierKeys.Control && key==Key.O) { OpenVideo_Click(this,new RoutedEventArgs()); return true; }
-        if(modifiers==ModifierKeys.Control && key==Key.S) { SaveProject_Click(this,new RoutedEventArgs()); return true; }
-        if (source.Length==0 || editingText) return false;
-        if (TrimShortcuts.Matches(addSectionHotkey,key,modifiers)) { ChangeSection(false); return true; }
-        if (HandleExtraKey(key,modifiers)) return true;
-        if (modifiers == ModifierKeys.Control && key is Key.Z or Key.Y)
-        { if(key==Key.Z) Restore(undo,redo); else Restore(redo,undo); return true; }
-        if (timelineFocused && key is Key.Left or Key.Right)
+        var action=TrimShortcuts.Find(keys,key,modifiers,timelineFocused);
+        // Open and save work anywhere, including while typing a timestamp.
+        if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
+        if (editingText) return false;
+        if (action==TrimAction.ShortcutGuide) { if(!repeated) RunAction(action.Value); return true; }
+        if (action==null)
         {
-            double direction=key==Key.Left ? -1 : 1, target;
-            if (modifiers==ModifierKeys.None)
-                target=(direction>0 ? Math.Floor(playhead*media.FrameRate+1e-6)+1 : Math.Ceiling(playhead*media.FrameRate-1e-6)-1)/media.FrameRate;
-            else if (modifiers==ModifierKeys.Shift) target=playhead+direction*.5;
-            else if (modifiers==ModifierKeys.Control) target=playhead+direction;
-            else return false;
-            SeekTo(target); return true;
+            if (repeated) return key is not (Key.Left or Key.Right or Key.Up or Key.Down);
+            if (source.Length>0 && timelineFocused && modifiers==ModifierKeys.None && key is Key.Home or Key.End) { SeekTo(key==Key.Home ? 0 : media.Duration); return true; }
+            return false;
         }
-        if (modifiers != ModifierKeys.None) return false;
-        switch(key)
-        {
-            case Key.I: MarkStart_Click(this,new RoutedEventArgs()); break;
-            case Key.O: MarkEnd_Click(this,new RoutedEventArgs()); break;
-            case Key.S: Split_Click(this,new RoutedEventArgs()); break;
-            case Key.Space: SetPreviewRate(1); Play_Click(this,new RoutedEventArgs()); break;
-            case Key.Delete: Remove_Click(this,new RoutedEventArgs()); break;
-            case Key.Home when timelineFocused: SeekTo(0); break;
-            case Key.End when timelineFocused: SeekTo(media.Duration); break;
-            default: return false;
-        }
-        return true;
+        if (source.Length==0) return false;
+        if (repeated && !TrimShortcuts.Info(action.Value).Repeats) return true;
+        RunAction(action.Value); return true;
     }
     private void ExportMode_Changed(object sender, SelectionChangedEventArgs e)
     {

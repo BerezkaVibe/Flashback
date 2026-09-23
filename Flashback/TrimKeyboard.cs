@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 
@@ -55,84 +57,98 @@ public partial class TrimWindow
         dialog.PreviewKeyDown+=(_,key)=> {if(key.Key==Key.Escape) {dialog.Close();key.Handled=true;}};
         dialog.Loaded+=(_,_)=> {field.Focus();field.SelectAll();}; dialog.ShowDialog(); Timeline.Focus();
     }
-    private void ShortcutGuide_Click(object sender,RoutedEventArgs e) => ShortcutGuide.Show(this,addSectionHotkey);
-    private bool HandleExtraKey(Key key,ModifierKeys modifiers)
+    private void ShortcutGuide_Click(object sender,RoutedEventArgs e) => ShortcutGuide.Show(this,keys);
+    private void LoadKeys()
     {
-        if(modifiers==ModifierKeys.Control)
+        keys=TrimShortcuts.Resolve(Storage.Load(out _));
+        string Key(TrimAction action) => TrimShortcuts.Display(keys[action]);
+        AddSectionButton.Content="Add section  "+Key(TrimAction.AddSection);
+        AddSectionButton.ToolTip="Add the marked range · "+Key(TrimAction.AddSection);
+        MarkStartKey.Text=Key(TrimAction.MarkStart); MarkStartButton.ToolTip="Set start at playhead · "+MarkStartKey.Text; AutomationProperties.SetName(MarkStartButton,"Set start, shortcut "+MarkStartKey.Text);
+        MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
+        foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
+            (UndoMenu,TrimAction.Undo),(RedoMenu,TrimAction.Redo),(AddSectionMenu,TrimAction.AddSection),(SplitMenu,TrimAction.Split),(RemoveMenu,TrimAction.RemoveSection),
+            (ZoomInMenu,TrimAction.ZoomIn),(ZoomOutMenu,TrimAction.ZoomOut),(GoToTimeMenu,TrimAction.GoToTime),(ShortcutGuideMenu,TrimAction.ShortcutGuide) })
+            menu.InputGestureText=Key(action);
+    }
+    private void StepPreviewRate(int steps)
+    {
+        int i=Array.IndexOf(previewRates,PreviewRate);
+        SetPreviewRate(previewRates[Math.Clamp(i+steps,0,previewRates.Length-1)]);
+    }
+    private void RunAction(TrimAction action)
+    {
+        var none=new RoutedEventArgs();
+        switch(action)
         {
-            switch(key)
-            {
-                case Key.Up: Timeline.Zoom(2,playhead); return true;
-                case Key.Down: Timeline.Zoom(.5,playhead); return true;
-                case Key.Home: SeekTo(0);return true;
-                case Key.End: SeekTo(media.Duration);return true;
-            }
+            case TrimAction.PlayPause: SetPreviewRate(1); Play_Click(this,none); break;
+            case TrimAction.PlayPauseKeepSpeed: Play_Click(this,none); break;
+            case TrimAction.Slower: StepPreviewRate(-1); break;
+            case TrimAction.Faster: StepPreviewRate(1); break;
+            case TrimAction.MuchSlower: StepPreviewRate(-2); break;
+            case TrimAction.MuchFaster: StepPreviewRate(2); break;
+            case TrimAction.Mute: Player.IsMuted=!Player.IsMuted; SetPreviewRate(PreviewRate); break;
+            case TrimAction.VolumeUp or TrimAction.VolumeDown:
+                Player.Volume=Math.Clamp(Player.Volume+(action==TrimAction.VolumeUp ? .1 : -.1),0,1); SetPreviewRate(PreviewRate); break;
+            case TrimAction.PreviousFrame or TrimAction.FrameBack: StepFrame(-1); break;
+            case TrimAction.NextFrame or TrimAction.FrameForward: StepFrame(1); break;
+            case TrimAction.HalfSecondBack: SeekTo(playhead-.5); break;
+            case TrimAction.HalfSecondForward: SeekTo(playhead+.5); break;
+            case TrimAction.SecondBack: SeekTo(playhead-1); break;
+            case TrimAction.SecondForward: SeekTo(playhead+1); break;
+            case TrimAction.TenSecondsBack: SeekTo(playhead-10); break;
+            case TrimAction.TenSecondsForward: SeekTo(playhead+10); break;
+            case TrimAction.VideoStart: SeekTo(0); break;
+            case TrimAction.VideoEnd: SeekTo(media.Duration); break;
+            case TrimAction.MarkedStart: SeekTo(Timeline.Start); break;
+            case TrimAction.MarkedEnd: SeekTo(Timeline.End); break;
+            case TrimAction.GoToTime: Timecode_Click(this,none); break;
+            case TrimAction.MarkStart: MarkStart_Click(this,none); break;
+            case TrimAction.MarkEnd: MarkEnd_Click(this,none); break;
+            case TrimAction.AddSection: ChangeSection(false); break;
+            case TrimAction.Split: Split_Click(this,none); break;
+            case TrimAction.RemoveSection: Remove_Click(this,none); break;
+            case TrimAction.PreviousSection: NavigateSection(-1); break;
+            case TrimAction.NextSection: NavigateSection(1); break;
+            case TrimAction.FirstSection: NavigateSection(-1,true); break;
+            case TrimAction.LastSection: NavigateSection(1,true); break;
+            case TrimAction.Undo: Restore(undo,redo); break;
+            case TrimAction.Redo: Restore(redo,undo); break;
+            case TrimAction.ZoomIn: Timeline.Zoom(2,playhead); break;
+            case TrimAction.ZoomOut: Timeline.Zoom(.5,playhead); break;
+            case TrimAction.ZoomToggle: if(Timeline.ViewDuration>0 && Timeline.ViewDuration<media.Duration) Timeline.Fit(); else Timeline.Zoom(4,playhead); break;
+            case TrimAction.Snapshot: Snapshot_Click(this,none); break;
+            case TrimAction.Export: Export_Click(this,none); break;
+            case TrimAction.OpenVideo: OpenVideo_Click(this,none); break;
+            case TrimAction.SaveProject: SaveProject_Click(this,none); break;
+            case TrimAction.ShortcutGuide: ShortcutGuide_Click(this,none); break;
         }
-        if(modifiers==(ModifierKeys.Control|ModifierKeys.Shift))
-        {
-            if(key==Key.Z) {Restore(redo,undo);return true;}
-            if(key is Key.Left or Key.Right) {SeekTo(playhead+(key==Key.Left ? -10 : 10));return true;}
-        }
-        if(modifiers==ModifierKeys.Shift && key is Key.Home or Key.End) {SeekTo(key==Key.Home ? Timeline.Start : Timeline.End);return true;}
-        if(modifiers==ModifierKeys.Alt && key is Key.Up or Key.Down)
-        {Player.Volume=Math.Clamp(Player.Volume+(key==Key.Up ? .1 : -.1),0,1); SetPreviewRate(PreviewRate);return true;}
-        if(modifiers is ModifierKeys.None or ModifierKeys.Shift && key is Key.J or Key.L)
-        {
-            int i=Array.IndexOf(previewRates,PreviewRate),step=modifiers==ModifierKeys.Shift ? 2 : 1;
-            SetPreviewRate(previewRates[Math.Clamp(i+(key==Key.J ? -step : step),0,previewRates.Length-1)]);return true;
-        }
-        if(modifiers!=ModifierKeys.None) return false;
-        switch(key)
-        {
-            case Key.OemComma: StepFrame(-1);break;
-            case Key.OemPeriod: StepFrame(1);break;
-            case Key.K: Play_Click(this,new RoutedEventArgs());break;
-            case Key.M: Player.IsMuted=!Player.IsMuted;SetPreviewRate(PreviewRate);break;
-            case Key.B: Split_Click(this,new RoutedEventArgs());break;
-            case Key.Back: Remove_Click(this,new RoutedEventArgs());break;
-            case Key.Up: NavigateSection(-1);break;
-            case Key.Down: NavigateSection(1);break;
-            case Key.PageUp: NavigateSection(-1,true);break;
-            case Key.PageDown: NavigateSection(1,true);break;
-            case Key.Z: if(Timeline.ViewDuration>0 && Timeline.ViewDuration<media.Duration) Timeline.Fit();else Timeline.Zoom(4,playhead);break;
-            case Key.G: Timecode_Click(this,new RoutedEventArgs());break;
-            case Key.C: Snapshot_Click(this,new RoutedEventArgs());break;
-            case Key.E: Export_Click(this,new RoutedEventArgs());break;
-            default:return false;
-        }
-        return true;
     }
 }
 
 internal static class ShortcutGuide
 {
-    internal static StackPanel Content(string add)
+    internal static StackPanel Content(IReadOnlyDictionary<TrimAction,string> keys)
     {
         var panel=new StackPanel {Margin=new Thickness(22)};
         panel.Children.Add(new TextBlock {Text="Trimmer shortcuts",FontSize=22,Margin=new Thickness(0,0,0,12)});
-        foreach(var (keys,action) in new[]{
-            ("Space / K","Play/pause (Space resets speed; K keeps it)"),("J / L","Slower / faster preview · Shift changes two steps"),("M · Alt+↑ / ↓","Mute preview · volume up / down"),
-            (", / .","Previous / next frame"),("← / →","One frame when timeline is focused"),("Shift+← / → · Ctrl+← / →","Half second · one second (timeline focus)"),("Ctrl+Shift+← / →","Back / forward 10 seconds"),
-            ("I / O", "Set start / end at playhead"),(add,"Add marked section"),("B / S · Delete / Backspace","Split section · remove selected section"),("↑ / ↓ · Page Up / Down","Previous / next section · first / last section"),
-            ("Shift+Home / End","Jump to marked start / end"),("Ctrl+Home / End · G","Video start / end · go to time"),("Ctrl+↑ / ↓ · Z","Zoom in / out · toggle zoom / fit"),("Wheel · Ctrl+wheel","Pan timeline · zoom around pointer"),
-            ("E / C","Export sections / save snapshot"),("Ctrl+O / Ctrl+S","Open video / save trim project"),("Ctrl+Z · Ctrl+Y / Ctrl+Shift+Z","Undo · redo"),("Shift+/ (?)","Show this guide")})
+        foreach (var group in TrimShortcuts.All.GroupBy(s => s.Group))
         {
-            var row=new Grid {Margin=new Thickness(0,5,0,5)};row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(235)});row.ColumnDefinitions.Add(new ColumnDefinition());
-            var keyLabel=new TextBlock {Text=keys,FontSize=12,TextWrapping=TextWrapping.Wrap};keyLabel.SetResourceReference(TextBlock.ForegroundProperty,"Accent");
-            var description=new TextBlock {Text=action,FontSize=12,TextWrapping=TextWrapping.Wrap};Grid.SetColumn(description,1);row.Children.Add(keyLabel);row.Children.Add(description);panel.Children.Add(row);
+            var heading=new TextBlock {Text=group.Key,FontSize=12,Margin=new Thickness(0,12,0,4)}; heading.SetResourceReference(TextBlock.ForegroundProperty,"Muted"); panel.Children.Add(heading);
+            foreach (var shortcut in group)
+            {
+                var row=new Grid {Margin=new Thickness(0,3,0,3)};row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(235)});row.ColumnDefinitions.Add(new ColumnDefinition());
+                var keyLabel=new TextBlock {Text=TrimShortcuts.Display(keys[shortcut.Action]),FontSize=12,TextWrapping=TextWrapping.Wrap};keyLabel.SetResourceReference(TextBlock.ForegroundProperty,"Accent");
+                var description=new TextBlock {Text=shortcut.Label,FontSize=12,TextWrapping=TextWrapping.Wrap};Grid.SetColumn(description,1);row.Children.Add(keyLabel);row.Children.Add(description);panel.Children.Add(row);
+            }
         }
-        panel.Children.Add(new TextBlock {Text="Local to the trimmer. Typing in fields and choosing dropdown options keeps normal keyboard behavior. Preview speed, mute and volume never change recorded or exported audio.",TextWrapping=TextWrapping.Wrap,FontSize=11,Margin=new Thickness(0,14,0,0)});
+        panel.Children.Add(new TextBlock {Text="Mouse wheel pans the timeline; Ctrl+wheel zooms around the pointer. Change any of these in Settings > Hotkeys. Preview speed, mute and volume never change recorded or exported audio.",TextWrapping=TextWrapping.Wrap,FontSize=11,Margin=new Thickness(0,14,0,0)});
         return panel;
     }
-    internal static void Show(Window owner,string add)
+    internal static void Show(Window owner,IReadOnlyDictionary<TrimAction,string> keys)
     {
         var dialog=new Window {Owner=owner,Title="Shortcuts · Flashback",Width=700,Height=Math.Min(740,SystemParameters.WorkArea.Height),MinWidth=620,WindowStartupLocation=WindowStartupLocation.CenterOwner,
-            Content=new ScrollViewer {Content=Content(add),VerticalScrollBarVisibility=ScrollBarVisibility.Auto}};
+            Content=new ScrollViewer {Content=Content(keys),VerticalScrollBarVisibility=ScrollBarVisibility.Auto}};
         WindowTheme.Attach(dialog);dialog.PreviewKeyDown+=(_,e)=>{if(e.Key==Key.Escape){dialog.Close();e.Handled=true;}};dialog.ShowDialog();
     }
-}
-
-public partial class MainWindow
-{
-    private void TrimGuide_Click(object sender,RoutedEventArgs e)=>ShortcutGuide.Show(this,settings.TrimAddHotkey);
 }

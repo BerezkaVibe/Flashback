@@ -30,6 +30,7 @@ public partial class MainWindow
     {
         UpdateAudioButton(SpeakerButton, settings.DesktopAudio, settings.DesktopMuted, "Speaker", "\uE767", "\uE74F");
         UpdateAudioButton(MicrophoneButton, settings.MicrophoneAudio, settings.MicrophoneMuted, "Microphone", "\uE720", "\uF781");
+        UpdateAudioLocks();
     }
     private void UpdateAudioButton(Button button, bool enabled, bool muted, string source, string on, string off)
     {
@@ -45,7 +46,7 @@ public partial class MainWindow
         bool mic = ReferenceEquals(sender, MicrophoneButton);
         if (!(mic ? settings.MicrophoneAudio : settings.DesktopAudio))
         {
-            MainTabs.SelectedIndex = 1; AudioSettings.IsExpanded = true; UpdateLayout();
+            MainTabs.SelectedIndex = 1; AudioSettings.IsSelected = true; UpdateLayout();
             (mic ? MicrophoneCheck : AudioCheck).BringIntoView();
             (mic ? MicrophoneCheck : AudioCheck).Focus();
             Tell("Enable this audio source and apply settings. The top icon then mutes or unmutes it without clearing your buffer.");

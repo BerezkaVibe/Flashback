@@ -50,7 +50,7 @@ public partial class TrimWindow
         if (exportCancellation!=null) return false;
         var project=TrimProject.Read(path); // Validate everything before replacing the current edit.
         if (source.Equals(project.Source,StringComparison.OrdinalIgnoreCase) && confirm && (sections.Count>0 || Timeline.Start>0 || Timeline.End<media.Duration)
-            && MessageBox.Show(this,"Replace the current selection with this project?","Open project",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes) return false;
+            && !ThemedDialog.Confirm(this,"Open project?","This replaces your current trim selection.","Open project")) return false;
         if (!LoadClip(project.Source,confirm)) return false;
         if(!string.Equals(projectPath,path,StringComparison.OrdinalIgnoreCase) && !FlushProject()) return false;
         restoringProject=true;

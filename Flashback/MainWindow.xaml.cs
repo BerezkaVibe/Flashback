@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -65,12 +66,13 @@ public partial class MainWindow : Window
         });
         FpsBox.ItemsSource = new[] { 30, 60, 90, 120 }.Select(f => new Choice(f, f + " FPS")).ToList();
         ResolutionBox.ItemsSource = new[] { new Choice(720, "720p"), new Choice(1080, "1080p"), new Choice(1440, "1440p"), new Choice(2160, "2160p / 4K"), new Choice(0, "Native display resolution") };
-        QualityBox.ItemsSource = new[] { "Compact", "Balanced", "High" };
+        QualityBox.DisplayMemberPath = "Label"; QualityBox.SelectedValuePath = "Value";
+        FpsBox.SelectionChanged += (_, _) => RefreshQualityLabels(); ResolutionBox.SelectionChanged += (_, _) => RefreshQualityLabels();
         EncoderBox.ItemsSource = VideoEncoder.Preferences;
         OverlayCornerBox.ItemsSource = new[] { "Top right", "Top left", "Bottom right", "Bottom left" };
         OverlayDurationBox.ItemsSource = Enumerable.Range(2, 7).Select(s => new Choice(s, s + " seconds")).ToList();
         OverlayDurationBox.DisplayMemberPath = "Label"; OverlayDurationBox.SelectedValuePath = "Value";
-        DisplayBox.ItemsSource = Enumerable.Range(0, Math.Max(Forms.Screen.AllScreens.Length, settings.DisplayIndex + 1)).Select(i => new Choice(i, $"Display {i + 1}")).ToList();
+        DisplayBox.ItemsSource = DisplayChoices();
         foreach (var combo in new[] { FpsBox, ResolutionBox, DisplayBox }) { combo.DisplayMemberPath = "Label"; combo.SelectedValuePath = "Value"; }
         LoadControls();
         UpdateEditorLabel();
@@ -97,9 +99,7 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => { StopShortcutCapture(); try { hotkeys.Resume(); } catch { } };
         Activated += (_, _) =>
         {
-            if (HotkeyBox.IsKeyboardFocusWithin) BeginShortcutCapture(HotkeyBox);
-            else if (PauseHotkeyBox.IsKeyboardFocusWithin) BeginShortcutCapture(PauseHotkeyBox);
-            else if (TrimAddHotkeyBox.IsKeyboardFocusWithin) BeginShortcutCapture(TrimAddHotkeyBox);
+            if (Keyboard.FocusedElement is TextBox box && IsShortcutBox(box)) BeginShortcutCapture(box);
         };
         Microsoft.Win32.SystemEvents.SessionSwitch += SessionSwitch;
         Microsoft.Win32.SystemEvents.PowerModeChanged += PowerChanged;
@@ -113,12 +113,12 @@ public partial class MainWindow : Window
         LoadAudioDevices(settings.AudioDeviceId);
         EncoderBox.SelectedItem = settings.Encoder;
         LoadMicrophones(settings.MicrophoneDeviceId);
-        MicrophoneCheck.IsChecked = settings.MicrophoneAudio;
+        MicrophoneCheck.IsChecked = settings.MicrophoneAudio; LoadAudioOptions();
         LengthSlider.Value = settings.ReplaySeconds; FpsBox.SelectedValue = settings.FrameRate;
-        ResolutionBox.SelectedValue = settings.Height; QualityBox.SelectedItem = settings.Quality; DisplayBox.SelectedValue = settings.DisplayIndex;
+        ResolutionBox.SelectedValue = settings.Height; RefreshQualityLabels(); QualityBox.SelectedValue = settings.Quality; DisplayBox.SelectedValue = settings.DisplayIndex;
         AudioCheck.IsChecked = settings.DesktopAudio; CursorCheck.IsChecked = settings.ShowCursor;
         FolderBox.Text = settings.OutputFolder; GameBox.Text = settings.GameOverride; HotkeyBox.Text = settings.Hotkey;
-        PauseHotkeyBox.Text = settings.PauseHotkey; TrimAddHotkeyBox.Text = settings.TrimAddHotkey;
+        PauseHotkeyBox.Text = settings.PauseHotkey; LoadTrimShortcuts(settings);
         OverlayCheck.IsChecked = settings.OverlayEnabled; FullscreenOverlayCheck.IsChecked = settings.FullscreenNotifications;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
@@ -128,19 +128,23 @@ public partial class MainWindow : Window
         if(ReplayLengthLabel==null) return;
         int seconds=(int)(Math.Round(e.NewValue/5)*5);
         ReplayLengthLabel.Text=seconds<60 ? $"{seconds} sec" : $"{seconds/60} min"+(seconds%60>0 ? $" {seconds%60} sec" : "");
-    }    private Settings ReadControls() => new()
+    }
+    private Settings ReadControls() { var next = ReadBasicControls(); ReadTrimShortcuts(next); return next; }
+    private Settings ReadBasicControls() => new()
     {
         ReplaySeconds = (int)(Math.Round(LengthSlider.Value/5)*5), FrameRate = (int)FpsBox.SelectedValue, Height = (int)ResolutionBox.SelectedValue,
-        Quality = (string)QualityBox.SelectedItem, DisplayIndex = (int)DisplayBox.SelectedValue,
+        Quality = (string)QualityBox.SelectedValue, DisplayIndex = (int)DisplayBox.SelectedValue,
         Encoder = (string)EncoderBox.SelectedItem, Palette=settings.Palette, AccentColor=settings.AccentColor,
         DesktopAudio = AudioCheck.IsChecked == true, ShowCursor = CursorCheck.IsChecked == true,
         AudioDeviceId = AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId,
-        MicrophoneAudio = MicrophoneCheck.IsChecked == true,
+        MicrophoneAudio = MicrophoneCheck.IsChecked == true, AudioBitrate = AudioBitrateBox.SelectedValue as int? ?? settings.AudioBitrate,
+        DesktopVolume = (int)Math.Round(DesktopVolumeSlider.Value), MicrophoneVolume = (int)Math.Round(MicrophoneVolumeSlider.Value),
+        DesktopLocked = settings.DesktopLocked && !string.IsNullOrEmpty(AudioDeviceBox.SelectedValue as string), MicrophoneLocked = settings.MicrophoneLocked && !string.IsNullOrEmpty(MicrophoneDeviceBox.SelectedValue as string),
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
         StartWithWindows = LaunchCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
-        PauseHotkey = PauseHotkeyBox.Text, TrimAddHotkey = TrimAddHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, FullscreenNotifications = FullscreenOverlayCheck.IsChecked == true, ShowSavingOverlay = true,
+        PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, FullscreenNotifications = FullscreenOverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath
     };
@@ -165,7 +169,7 @@ public partial class MainWindow : Window
                 throw;
             }
             bool restart = recorder.IsRecording && next.RequiresBufferRestart(previous);
-            settings = next;
+            settings = next; if (!restart) recorder.SetAudioLive(next);
             overlay.Dispose();
             if (restart) { Tell("Restarting the buffer with your settings…"); await recorder.StartAsync(settings, syntheticCapture); }
             Tell("Settings saved." + (restart ? " The replay buffer is filling again." : "") + (hotkeys.UsesSharedInput ? " Shared shortcut active; the other app may respond too." : ""));
@@ -313,6 +317,7 @@ public partial class MainWindow : Window
     private void Hotkey_GotFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         shortcutBeforeEdit = ((TextBox)sender).Text;
+        if (trimBoxes.TryGetValue((TextBox)sender, out var action)) trimBindingBeforeEdit = trimBindings[action];
         BeginShortcutCapture((TextBox)sender);
         Tell("Press your shortcut now. Escape cancels; Tab moves to the next field.");
     }
@@ -328,14 +333,11 @@ public partial class MainWindow : Window
         if (key == Key.None) return;
         if (key == Key.Tab) return;
         e.Handled = true;
-        if (key == Key.Escape) { ((TextBox)sender).Text = shortcutBeforeEdit; Keyboard.Focus(ApplyButton); return; }
+        if (key == Key.Escape) { CancelShortcut((TextBox)sender); Keyboard.Focus(ApplyButton); return; }
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin) return;
         var mods = Keyboard.Modifiers;
         if (mods.HasFlag(ModifierKeys.Windows)) { Tell("Choose a single key or combine it with Ctrl, Alt or Shift."); return; }
-        string shortcut = (mods.HasFlag(ModifierKeys.Control) ? "Ctrl+" : "") + (mods.HasFlag(ModifierKeys.Alt) ? "Alt+" : "") + (mods.HasFlag(ModifierKeys.Shift) ? "Shift+" : "") + key;
-        ((TextBox)sender).Text = ReferenceEquals(sender,TrimAddHotkeyBox) ? TrimShortcuts.Format(key,mods) : shortcut;
-        Keyboard.Focus(ApplyButton);
-        Tell("Shortcut selected. Click Apply settings to use it.");
+        SetShortcut((TextBox)sender, key, mods, true);
     }
     private void BeginShortcutCapture(TextBox target)
     {
@@ -348,8 +350,7 @@ public partial class MainWindow : Window
                 (key, mods, released) => Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!ReferenceEquals(shortcutCapture, entry) || !target.IsKeyboardFocusWithin || !IsActive) return;
-                target.Text = (mods.HasFlag(ModifierKeys.Control) ? "Ctrl+" : "") + (mods.HasFlag(ModifierKeys.Alt) ? "Alt+" : "") + (mods.HasFlag(ModifierKeys.Shift) ? "Shift+" : "") + key;
-                if (released) { Keyboard.Focus(ApplyButton); Tell("Shortcut selected. Click Apply settings to use it."); }
+                SetShortcut(target, key, mods, released);
             })));
             shortcutCapture = entry;
         }
@@ -363,10 +364,10 @@ public partial class MainWindow : Window
     private void Refresh()
     {
         bool active = recorder.IsRecording;
-        StatusDot.Fill = new SolidColorBrush(active ? Color.FromRgb(156, 226, 193) : Color.FromRgb(154, 160, 168));
+
         StatusTitle.Text = active || recovery.IsRunning ? "Recording" : "Paused";
         SetRecordingAppearance(active || recovery.IsRunning);
-        ToggleButton.Content = active || recovery.IsRunning ? "● Recording" : "Start recording";
+        RecordLabel.Text = active || recovery.IsRunning ? "Recording" : "Start recording";
         SetActionName(ToggleButton, active || recovery.IsRunning ? "Recording — click to pause" : "Start recording");
         ToggleButton.IsEnabled = recovery.IsRunning || !busy && !recorder.IsSaving;
         TopSaveButton.IsEnabled = recordingRequested && (active || recovery.IsRunning);
@@ -422,7 +423,8 @@ public partial class MainWindow : Window
         catch (Exception ex) { Tell(ex.Message, true); }
     }
     private async void Toggle_Click(object sender, RoutedEventArgs e) => await ToggleAsync();
-    private async void Save_Click(object sender, RoutedEventArgs e) => await SaveReplayAsync();
+    private async void Save_Click(object sender, RoutedEventArgs e) { SnapClapper(); await SaveReplayAsync(); }
+    private void SnapClapper() => ClapperTilt.BeginAnimation(RotateTransform.AngleProperty, new System.Windows.Media.Animation.DoubleAnimation(-14, 0, TimeSpan.FromMilliseconds(110)) { AutoReverse = true, BeginTime = TimeSpan.Zero });
     private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenFolder();
     private void Play_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) Process.Start(new ProcessStartInfo(lastClip) { UseShellExecute = true }); } catch (Exception ex) { Tell(ex.Message, true); } }
     private void Reveal_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) { var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true }; start.ArgumentList.Add("/select,"); start.ArgumentList.Add(lastClip); Process.Start(start); } } catch (Exception ex) { Tell(ex.Message, true); } }
@@ -454,6 +456,28 @@ public partial class MainWindow : Window
         Application.Current.Shutdown();
     }
     private record Choice(int Value, string Label);
+    private record QualityChoice(string Value, string Label);
+    // Bitrate depends on resolution and FPS, so the labels follow those choices.
+    private void RefreshQualityLabels()
+    {
+        if (QualityBox == null) return;
+        int height = ResolutionBox.SelectedValue as int? ?? settings.Height, fps = FpsBox.SelectedValue as int? ?? settings.FrameRate;
+        var selected = QualityBox.SelectedValue as string ?? settings.Quality;
+        QualityBox.ItemsSource = new[] { "Compact", "Balanced", "High" }
+            .Select(q => new QualityChoice(q, $"{q} · {new Settings { Quality = q, Height = height, FrameRate = fps }.BitrateMbps} Mbps")).ToList();
+        QualityBox.SelectedValue = selected;
+    }
+    private List<Choice> DisplayChoices()
+    {
+        var screens = Forms.Screen.AllScreens; var names = MonitorNames.Read();
+        return Enumerable.Range(0, Math.Max(screens.Length, settings.DisplayIndex + 1)).Select(i =>
+        {
+            if (i >= screens.Length) return new Choice(i, $"Display {i + 1} · not connected");
+            var screen = screens[i];
+            string name = names.TryGetValue(screen.DeviceName, out var n) ? n + " · " : "";
+            return new Choice(i, $"Display {i + 1} · {name}{screen.Bounds.Width} × {screen.Bounds.Height}{(screen.Primary ? " · main" : "")}");
+        }).ToList();
+    }
 }
 
 

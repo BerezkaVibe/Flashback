@@ -149,7 +149,7 @@ public partial class App : Application
             settingsImage.Render(canvas);
             var settingsPng = new PngBitmapEncoder(); settingsPng.Frames.Add(BitmapFrame.Create(settingsImage));
             using (var file = File.Create(Path.Combine(Storage.Root, "ui-settings.png"))) settingsPng.Save(file);
-            preview.AudioSettings.IsExpanded = true; canvas.UpdateLayout(); preview.AudioDeviceBox.BringIntoView(); await Task.Delay(150); canvas.UpdateLayout();
+            preview.AudioSettings.IsSelected = true; canvas.UpdateLayout(); preview.AudioDeviceBox.BringIntoView(); await Task.Delay(150); canvas.UpdateLayout();
             var audioSettingsImage = new RenderTargetBitmap(880, 780, 96, 96, PixelFormats.Pbgra32); audioSettingsImage.Render(canvas);
             var audioSettingsPng = new PngBitmapEncoder(); audioSettingsPng.Frames.Add(BitmapFrame.Create(audioSettingsImage));
             using (var file = File.Create(Path.Combine(Storage.Root, "ui-audio-settings.png"))) audioSettingsPng.Save(file);

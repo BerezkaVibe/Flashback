@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace Flashback;
 
@@ -35,9 +36,10 @@ public partial class MainWindow
 {
     internal void SetRecordingAppearance(bool recording)
     {
-        ToggleButton.SetResourceReference(Control.BackgroundProperty,recording ? "RecordingRed" : "Accent");
-        ToggleButton.SetResourceReference(Control.BorderBrushProperty,recording ? "RecordingRed" : "Accent");
-        ToggleButton.SetResourceReference(Control.ForegroundProperty,recording ? "Ink" : "OnAccent");
+        // A small light: grey while paused, red with a red outline while recording.
+        RecordDot.SetResourceReference(Shape.FillProperty,recording ? "RecordingLight" : "IdleLight");
+        ToggleButton.SetResourceReference(Control.BorderBrushProperty,recording ? "RecordingLight" : "Outline");
+        StatusDot.SetResourceReference(Shape.FillProperty,recording ? "RecordingLight" : "IdleLight");
     }
     private bool appearanceReady;
     private void LoadAppearance()

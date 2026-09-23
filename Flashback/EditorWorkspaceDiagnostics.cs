@@ -86,10 +86,10 @@ internal static class EditorWorkspaceDiagnostics
         var main=new MainWindow(true);
         try
         {
-            main.MainTabs.SelectedIndex=1; main.FeedbackCard.IsExpanded=false;
+            main.MainTabs.SelectedIndex=1;
             main.PaletteBox.SelectedItem="Midnight"; main.AccentBox.SelectedItem="Blue";
             Check(Storage.Load(out _).Palette=="Midnight" && Storage.Load(out _).AccentColor=="Blue","Appearance selection persists immediately");
-            ((Expander)main.PaletteBox.Parent.GetParent<Expander>()!).IsExpanded=true;
+            main.AppearanceSettings.IsSelected=true;
             EditorDiagnostics.Render((FrameworkElement)main.Content,1000,860,"appearance-settings.png");
         }
         finally { await main.QuitAsync(); }

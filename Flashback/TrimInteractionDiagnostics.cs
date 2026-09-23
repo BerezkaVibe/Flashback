@@ -98,7 +98,7 @@ internal static class TrimInteractionDiagnostics
             trim.Timeline.Fit();
             Check(trim.TimelineZoomLabel.Text.Contains("Full clip") && !trim.TimelineFitButton.IsEnabled,"Fit restores the full-clip indicator");
             Check(trim.SeekTimecode("00:00:08.500") && trim.Playhead==8.5 && !trim.SeekTimecode("99") && !trim.SeekTimecode("garbage"),"Go-to-time validates input and preserves the current position on invalid input");
-            EditorDiagnostics.Render(ShortcutGuide.Content("+"),680,720,"shortcut-guide.png");
+            EditorDiagnostics.Render(ShortcutGuide.Content(TrimShortcuts.Resolve(new Settings())),680,720,"shortcut-guide.png");
         }
         finally { trim.Close(); }
         var settings=Storage.Load(out _); settings.TrimAddHotkey="Ctrl+K"; Storage.Save(settings);
@@ -107,7 +107,7 @@ internal static class TrimInteractionDiagnostics
         try { custom.StartBox.Text="1"; custom.EndBox.Text="2"; custom.HandleKey(Key.K,ModifierKeys.Control,true); Check(custom.SectionsList.Items.Count==1,"Custom section shortcut is used by the trimmer"); }
         finally { custom.Close(); }
         Check(TrimShortcuts.Format(Key.OemPlus,ModifierKeys.Shift)=="+" && TrimShortcuts.Format(Key.Add,ModifierKeys.None)=="+","Both plus keys normalize to the visible default binding");
-        bool rejected=false; try { TrimShortcuts.Validate("I"); } catch(ArgumentException) { rejected=true; }
+        bool rejected=false; try { new Settings { TrimAddHotkey="I" }.Validate(); } catch(ArgumentException) { rejected=true; }
         Check(rejected,"Custom section shortcut cannot shadow built-in trim marks");
         var empty=new TrimWindow(renderOnly:true);
         try

@@ -54,6 +54,14 @@ internal sealed class AudioClockNormalizer(int sampleRate,int blockAlign,string 
         FramesWritten+=frames;
         return new(silence,bytes);
     }
+    // Silence that brings the stream up to "now", used while a held device is missing.
+    internal byte[] FillTo(double origin,double now)
+    {
+        long delta=(long)Math.Round((now-origin)*sampleRate)-FramesWritten;
+        if(delta<=0) return Array.Empty<byte>();
+        FramesWritten+=delta;GapFrames+=delta;aligned=true;filteredError=0;
+        return new byte[checked((int)delta*blockAlign)];
+    }
     private byte[] Resample(byte[] input,int count,int outputCount)
     {
         int sampleBytes=format=="s16le" ? 2 : format=="s24le" ? 3 : 4,channels=blockAlign/sampleBytes;
