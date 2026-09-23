@@ -2,54 +2,19 @@
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
-**[Download the latest Flashback Setup.exe](https://github.com/BerezkaVibe/Flashback/releases/latest)** — one installer with the app, .NET runtime and FFmpeg included.
+**[Download the latest Flashback Setup.exe](https://github.com/BerezkaVibe/Flashback/releases/latest)**: one installer with the app, .NET runtime and FFmpeg. No admin rights needed. The build is unsigned.
 
-## 0.5.4 trimmer playback sync and smaller package
+## Recent changes
 
-- Trimmer preview audio no longer drifts away from the video. Playback now seeks while paused and then starts, instead of seeking a clip that is already playing. Frame scrubbing is used only while paused. Changing preview speed during playback restarts from the playhead so audio and video line up again. Saved and exported clips were never affected.
-- The package drops 13 unused .NET language folders and the debug symbols file, and turns off the unused BinaryFormatter serializer.
-
-## 0.5.3 installer lock fix
-
-Setup retries temporary file-sharing locks. A locked temporary uninstaller no longer turns a completed installation into a failure. If Windows holds an installed file longer, setup reports a retryable error and restores files it changed. Cleanup errors are logged separately; diagnostic details are written beside the installation folder as `Flashback-setup.log`. Saved clips and preferences are unchanged. Close an old setup window before running the new installer.
-
-## 0.5.2 installation and timeline zoom
-
-Download and run `Flashback-0.5.4-Setup.exe`. Quit any running Flashback using its tray menu first. Choose Install, then Launch. The installer includes the app, .NET runtime and FFmpeg; it needs no additional download or administrator access. Start menu and optional desktop shortcuts point to `%LOCALAPPDATA%\Programs\Flashback\Flashback.exe`. Windows Settings > Apps includes an uninstall entry. Uninstall removes installed application files while preserving saved clips and preferences. A future setup can update the same installation. This build is unsigned.
-
-The trimmer now explicitly labels timeline zoom (for example, `Timeline · 4× zoom`). The small full-clip overview highlights the portion currently visible. Drag the highlighted window or click elsewhere in the overview to pan, without changing cut points. The adjacent minus/plus buttons change zoom; Fit restores the entire clip. Keyboard and wheel zoom keep the indicator and overview synchronized. These controls affect only the timeline, not video magnification or exported resolution.
-
-Build setup with `./build-installer.ps1` after publishing the app. It uses the Windows .NET Framework compiler to embed a verified ZIP payload in one setup EXE; no additional installer compiler is needed.
-
-## 0.5.1 recording reliability and controls
-
-- Audio packets now retain their timing against the video clock throughout recording. Small device-clock differences are corrected gradually; missing spans retain their duration as silence. Speaker and microphone clocks are handled independently.
-- Audio queues are bounded to two seconds. A video encoder that remains over 1.5 seconds behind for three consecutive seconds after startup is automatically reconnected. Completed replay segments are retained. A full encoder reconnection can omit unfinished footage and has a brief gap; normal display reconnects still keep audio running with black video.
-- This targets accumulating delay that clears when recording restarts. It does not guarantee smooth capture when the GPU is saturated. No additional permanent process or CPU video encoder was added.
-- Recording turns the button red. Clip selection, dropdowns and hover states follow the selected palette. Settings headers, switches and sliders have larger hit areas.
-- Replay length is a slider from 30 to 300 seconds in five-second steps. Apply settings to use the new duration.
-- Open Settings > Shortcuts > Trimmer shortcut guide, or press ? in the trimmer. New local controls include comma/period for frames, J/L for preview speed, K for play/pause, M for preview mute, Alt+arrows for volume, Up/Down for sections, Ctrl+Up/Down for zoom, G for timecode, B for split, C for snapshot, and E for export. Preview audio changes never alter the recording or export.
-
-## What's changed
-
-- Smoothness under load: a bounded timestamped frame history absorbs brief encoder stalls while keeping each picture at its original video time. Hardware encoding, resolution and frame rate remain unchanged.
-- Smoother capture scheduling: three reusable NV12 readback textures let GPU copies finish asynchronously. The capture thread waits briefly for fresh desktop updates and releases desktop ownership immediately before acquiring the next frame. Recording uses normal process priority; trim exports remain below normal. This trades about 6 MiB of additional 1080p staging storage (plus driver overhead) for fewer GPU stalls, without another background process.
-
-- One uniform app background. GPU capture avoids full-desktop CPU scaling, audio packets avoid a redundant copy, and encoder input queues are smaller. Reduced recording overhead has been measured locally; Siege game FPS recovery still needs confirmation.
-
-- Dark interface with the existing app icon, a Clips home screen, and a corner gear for settings. Recording controls stay available on every page. Hover an icon to see its action.
-- Display, encoder, headphones, microphone, storage, startup and notification options are grouped in Settings. Clip actions include play, scissors for trim/combine, reveal, external editor and delete.
-- Minimize keeps Flashback in the taskbar; X hides it in the tray. Quit is available in the tray menu.
-- Occupied shortcuts automatically use shared background input. F8 can save while another app owns the same shortcut and Flashback is unfocused. Both apps may respond. The listener is event-driven, keeps only current key-down state, and stores no typing history.
-- Speaker and microphone icons mute/unmute new recording audio without restarting the buffer. Their state is remembered. If a source is disabled, its icon opens Audio devices for setup. Previously buffered audio is unchanged.
-- Display capture now runs independently from the persistent hardware encoder and audio inputs. A display interruption sends black frames while audio continues. Capture retries indefinitely with a delay capped at two seconds; there is no reconnect-count cutoff. Counters and retry progress stay out of the Capture page.
-- Saving stays available during display reconnects and while another save finishes. Requests queue with their own press times. A successful save resets the replay range to that press; newer footage remains available for the next clip. Failed saves do not reset it. Very short clips show fractional seconds in their filenames.
-- The header contains recording status, the save hotkey and recording controls. The body shows saved clips with Windows Explorer thumbnails. Duration and device options remain in Settings.
-- AMD startup now tests Direct3D11 conversion, then AMF conversion, then a compatibility conversion path. Each route still uses the AMD hardware H.264 encoder. The compatibility route uses CPU color conversion/resizing and is announced when recording starts; it may cost more FPS. This addresses the RX 7600 report where `vpp_amf` rejected converter initialization before the encoder could be checked. Physical RX 7600 confirmation remains pending.
+- **0.5.4**: Trimmer preview audio no longer drifts from the video. Smaller download.
+- **0.5.3**: Setup recovers from file-lock errors during install.
+- **0.5.2**: Single-EXE installer; timeline zoom indicator and overview.
+- **0.5.1**: Steadier audio timing, automatic encoder reconnect, new trimmer shortcuts.
+- **0.5.0**: Trim projects, share presets with size limits, snapshots, color themes.
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.5.4-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.5.4-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.
@@ -97,25 +62,3 @@ Build with `build.ps1 -FfmpegPath D:\ffmpeg\ffmpeg.exe` using .NET 8 for Windows
 Diagnostics accept `--data-dir <separate test folder>`: `--continuity-test`, `--continuity-hardware-test`, `--ui-test`, `--encoder-test`, `--startup-ui-test`, `--self-test`, `--edit-test`, `--audio-test`, `--playback-test`, and `--shortcut-logic-test` and `--shared-hotkey-test`. `--capture-test` and `--system-test` need an unlocked interactive desktop; the latter exercises keyboard/mouse input and audio. Audio diagnostics can emit a quiet test tone. Inspect the generated result files and any `test-failure.txt`; some older window-based diagnostics shut down before a failure exit code is delivered.
 
 See VALIDATION.md for tested paths and limitations, and THIRD-PARTY-NOTICES.md for dependency licenses. AMD error 10 is AMF_NOT_SUPPORTED in [AMD's result definitions](https://github.com/GPUOpen-LibrariesAndSDKs/AMF/blob/master/amf/public/include/core/Result.h); the alternate GPU conversion uses [FFmpeg's Direct3D11 scaler](https://ffmpeg.org/doxygen/trunk/vf__scale__d3d11_8c_source.html).
-
-
-
-
-
-## 0.5.0 editor workspace
-
-Rough cut is the default: it copies compressed streams quickly and its edges may extend to nearby keyframes. Choose Precise cut for exact selections. Precise export now seeks each retained section before decoding, avoiding discarded lead-in and gaps. All export paths preserve the original and refuse to overwrite existing videos.
-
-- File / Edit / View menus expose open/recent videos, projects, snapshots, section actions, undo/redo and zoom. Ctrl+O opens a video; Ctrl+S saves a project.
-- Save a `.flashtrim` project to resume the source, trim range, sections, playhead and cut mode. Named projects autosave after edits and flush on close. The source file must remain at its recorded location with unchanged size and modification time. Share presets and file-size limits are session controls, not part of the project.
-- Ctrl+mouse wheel zooms around the pointer; the wheel pans. View offers zoom around the playhead and Fit timeline. Arrow / Shift+arrow / Ctrl+arrow step a frame / half second / second while the timeline is focused.
-- Standard export preserves the selected cut mode. Share 1080p/60 and Compact 720p/30 produce H.264/AAC MP4, never upscale the source height or frame rate, and re-encode only kept sections. Set Limit MB to your upload limit, or 0 for no limit. MB means 1,000,000 bytes; no Discord subscription limit is assumed. A video bitrate budget is shown beside export. Completed size is verified, with at most one lower-bitrate retry; an oversize result is not reported as successful. A long selection in a small file necessarily loses detail.
-- Video re-encoding waits for recording to pause by default. Uncheck the wait option to start anyway. One editor export runs at a time; Cancel also cancels a queued job. Capture and replay saves remain independent. Starting recording during an already running export does not suspend that export.
-- File > Save snapshot exports a full-resolution PNG or JPG from the current playhead. Snapshot generation runs only on request. Existing MP4/M4V/MOV import support remains; this release does not add arbitrary-format imports or GIF/WebP output.
-- Settings > Appearance offers Charcoal (nearly black), Midnight and Slate, plus Mint, Blue, Lavender, Rose or Amber accents. Changes apply and save immediately, without restarting capture. Start/end handles keep distinct semantic colors.
-
-The reference archives are research material only and are not bundled or executed by Flashback. No Electron runtime or reference-project code was added.
-
-
-
-
