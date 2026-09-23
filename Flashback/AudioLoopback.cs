@@ -12,7 +12,7 @@ using NAudio.Wave;
 
 namespace Flashback;
 
-public sealed class AudioLoopback : IAsyncDisposable
+public sealed class AudioLoopback : IRecordingAudio
 {
     private readonly MMDeviceEnumerator enumerator = new();
     private readonly string deviceId;
@@ -47,7 +47,7 @@ public sealed class AudioLoopback : IAsyncDisposable
     private AudioClockNormalizer? clockNormalizer;
     private long queuedBytes;
     internal const string BacklogMessage="Audio input backlog requires reconnection.";
-    internal string SyncReport => clockNormalizer==null ? "Clock pending" : $"Clock error {clockNormalizer.ErrorMilliseconds:0.000} ms; corrected {clockNormalizer.CorrectedFrames} frames; gaps {clockNormalizer.GapFrames}; queued {Interlocked.Read(ref queuedBytes)} bytes{(Holding ? "; holding for device" : "")}";
+    public string SyncReport => clockNormalizer==null ? "Clock pending" : $"Clock error {clockNormalizer.ErrorMilliseconds:0.000} ms; corrected {clockNormalizer.CorrectedFrames} frames; gaps {clockNormalizer.GapFrames}; queued {Interlocked.Read(ref queuedBytes)} bytes{(Holding ? "; holding for device" : "")}";
     private readonly AudioDeviceWatch? deviceWatch;
     public string DeviceName { get; } = "";
     public string DeviceId => deviceId;

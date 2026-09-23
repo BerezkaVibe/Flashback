@@ -131,7 +131,7 @@ public partial class MainWindow : Window
         int seconds=(int)(Math.Round(e.NewValue/5)*5);
         ReplayLengthLabel.Text=seconds<60 ? $"{seconds} sec" : $"{seconds/60} min"+(seconds%60>0 ? $" {seconds%60} sec" : "");
     }
-    private Settings ReadControls() { var next = ReadBasicControls(); ReadTrimShortcuts(next); return next; }
+    private Settings ReadControls() { var next = ReadBasicControls(); ReadTrimShortcuts(next); next.AppVolumes = ReadAppMix(); return next; }
     private Settings ReadBasicControls() => new()
     {
         ReplaySeconds = (int)(Math.Round(LengthSlider.Value/5)*5), FrameRate = (int)FpsBox.SelectedValue, Height = (int)ResolutionBox.SelectedValue,
@@ -271,6 +271,7 @@ public partial class MainWindow : Window
     {
         LoadAudioDevices(AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId);
         LoadMicrophones(MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId);
+        var levels = ReadAppMix(); var saved = settings.AppVolumes; settings.AppVolumes = levels; LoadAppMix(); settings.AppVolumes = saved;
     }
     private async Task SaveReplayAsync()
     {

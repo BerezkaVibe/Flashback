@@ -16,7 +16,34 @@ public partial class MainWindow
         AudioBitrateBox.ItemsSource = Settings.AudioBitrates.Select(b => new BitrateChoice(b, $"{b} kbps{(b == 160 ? " · default" : b >= 256 ? " · high" : "")}")).ToList();
         AudioBitrateBox.SelectedValue = settings.AudioBitrate;
         DesktopVolumeSlider.Value = settings.DesktopVolume; MicrophoneVolumeSlider.Value = settings.MicrophoneVolume;
+        LoadAppMix();
     }
+    private readonly System.Collections.Generic.Dictionary<string, Slider> appMixSliders = new(StringComparer.OrdinalIgnoreCase);
+    // One row per app playing sound now, plus any app given a level before.
+    private void LoadAppMix()
+    {
+        AppMixRows.Children.Clear(); appMixSliders.Clear();
+        if (!AppMixSource.Supported) { AppMixNote.Text = "Per-app levels need Windows 11 or a recent Windows 10 build."; return; }
+        var apps = AppMixSource.ActiveApps(AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId)
+            .Concat(settings.AppVolumes.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(a => a, StringComparer.OrdinalIgnoreCase);
+        foreach (var app in apps)
+        {
+            int level = settings.AppVolumes.TryGetValue(app.ToLowerInvariant(), out var saved) ? saved : 100;
+            var label = new TextBlock { Width = 38, TextAlignment = TextAlignment.Right, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Text = level + "%" };
+            label.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+            var slider = new Slider { Minimum = 0, Maximum = 200, TickFrequency = 5, IsSnapToTickEnabled = true, SmallChange = 5, LargeChange = 25, IsMoveToPointEnabled = true, Height = 30, Value = level };
+            AutomationProperties.SetName(slider, app + " recording level");
+            slider.ValueChanged += (_, _) => label.Text = $"{slider.Value:0}%";
+            var name = new TextBlock { Text = char.ToUpperInvariant(app[0]) + app[1..], Width = 110, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = app };
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+            DockPanel.SetDock(label, Dock.Right); DockPanel.SetDock(name, Dock.Left);
+            row.Children.Add(label); row.Children.Add(name); row.Children.Add(slider);
+            AppMixRows.Children.Add(row); appMixSliders[app] = slider;
+        }
+    }
+    // Only apps moved away from 100% are saved.
+    private System.Collections.Generic.Dictionary<string, int> ReadAppMix() =>
+        appMixSliders.Where(p => (int)Math.Round(p.Value.Value) != 100).ToDictionary(p => p.Key.ToLowerInvariant(), p => (int)Math.Round(p.Value.Value));
     private void Volume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (DesktopVolumeLabel == null || MicrophoneVolumeLabel == null) return;

@@ -27,11 +27,14 @@ internal sealed class TimestampedAudioCapture : IDisposable
     internal event EventHandler<AudioPacketEventArgs>? DataAvailable;
     internal event EventHandler<StoppedEventArgs>? RecordingStopped;
     internal TimestampedAudioCapture(MMDevice device, bool microphone, WaveFormat format)
+        : this(device.AudioClient, AudioClientStreamFlags.EventCallback | (microphone ? 0 : AudioClientStreamFlags.Loopback), format) { }
+    // Also used for per-app (process loopback) clients, which need their own stream flags.
+    internal TimestampedAudioCapture(AudioClient audioClient, AudioClientStreamFlags flags, WaveFormat format)
     {
-        client = device.AudioClient; blockAlign = format.BlockAlign;
+        client = audioClient; blockAlign = format.BlockAlign;
         try
         {
-            client.Initialize(AudioClientShareMode.Shared, AudioClientStreamFlags.EventCallback | (microphone ? 0 : AudioClientStreamFlags.Loopback), 1000000, 0, format, Guid.Empty);
+            client.Initialize(AudioClientShareMode.Shared, flags, 1000000, 0, format, Guid.Empty);
             client.SetEventHandle(ready.SafeWaitHandle.DangerousGetHandle());
             packets = client.AudioCaptureClient;
         }

@@ -29,6 +29,9 @@ public sealed class Settings
     public int DesktopVolume { get; set; } = 100;
     public int MicrophoneVolume { get; set; } = 100;
     public int AudioBitrate { get; set; } = 160;
+    // Per-app recording levels in percent, keyed by lowercase process name.
+    public Dictionary<string, int> AppVolumes { get; set; } = new();
+    [System.Text.Json.Serialization.JsonIgnore] public bool MixerActive => AppVolumes.Any(p => p.Value != 100);
     public bool CheckForUpdates { get; set; } = true;
     public bool SeparateAudioTracks { get; set; }
     public bool AutoStartWithGames { get; set; }
@@ -66,13 +69,14 @@ public sealed class Settings
         if (!new[] { "Top right", "Top left", "Bottom right", "Bottom left" }.Contains(OverlayCorner)) throw new ArgumentException("Choose an overlay corner.");
         if (DesktopVolume < 0 || DesktopVolume > 200 || MicrophoneVolume < 0 || MicrophoneVolume > 200) throw new ArgumentException("Choose a recording volume from 0% to 200%.");
         if (!AudioBitrates.Contains(AudioBitrate)) throw new ArgumentException("Choose a supported audio quality.");
+        if (AppVolumes.Values.Any(v => v < 0 || v > 200)) throw new ArgumentException("Choose app recording levels from 0% to 200%.");
         if (OverlaySeconds < 2 || OverlaySeconds > 8) throw new ArgumentException("Choose an overlay duration from 2 to 8 seconds.");
     }
     public bool RequiresBufferRestart(Settings other) => ReplaySeconds != other.ReplaySeconds || FrameRate != other.FrameRate
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
         || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
-        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks;
+        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || MixerActive != other.MixerActive;
     public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
     public int BitrateMbps => (int)Math.Round((Quality switch { "Compact" => 8, "High" => 24, _ => 14 }) * (Height switch { 720 => 0.6, 1440 => 1.7, 2160 => 3.0, 0 => 2.0, _ => 1.0 }) * Math.Max(0.65, FrameRate / 60.0));
     public double EstimatedBufferMb => BitrateMbps * (ReplaySeconds + 12) / 8.0 * 1.1;

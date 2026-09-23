@@ -69,6 +69,12 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--mixer-test"))
+        {
+            try { await MixerDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--playback-test"))
         {
             try { await PlaybackDiagnostics.RunAsync(); Shutdown(0); }

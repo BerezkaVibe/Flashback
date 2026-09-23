@@ -64,10 +64,8 @@
    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
     <Button x:Name="ExportOptionsButton" Style="{StaticResource TrimButton}" Click="ExportOptions_Click" Background="Transparent" BorderBrush="Transparent" FontSize="12" Margin="0,0,6,0" ToolTip="Format, cut, size and audio options"><StackPanel Orientation="Horizontal"><TextBlock Text="Options" VerticalAlignment="Center"/><TextBlock x:Name="ExportOptionsChevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="7,1,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/></StackPanel></Button>
     <Button Style="{StaticResource TrimButton}" x:Name="CancelExportButton" Content="Cancel" Click="CancelExport_Click" Visibility="Collapsed" Margin="0,0,8,0"/>
+    <Button x:Name="DiscordButton" Style="{StaticResource TrimButton}" Content="Compress for Discord" Tag="50" Click="DiscordExport_Click" Visibility="Collapsed" Margin="0,0,8,0" FontSize="12" ToolTip="Makes a copy under 50 MB next to the original and copies it, ready to paste into Discord"/>
     <Button x:Name="ExportButton" Content="Export clip…" MinHeight="36" Padding="16,6" FontSize="13" Style="{StaticResource PrimaryButton}" Click="Export_Click"/>
-    <Button x:Name="ExportMoreButton" MinHeight="36" Width="30" Padding="0" Margin="2,0,0,0" Style="{StaticResource PrimaryButton}" Click="ExportMore_Click" ToolTip="More export choices" AutomationProperties.Name="More export choices"><TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
-     <Button.ContextMenu><ContextMenu Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}"><MenuItem Header="Export for Discord" Click="DiscordExport_Click" ToolTip="Makes an MP4 under 10 MB next to the original and copies it so you can paste it straight into Discord"/></ContextMenu></Button.ContextMenu>
-    </Button>
    </StackPanel>
    <StackPanel x:Name="ExportOptionsPanel" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" Margin="0,10,0,0">
     <WrapPanel>

@@ -13,8 +13,16 @@ namespace Flashback;
 public partial class TrimWindow
 {
     private CancellationTokenSource? waveformLoad;
-    // Discord's upload limit for accounts without Nitro.
-    private const double DiscordLimitMb = 10;
+    // Compress for Discord targets Nitro Basic's 50 MB upload limit.
+    private const double DiscordLimitMb = 50;
+    // Shown only when the export would not already fit, estimated from the clip's bitrate.
+    private void UpdateDiscordButton()
+    {
+        if (DiscordButton == null) return;
+        double selected = sections.Count > 0 ? sections.Sum(s => s.Duration) : Math.Max(0, Timeline.End - Timeline.Start);
+        double estimate = media.Duration > 0 ? sourceBytes * selected / media.Duration : 0;
+        DiscordButton.Visibility = source.Length > 0 && estimate > DiscordLimitMb * 1_000_000 ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private void UpdateAddButton()
     {
@@ -105,23 +113,22 @@ public partial class TrimWindow
     }
     private void ResetCrop() { CropArea.Crop = null; CropArea.Aspect = 0; CropArea.Editing = false; CropArea.Visibility = CropBar.Visibility = Visibility.Collapsed; CropButton.SetResourceReference(Control.ForegroundProperty, "Ink"); }
 
-    private void ExportMore_Click(object sender, RoutedEventArgs e)
-    {
-        var menu = ExportMoreButton.ContextMenu;
-        menu.PlacementTarget = ExportMoreButton; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top; menu.IsOpen = true;
-    }
-    // One click: an MP4 under Discord's limit next to the original, then copied for pasting.
+    // One click: an MP4 under 50 MB next to the original, then copied for pasting.
     private async void DiscordExport_Click(object sender, RoutedEventArgs e)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         KeepSection[] ranges;
         try { ranges = ExportRanges(); } catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
+        double limit = ((FrameworkElement)sender).Tag is string tag && double.TryParse(tag, NumberStyles.Float, CultureInfo.InvariantCulture, out var mb) ? mb : DiscordLimitMb;
         double seconds = ranges.Sum(r => r.Duration);
-        double budget = DiscordLimitMb * 1_000_000 * .92 * 8 / seconds - 128000;
-        if (budget < 400_000) { StatusLabel.Text = $"That's too long to fit under {DiscordLimitMb:0} MB. Keep it under about {DiscordLimitMb * 1_000_000 * .92 * 8 / 528000:0} seconds."; return; }
-        var format = budget >= 4_500_000 ? ExportFormat.Mp4Hd60 : ExportFormat.Mp4Sd30;
+        double budget = limit * 1_000_000 * .92 * 8 / seconds - 128000;
+        if (budget < 400_000) { StatusLabel.Text = $"That's too long to fit under {limit:0} MB. Keep it under about {limit * 1_000_000 * .92 * 8 / 528000:0} seconds."; return; }
+        // Plenty of room keeps the recording's own resolution and frame rate; tighter budgets step down.
+        var format = budget >= 12_000_000 ? ExportFormat.Mp4 : budget >= 4_500_000 ? ExportFormat.Mp4Hd60 : ExportFormat.Mp4Sd30;
+        // Never spend more than ~24 Mbps: beyond that a bigger file looks no better than the recording.
+        double target = Math.Min(limit, Math.Ceiling(seconds * (24_000_000 + 128000) / 8 / 1_000_000 / .92));
         ShareExportOptions options;
-        try { options = ShareExportOptions.For(format, DiscordLimitMb) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100 }; options.Validate(); }
+        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100 }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
         string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + " — discord";
         string destination = Path.Combine(folder, name + ".mp4");
@@ -164,5 +171,5 @@ public partial class TrimWindow
         }
     }
     private void SetEditingEnabled(bool enabled) =>
-        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = ExportMoreButton.IsEnabled = enabled;
+        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = DiscordButton.IsEnabled = enabled;
 }

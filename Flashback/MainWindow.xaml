@@ -37,8 +37,11 @@
        <StackPanel><CheckBox x:Name="AudioCheck" Content="Record speaker output"/>
         <TextBlock Text="Headphones / speakers" Style="{StaticResource Caption}" Margin="0,8,0,7"/>
         <ComboBox x:Name="AudioDeviceBox" DisplayMemberPath="Name" SelectedValuePath="Id" ToolTip="Choose the output used by your game and Discord"/>
-        <DockPanel Margin="0,14,0,0"><TextBlock x:Name="DesktopVolumeLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Recording volume" Style="{StaticResource Caption}"/></DockPanel>
-        <Slider x:Name="DesktopVolumeSlider" Minimum="0" Maximum="200" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="25" IsMoveToPointEnabled="True" ValueChanged="Volume_Changed" AutomationProperties.Name="Speaker recording volume" Height="36"/>
+        <TextBlock Text="Recording mixer" Style="{StaticResource Caption}" Margin="0,14,0,4"/>
+        <DockPanel Margin="0,0,0,2"><TextBlock x:Name="DesktopVolumeLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12" Width="38" TextAlignment="Right" VerticalAlignment="Center"/><TextBlock Text="All desktop audio" DockPanel.Dock="Left" Width="110" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+         <Slider x:Name="DesktopVolumeSlider" Minimum="0" Maximum="200" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="25" IsMoveToPointEnabled="True" ValueChanged="Volume_Changed" AutomationProperties.Name="All desktop audio recording level" Height="30"/></DockPanel>
+        <StackPanel x:Name="AppMixRows"/>
+        <TextBlock x:Name="AppMixNote" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" Text="Levels only change your recordings. Apps playing sound appear here; any app not at 100% is recorded on its own, and Windows system sounds are then left out."/>
        </StackPanel>
        <StackPanel Grid.Column="2"><CheckBox x:Name="MicrophoneCheck" Content="Record microphone"/>
         <TextBlock Text="Microphone input" Style="{StaticResource Caption}" Margin="0,8,0,7"/>

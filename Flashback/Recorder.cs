@@ -19,7 +19,7 @@ public sealed class Recorder : IAsyncDisposable
     private readonly Queue<string> log = new();
     private readonly object logLock = new();
     private Process? process;
-    private AudioLoopback? audio;
+    private IRecordingAudio? audio;
     private AudioLoopback? microphone;
     private VideoFrameBridge? video;
     internal bool UseBridgeForTests { get; set; }
@@ -72,7 +72,8 @@ public sealed class Recorder : IAsyncDisposable
     public void SetAudioLive(Settings next)
     {
         settings.DesktopLocked = next.DesktopLocked; settings.MicrophoneLocked = next.MicrophoneLocked;
-        settings.DesktopVolume = next.DesktopVolume; settings.MicrophoneVolume = next.MicrophoneVolume;
+        settings.DesktopVolume = next.DesktopVolume; settings.MicrophoneVolume = next.MicrophoneVolume; settings.AppVolumes = new(next.AppVolumes);
+        if (audio is AppMixSource mixer) mixer.SetLevels(next.AppVolumes);
         if (audio != null) { audio.Hold = next.DesktopLocked; audio.Gain = next.DesktopVolume / 100.0; }
         if (microphone != null) { microphone.Hold = next.MicrophoneLocked; microphone.Gain = next.MicrophoneVolume / 100.0; }
     }
@@ -151,7 +152,10 @@ public sealed class Recorder : IAsyncDisposable
             stage = "initializing desktop audio";
             if (settings.DesktopAudio && !synthetic)
             {
-                audio = new AudioLoopback(settings.AudioDeviceId, hold: settings.DesktopLocked) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 };
+                // Per-app streams only when an app has a custom level; the whole device otherwise.
+                audio = settings.MixerActive && AppMixSource.Supported
+                    ? new AppMixSource(settings.AudioDeviceId, settings.AppVolumes) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 }
+                    : new AudioLoopback(settings.AudioDeviceId, hold: settings.DesktopLocked) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 };
                 LastStartupReport += $"Audio source: {audio.DeviceName}; {(string.IsNullOrEmpty(settings.AudioDeviceId) ? "follow Windows default" : "fixed playback device")}\n";
             }
             stage = "initializing microphone";
@@ -241,7 +245,7 @@ public sealed class Recorder : IAsyncDisposable
         double scale = s.Height == 0 ? 1 : Math.Min(1, s.Height / (double)bounds.Height);
         return (Math.Max(2, (int)(bounds.Width * scale / 2) * 2), Math.Max(2, (int)(bounds.Height * scale / 2) * 2));
     }
-    internal static List<string> BuildArguments(Settings s, string dir, AudioLoopback? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false)
+    internal static List<string> BuildArguments(Settings s, string dir, IRecordingAudio? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false)
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.5", "-progress", "pipe:1" };
         var audioInputs = new List<int>();
@@ -259,7 +263,7 @@ public sealed class Recorder : IAsyncDisposable
             }
             else
             {
-                foreach (var input in new[] { audio, microphone }.Where(a => a != null))
+                foreach (var input in new IRecordingAudio?[] { audio, microphone }.Where(a => a != null))
                 {
                     args.AddRange(new[] { "-thread_queue_size", "256", "-probesize", "32", "-analyzeduration", "0", "-f", input!.RawFormat, "-ar", input.Format.SampleRate.ToString(), "-ac", input.Format.Channels.ToString(), "-i", input.InputPath });
                     audioInputs.Add(audioInputs.Count + 1);
@@ -280,7 +284,7 @@ public sealed class Recorder : IAsyncDisposable
             encoder ??= new VideoEncoder(new VideoAdapter(display.AdapterIndex, display.AdapterName, display.VendorId == 0x1002 && s.Encoder != "NVIDIA NVENC" ? 0x1002u : 0x10deu));
             if (encoder.IsAmd && encoder.Adapter.Index != display.AdapterIndex) throw new InvalidOperationException("AMD capture requires a display connected to the selected AMD adapter.");
             args.AddRange(new[] { "-init_hw_device", $"d3d11va=capture:{display.AdapterIndex}", "-filter_hw_device", "capture" });
-            foreach (var input in new[] { audio, microphone }.Where(a => a != null))
+            foreach (var input in new IRecordingAudio?[] { audio, microphone }.Where(a => a != null))
             {
                 args.AddRange(new[] { "-thread_queue_size", "256", "-probesize", "32", "-analyzeduration", "0", "-f", input!.RawFormat, "-ar", input.Format.SampleRate.ToString(), "-ac", input.Format.Channels.ToString(), "-i", input.InputPath });
                 audioInputs.Add(audioInputs.Count);
