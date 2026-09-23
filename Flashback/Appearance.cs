@@ -41,6 +41,16 @@ public partial class MainWindow
         ToggleButton.SetResourceReference(Control.BorderBrushProperty,recording ? "RecordingLight" : "Outline");
         StatusDot.SetResourceReference(Shape.FillProperty,recording ? "RecordingLight" : "IdleLight");
     }
+    // While recording is starting, the light breathes gently instead of sitting still.
+    private bool pulsing;
+    private void PulseRecordLight(bool on)
+    {
+        if (on == pulsing) return;
+        pulsing = on;
+        if (!on) { RecordDot.BeginAnimation(UIElement.OpacityProperty, null); RecordDot.Opacity = 1; return; }
+        RecordDot.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, .3, TimeSpan.FromMilliseconds(450))
+            { AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever });
+    }
     private bool appearanceReady;
     private void LoadAppearance()
     {

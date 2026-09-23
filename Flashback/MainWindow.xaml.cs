@@ -106,6 +106,8 @@ public partial class MainWindow : Window
         Microsoft.Win32.SystemEvents.PowerModeChanged += PowerChanged;
         UpdateNavigation(); Refresh();
         if (!renderOnly) Loaded += async (_, _) => await ReloadLibraryAsync();
+        // Check the hardware encoder in the background (once per driver) so Record starts quickly.
+        if (!renderOnly && !syntheticCapture) Loaded += (_, _) => _ = VideoEncoder.WarmAsync(recorder.FfmpegPath, settings.Copy());
     }
     public async Task AutoStartAsync() { if (settings.StartBufferOnLaunch) await ToggleAsync(); }
     private void LoadControls()
@@ -191,7 +193,7 @@ public partial class MainWindow : Window
         try
         {
             if (recorder.IsRecording) { recordingRequested = false; await recorder.StopAsync(); Tell("Paused."); }
-            else { recordingRequested = true; recovery.ResetBudget(); Tell(""); await recorder.StartAsync(settings, syntheticCapture); Tell(recorder.UsesCompatibilityConversion ? "Recording with AMD compatibility conversion. Encoding stays on the GPU; lowering FPS or resolution reduces CPU conversion work." : "Recording."); }
+            else { recordingRequested = true; recovery.ResetBudget(); Tell(""); Refresh(); await recorder.StartAsync(settings, syntheticCapture); Tell(recorder.UsesCompatibilityConversion ? "Recording with AMD compatibility conversion. Encoding stays on the GPU; lowering FPS or resolution reduces CPU conversion work." : "Recording."); }
         }
         catch (Exception ex)
         {
@@ -368,10 +370,13 @@ public partial class MainWindow : Window
     {
         bool active = recorder.IsRecording;
 
-        StatusTitle.Text = active || recovery.IsRunning ? "Recording" : "Paused";
-        SetRecordingAppearance(active || recovery.IsRunning);
-        RecordLabel.Text = active || recovery.IsRunning ? "Recording" : "Start recording";
-        SetActionName(ToggleButton, active || recovery.IsRunning ? "Recording — click to pause" : "Start recording");
+        // Record -> Recording the moment it's pressed; the light pulses until frames are encoding.
+        bool starting = busy && recordingRequested && !active && !recovery.IsRunning;
+        StatusTitle.Text = active || recovery.IsRunning ? "Recording" : starting ? "Starting…" : "Paused";
+        SetRecordingAppearance(active || recovery.IsRunning || starting);
+        PulseRecordLight(starting);
+        RecordLabel.Text = active || recovery.IsRunning || starting ? "Recording" : "Record";
+        SetActionName(ToggleButton, active || recovery.IsRunning ? "Recording — click to pause" : starting ? "Starting recording" : "Record");
         ToggleButton.IsEnabled = recovery.IsRunning || !busy && !recorder.IsSaving;
         TopSaveButton.IsEnabled = recordingRequested && (active || recovery.IsRunning);
 

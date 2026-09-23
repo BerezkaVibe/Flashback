@@ -38,18 +38,71 @@ internal sealed record VideoEncoder(VideoAdapter Adapter, AmdConversion Conversi
         var candidates = Candidates(preference, CaptureDisplay.EnumerateAdapters(), display);
         return await SelectCandidatesAsync(candidates, async encoder =>
         {
-            var key = Path.GetFullPath(ffmpeg) + File.GetLastWriteTimeUtc(ffmpeg).Ticks + encoder;
+            var key = ProbeKey(ffmpeg, encoder);
             await probeLock.WaitAsync(token);
             try
             {
-                if (verified.ContainsKey(key)) return null;
+                if (verified.ContainsKey(key) || Remembered(key)) { verified[key] = true; return null; }
                 var error = await ProbeAsync(ffmpeg, encoder, token);
-                if (error == null) verified[key] = true;
+                if (error == null) { verified[key] = true; Remember(key); }
                 return error;
             }
             finally { probeLock.Release(); }
         }, report, token);
     }
+    // A passed check is remembered on disk for this ffmpeg build, adapter and graphics driver, so the
+    // check (an extra ffmpeg launch, slow under some antivirus) runs once instead of every app start.
+    // A driver update changes the key; a failed start with a remembered encoder forgets it.
+    private static string ProbeKey(string ffmpeg, VideoEncoder encoder)
+    {
+        var file = new FileInfo(ffmpeg);
+        return $"{file.FullName}|{file.Length}|{file.LastWriteTimeUtc.Ticks}|{encoder}|{DriverVersions()}";
+    }
+    private static string? driverVersions;
+    private static string DriverVersions()
+    {
+        if (driverVersions != null) return driverVersions;
+        var found = new List<string>();
+        try
+        {
+            using var display = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}");
+            foreach (var name in display?.GetSubKeyNames() ?? Array.Empty<string>())
+            {
+                try { using var adapter = display!.OpenSubKey(name); if (adapter?.GetValue("DriverVersion") is string version) found.Add($"{adapter.GetValue("DriverDesc")}={version}"); }
+                catch { }
+            }
+        }
+        catch { }
+        found.Sort(StringComparer.Ordinal);
+        return driverVersions = string.Join(";", found);
+    }
+    private static string CachePath => Path.Combine(Storage.Root, "encoder-checks.txt");
+    private static readonly object cacheLock = new();
+    private static bool Remembered(string key)
+    {
+        lock (cacheLock) { try { return File.Exists(CachePath) && File.ReadAllLines(CachePath).Contains(key); } catch { return false; } }
+    }
+    private static void Remember(string key)
+    {
+        lock (cacheLock)
+        {
+            try
+            {
+                Directory.CreateDirectory(Storage.Root);
+                var lines = File.Exists(CachePath) ? File.ReadAllLines(CachePath).ToList() : new List<string>();
+                if (!lines.Contains(key)) { lines.Add(key); File.WriteAllLines(CachePath, lines.TakeLast(8)); }
+            }
+            catch { }
+        }
+    }
+    internal static void Forget(string ffmpeg, VideoEncoder encoder)
+    {
+        var key = ProbeKey(ffmpeg, encoder); verified.TryRemove(key, out _);
+        lock (cacheLock) { try { if (File.Exists(CachePath)) File.WriteAllLines(CachePath, File.ReadAllLines(CachePath).Where(l => l != key)); } catch { } }
+    }
+    // Runs the check in the background at app start, so the first Record press doesn't wait on it.
+    internal static Task WarmAsync(string ffmpeg, Settings settings) =>
+        Task.Run(async () => { try { await SelectAsync(ffmpeg, settings.Encoder, CaptureDisplay.Resolve(settings.DisplayIndex), null, CancellationToken.None); } catch { } });
     internal static async Task<VideoEncoder> SelectCandidatesAsync(IReadOnlyList<VideoEncoder> candidates, Func<VideoEncoder, Task<string?>> probe, Action<string>? report, CancellationToken token)
     {
         var failures = new List<string>();

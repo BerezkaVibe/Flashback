@@ -82,8 +82,17 @@ public sealed class Recorder : IAsyncDisposable
     {
         FfmpegPath = ffmpeg ?? Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe");
     }
+    // Startup timing: each stage is stamped into the startup report and the last one is kept on disk.
+    private long startClock;
+    internal string StartTimings { get; private set; } = "";
+    private void Mark(string stage)
+    {
+        var line = $"[{Stopwatch.GetElapsedTime(startClock).TotalMilliseconds,6:0} ms] {stage}";
+        StartTimings += line + "\n"; LastStartupReport += line + "\n";
+    }
     public async Task StartAsync(Settings next, bool synthetic = false, CancellationToken cancellationToken = default, bool preserveBuffer = false)
     {
+        startClock = Stopwatch.GetTimestamp(); StartTimings = "";
         await lifecycle.WaitAsync(cancellationToken);
         Generation++;
         LastStartupReport = $"Flashback {typeof(Recorder).Assembly.GetName().Version} · {DateTimeOffset.Now:O}\n{GraphicsDiagnostics.DescribeDisplays()}\n";
@@ -91,7 +100,9 @@ public sealed class Recorder : IAsyncDisposable
         {
             next.Validate();
             if (!File.Exists(FfmpegPath)) throw new InvalidOperationException("Could not start the buffer while preparing the replay buffer. The bundled recorder is missing. Extract the entire ZIP including tools.", new FileNotFoundException("The bundled recorder is missing.", FfmpegPath));
-            var encoder = synthetic ? null : await VideoEncoder.SelectAsync(FfmpegPath, next.Encoder, CaptureDisplay.Resolve(next.DisplayIndex), line => LastStartupReport += line + "\n", cancellationToken);
+            Mark("display report");
+            var encoder = synthetic ? null : await Task.Run(() => VideoEncoder.SelectAsync(FfmpegPath, next.Encoder, CaptureDisplay.Resolve(next.DisplayIndex), line => LastStartupReport += line + "\n", cancellationToken), cancellationToken);
+            Mark("encoder selected");
             preserveBuffer = preserveBuffer && selectedEncoder == encoder;
             selectedEncoder = encoder;
             await StartWithGpuRetryAsync(transfer => StartAttemptAsync(next, synthetic, transfer, cancellationToken, preserveBuffer), () => !synthetic && selectedEncoder?.IsAmd != true && !UsesGpuTransfer);
@@ -100,6 +111,9 @@ public sealed class Recorder : IAsyncDisposable
         catch (Exception ex)
         {
             LastStartupReport += ex + "\n";
+            var failure = ex.ToString();
+            if (selectedEncoder != null && (failure.Contains(selectedEncoder.Codec, StringComparison.Ordinal) || failure.Contains("OpenEncodeSession", StringComparison.Ordinal) || failure.Contains("Error while opening encoder", StringComparison.OrdinalIgnoreCase)))
+                VideoEncoder.Forget(FfmpegPath, selectedEncoder);
             try { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "last-error.txt"), LastStartupReport); } catch { }
             if (selectedEncoder is { IsAmd: false } && IsNvencDeviceError(ex.ToString()))
                 throw new InvalidOperationException("NVIDIA's video encoder could not open a usable device. Flashback tried the available GPU capture paths. Update or reinstall the NVIDIA graphics driver, restart Windows, and try again. If it still fails, send the copied error details.", ex);
@@ -129,6 +143,7 @@ public sealed class Recorder : IAsyncDisposable
             preserveBuffer = preserveBuffer && !next.RequiresBufferRestart(settings)
                 && RecordingSize == (synthetic ? (640, 360) : OutputSize(next));
             await StopCoreAsync(preserveBuffer);
+            Mark("previous session stopped");
             LastRestartPreservedBuffer = retainedSegments.Count > 0;
             cancellationToken.ThrowIfCancellationRequested();
             next.Validate();
@@ -149,21 +164,28 @@ public sealed class Recorder : IAsyncDisposable
             Volatile.Write(ref progressSeconds, timelineOffset); Volatile.Write(ref progressTick, Stopwatch.GetTimestamp());
             Volatile.Write(ref measuredFps, 0);
             lock (logLock) log.Clear();
-            stage = "initializing desktop audio";
-            if (settings.DesktopAudio && !synthetic)
+            Mark("buffer folder ready");
+            // Opening audio devices can take a few hundred milliseconds; keep it off the UI thread.
+            var s = settings;
+            await Task.Run(() =>
             {
-                // Per-app streams only when an app has a custom level; the whole device otherwise.
-                audio = settings.MixerActive && AppMixSource.Supported
-                    ? new AppMixSource(settings.AudioDeviceId, settings.AppVolumes) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 }
-                    : new AudioLoopback(settings.AudioDeviceId, hold: settings.DesktopLocked) { Muted = settings.DesktopMuted, Gain = settings.DesktopVolume / 100.0 };
-                LastStartupReport += $"Audio source: {audio.DeviceName}; {(string.IsNullOrEmpty(settings.AudioDeviceId) ? "follow Windows default" : "fixed playback device")}\n";
-            }
-            stage = "initializing microphone";
-            if (settings.MicrophoneAudio && !synthetic)
-            {
-                microphone = new AudioLoopback(settings.MicrophoneDeviceId, microphone: true, hold: settings.MicrophoneLocked) { Muted = settings.MicrophoneMuted, Gain = settings.MicrophoneVolume / 100.0 };
-                LastStartupReport += $"Microphone: {microphone.DeviceName}; {(string.IsNullOrEmpty(settings.MicrophoneDeviceId) ? "follow Windows communications default" : "fixed input device")}\n";
-            }
+                stage = "initializing desktop audio";
+                if (s.DesktopAudio && !synthetic)
+                {
+                    // Per-app streams only when an app has a custom level; the whole device otherwise.
+                    audio = s.MixerActive && AppMixSource.Supported
+                        ? new AppMixSource(s.AudioDeviceId, s.AppVolumes) { Muted = s.DesktopMuted, Gain = s.DesktopVolume / 100.0 }
+                        : new AudioLoopback(s.AudioDeviceId, hold: s.DesktopLocked) { Muted = s.DesktopMuted, Gain = s.DesktopVolume / 100.0 };
+                    LastStartupReport += $"Audio source: {audio.DeviceName}; {(string.IsNullOrEmpty(s.AudioDeviceId) ? "follow Windows default" : "fixed playback device")}\n";
+                }
+                stage = "initializing microphone";
+                if (s.MicrophoneAudio && !synthetic)
+                {
+                    microphone = new AudioLoopback(s.MicrophoneDeviceId, microphone: true, hold: s.MicrophoneLocked) { Muted = s.MicrophoneMuted, Gain = s.MicrophoneVolume / 100.0 };
+                    LastStartupReport += $"Microphone: {microphone.DeviceName}; {(string.IsNullOrEmpty(s.MicrophoneDeviceId) ? "follow Windows communications default" : "fixed input device")}\n";
+                }
+            }, cancellationToken);
+            Mark("audio devices opened");
             stage = "configuring display capture";
             RecordingSize = synthetic ? (640, 360) : OutputSize(settings);
             var display = synthetic ? null : CaptureDisplay.Resolve(settings.DisplayIndex);
@@ -187,15 +209,20 @@ public sealed class Recorder : IAsyncDisposable
             var args = BuildArguments(settings, session, audio, synthetic, transfer, display, nextSegmentNumber, microphone, selectedEncoder, video, SyncPatternForTests);
             UsesGpuTransfer = args.Any(a => a.Contains("hwupload_cuda", StringComparison.Ordinal));
             LastStartupReport += $"Encoding path: {(synthetic ? "synthetic test" : video != null ? selectedEncoder?.IsAmd == true ? "NV12 frame bridge to AMD AMF" : "NV12 frame bridge to NVIDIA NVENC; GPU resize requested (compatibility fallback logged separately)" : UsesGpuTransfer ? "CUDA transfer to NVIDIA" : "direct NVIDIA display device")}.\n";
+            Mark("capture configured");
             stage = "starting the recording engine";
-            process = StartProcess(args, session);
+            // Launching ffmpeg can take seconds while antivirus scans it; don't freeze the window.
+            process = await Task.Run(() => StartProcess(args, session));
+            Mark("encoder process launched");
             var running = process;
             stderrReader = ReadErrorsAsync(running);
             stdoutReader = ReadProgressAsync(running);
             video?.Start();
             audio?.Start(video == null ? null : () => Interlocked.Read(ref video.TimelineOrigin));
             microphone?.Start(video == null ? null : () => Interlocked.Read(ref video.TimelineOrigin));
-            // Don't announce recording until an actual encoded segment has been finalized.
+            Mark("capture and audio started");
+            // Announce recording once the encoder reports real encoded time (it reports every 0.25 s),
+            // rather than waiting the full 2 s for the first segment file to be finalized.
             var timeout = Stopwatch.StartNew();
             while (timeout.Elapsed < TimeSpan.FromSeconds(20))
             {
@@ -211,14 +238,16 @@ public sealed class Recorder : IAsyncDisposable
                 if (audio?.StreamStalled == true) throw new IOException(AudioLoopback.StreamStalledMessage);
                 if (audio?.Failure != null) throw new InvalidOperationException("Desktop audio could not start. " + audio.Failure.Message + " Turn off desktop audio in Settings to record video while resolving the playback-device problem.", audio.Failure);
                 CheckMicrophone();
-                if (ReadCurrentSegments().Count != 0)
+                if (Volatile.Read(ref progressSeconds) > timelineOffset + .2 || ReadCurrentSegments().Count != 0)
                 {
+                    Mark("encoding confirmed");
+                    try { File.WriteAllText(Path.Combine(Storage.Root, "last-start-timing.txt"), StartTimings); } catch { }
                     LastStartupReport += $"Started successfully: {EncoderName}, {(video != null ? "continuous frame bridge" : UsesGpuTransfer ? "CUDA transfer" : "capture device")}.\n";
                     maintenanceCancel = new();
                     maintenance = MaintenanceAsync(maintenanceCancel.Token, Generation);
                     return;
                 }
-                await Task.Delay(150, cancellationToken);
+                await Task.Delay(50, cancellationToken);
             }
             throw new TimeoutException("No video frames arrived. Wake your display and unlock Windows, then check the selected display and graphics driver.");
         }
@@ -247,7 +276,7 @@ public sealed class Recorder : IAsyncDisposable
     }
     internal static List<string> BuildArguments(Settings s, string dir, IRecordingAudio? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false)
     {
-        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.5", "-progress", "pipe:1" };
+        var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.25", "-progress", "pipe:1" };
         var audioInputs = new List<int>();
         string? videoFilter = null;
         if (bridge != null)
@@ -493,6 +522,9 @@ public sealed class Recorder : IAsyncDisposable
     {
         if (session == null) throw new InvalidOperationException("Start the replay buffer before saving a clip.");
         double end = RecordedSeconds + Math.Clamp(Stopwatch.GetElapsedTime(Volatile.Read(ref progressTick)).TotalSeconds, 0, 1);
+        // Recording is announced as soon as frames encode; a save in the first moments still gets
+        // the whole first two-second segment rather than a sliver.
+        end = Math.Max(end, timelineOffset + 2);
         Interlocked.Increment(ref saving);
         await saver.WaitAsync().ConfigureAwait(false);
         string? staging = null;
