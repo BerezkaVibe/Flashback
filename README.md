@@ -1,4 +1,4 @@
-# Flashback 0.7.1 for Windows
+# Flashback 0.7.2 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
@@ -6,6 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
+- **0.7.2**: Smoother scrubbing with the audio open; scroll to zoom the timeline, Ctrl+scroll for preview speed (0.1x to 4x); click-twice cut out tool that locks onto the playhead, with undo; ruler inside the timeline; shading on parts that will not be exported; Export menu with Copy and Compress; options in a pop-up; playback resumes after scrubbing.
 - **0.7.1**: Cut out tool to black out video or mute audio; audio lanes fold away and load only when opened (faster trimmer); Copy button beside Export; tidier per-app mixer with app icons.
 - **0.7.0**: Per-app recording mixer; faster alt-tab recovery (about 30 ms); lower memory; auto-start with games; optional separate audio tracks; trimmer with smart ruler, audio lanes, crop, GIF/MP3/MOV export and Compress for Discord.
 - **0.6.1**: Built-in updates: Flashback checks GitHub Releases and installs new versions in one click.
@@ -18,7 +19,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.7.1-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.7.2-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.
@@ -45,7 +46,7 @@ Display capture retries indefinitely, with bounded memory and capped retry delay
 
 Clips save into game/app subfolders with local timestamps, for example `Rainbow Six Siege — 2026-09-19_14-22-08-125 — 60s.mp4`. A manual game-folder override is available in Settings.
 
-Click the scissors in the left navigation to open the trimmer without a saved clip. Drop one MP4, M4V or MOV video onto the main window or trimmer, or choose Open video. You can also select a saved clip and click its scissors, or double-click it. Original files stay in place; imports are not copied or converted. Windows codec support determines preview availability. Use the unified timeline to scrub or drag the wide trim handles. The compact green/amber hand buttons mark start/end; their separate I/O badges show the shortcuts. I/O mark the current playhead; + adds the marked section (also numpad +). Change Add trim section in Settings > Shortcuts. With the timeline focused, arrows step one source frame, Shift+arrows half a second, Ctrl+arrows one second, and Home/End jump to clip edges. S splits, Ctrl+Z/Y undo/redo, and Space plays/pauses. Export a single marked range directly, or add each section you want to keep. Precise and rough modes sit beside Export. Sections play in chronological order; gaps are removed. Export creates a new MP4 and preserves the original. Precise export re-encodes and temporarily increases GPU/CPU work. Fast export copies compressed packets and joins them without re-encoding; it may include extra footage at keyframe edges and is intended for rough cuts. The original and existing exports cannot be overwritten. Deleting a clip asks for confirmation and uses the Windows Recycle Bin when available.
+Click the scissors in the left navigation to open the trimmer without a saved clip. Drop one MP4, M4V or MOV video onto the main window or trimmer, or choose Open video. You can also select a saved clip and click its scissors, or double-click it. Original files stay in place; imports are not copied or converted. Windows codec support determines preview availability. Use the timeline to scrub or drag the trim handles; scroll over it to zoom, Shift+scroll to pan and Ctrl+scroll to change preview speed. The green/amber Start and End buttons (I/O) mark the playhead; the + icon adds the marked section (also + on the keyboard). Click the time readout to type exact times. Parts that will not be exported are shaded. The cut out tool blacks out video or mutes audio: click two spots (the cutter locks onto the playhead within 3 px), right-click a cut to restore it, Esc cancels. Change Add trim section in Settings > Shortcuts. With the timeline focused, arrows step one source frame, Shift+arrows half a second, Ctrl+arrows one second, and Home/End jump to clip edges. S splits, Ctrl+Z/Y undo/redo, and Space plays/pauses. Export a single marked range directly, or add each section you want to keep. Precise and rough modes are under Options; the arrow beside Export holds Copy to clipboard and Compress. Sections play in chronological order; gaps are removed. Export creates a new MP4 and preserves the original. Precise export re-encodes and temporarily increases GPU/CPU work. Fast export copies compressed packets and joins them without re-encoding; it may include extra footage at keyframe edges and is intended for rough cuts. The original and existing exports cannot be overwritten. Deleting a clip asks for confirmation and uses the Windows Recycle Bin when available.
 
 The library scans on demand. Visible rows request Windows Explorer thumbnails on a background worker and cache up to 24 at 168x94; minimized/tray windows do not start gallery scans. Configure an optional external editor under Gear → External editor.
 
