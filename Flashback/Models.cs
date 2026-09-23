@@ -29,6 +29,7 @@ public sealed class Settings
     public int DesktopVolume { get; set; } = 100;
     public int MicrophoneVolume { get; set; } = 100;
     public int AudioBitrate { get; set; } = 160;
+    public bool CheckForUpdates { get; set; } = true;
     public bool ShowCursor { get; set; }
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Flashback");
     public string GameOverride { get; set; } = "";

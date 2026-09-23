@@ -14,12 +14,12 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Flashback Setup")]
-[assembly: AssemblyVersion("0.6.0.0")]
-[assembly: AssemblyFileVersion("0.6.0.0")]
+[assembly: AssemblyVersion("0.6.1.0")]
+[assembly: AssemblyFileVersion("0.6.1.0")]
 
 internal static class Setup
 {
-    const string Version="0.6.0";
+    const string Version="0.6.1";
     const string Marker="Flashback-install-4a0fe501-ea28-4327-802f-21a68ab327e9";
     const string Manifest="installed-files.txt";
     const string RegistryPath=@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Flashback";
@@ -52,6 +52,8 @@ internal static class Setup
                 MessageBox.Show("Flashback was uninstalled. Saved clips and preferences were kept.","Flashback",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 CleanupHelper();return 0;
             }
+            // Started by Flashback's in-app updater: install without prompts, then relaunch.
+            if(args.Length==1 && args[0]=="--update") { Application.Run(new SetupWindow(true));return 0; }
             Application.Run(new SetupWindow());return 0;
         }
         catch(Exception ex) { if(args.Length==2 && (args[0]=="--smoke-test" || args[0]=="--lock-test"))File.WriteAllText(args[1]+"-failure.txt",ex.ToString());else MessageBox.Show(ex.Message,"Flashback setup",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1; }
@@ -302,7 +304,7 @@ internal static class Setup
     sealed class SetupWindow : Form
     {
         readonly Button action=new Button();readonly Label status=new Label();readonly CheckBox desktop=new CheckBox();readonly ProgressBar progress=new ProgressBar();bool busy,done;
-        public SetupWindow()
+        public SetupWindow(bool update=false)
         {
 #if UNINSTALL
             bool uninstall=true;
@@ -318,6 +320,7 @@ internal static class Setup
             progress.Location=new Point(30,229);progress.Size=new Size(350,8);progress.Visible=false;Controls.Add(progress);
             action.Text=uninstall ? "Uninstall" : "Install";action.Location=new Point(405,253);action.Size=new Size(130,38);action.FlatStyle=FlatStyle.Flat;action.BackColor=Color.FromArgb(156,226,193);action.ForeColor=Color.FromArgb(10,20,15);Controls.Add(action);AcceptButton=action;
             action.Click+=async delegate {
+                if(update) return;
                 if(done) { Process.Start(Path.Combine(InstallPath,"Flashback.exe"));Close();return; }
                 try
                 {
@@ -332,6 +335,31 @@ internal static class Setup
                 finally {busy=false;action.Enabled=true;}
             };
             FormClosing+=delegate(object sender,FormClosingEventArgs e) { if(busy)e.Cancel=true; };
+            if(update && !uninstall)
+            {
+                title.Text="Updating Flashback";desktop.Visible=false;action.Enabled=false;action.Text="Try again";
+                Shown+=async delegate { await RunUpdate(); };
+                action.Click+=async delegate { if(!busy && !done) await RunUpdate(); };
+            }
+        }
+        async Task RunUpdate()
+        {
+            busy=true;action.Enabled=false;progress.Visible=true;progress.Value=0;status.Text="Waiting for Flashback to close…";
+            try
+            {
+                // The app quits itself before starting this; give it a moment to release its files.
+                var wait=Stopwatch.StartNew();
+                while(Process.GetProcessesByName("Flashback").Length>0)
+                {
+                    if(wait.Elapsed.TotalSeconds>20)throw new IOException("Flashback is still running. Quit it from the system tray, then click Try again.");
+                    await Task.Delay(250);
+                }
+                status.Text="Installing Flashback "+Version+"…";
+                await Task.Run(()=>InstallFiles(InstallPath,n=>BeginInvoke(new Action(()=>progress.Value=n))));
+                Register(File.Exists(DesktopLink));progress.Value=100;done=true;
+                Process.Start(Path.Combine(InstallPath,"Flashback.exe"));busy=false;Close();
+            }
+            catch(Exception ex) {status.Text="The update could not finish. Your previous version is unchanged.\r\n"+ex.Message;busy=false;action.Enabled=true;}
         }
     }
 }

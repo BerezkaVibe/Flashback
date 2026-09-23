@@ -1,4 +1,4 @@
-# Flashback 0.6.0 for Windows
+# Flashback 0.6.1 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
@@ -6,6 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
+- **0.6.1**: Built-in updates: Flashback checks GitHub Releases and installs new versions in one click.
 - **0.6.0**: Settings in side tabs; every hotkey rebindable; record light; audio device lock, recording volume and quality; monitor names and bitrates; cleaner, video-first trimmer.
 - **0.5.4**: Trimmer preview audio no longer drifts from the video. Smaller download.
 - **0.5.3**: Setup recovers from file-lock errors during install.
@@ -15,7 +16,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.6.0-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.6.1-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.

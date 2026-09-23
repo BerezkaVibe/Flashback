@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
     <AssemblyName>Flashback</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>

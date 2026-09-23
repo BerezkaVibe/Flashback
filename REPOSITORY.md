@@ -6,6 +6,7 @@
 - 0.5.3 changes installer reliability. The recorder and trimmer behavior remain the same as 0.5.2.
 - 0.5.4 fixes trimmer preview A/V sync and slims the package.
 - 0.6.0 reworks settings, hotkeys, audio controls and the trimmer layout.
+- 0.6.1 adds in-app updates from GitHub Releases. Attach the Setup.exe to each release; the updater looks for an asset ending in -Setup.exe.
 
 ## Source layout
 
