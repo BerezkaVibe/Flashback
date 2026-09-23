@@ -23,11 +23,23 @@
   </Grid>
   <local:TrimTimeline x:Name="Timeline" Grid.Row="2" Margin="0,8,0,0" AutomationProperties.Name="Clip timeline"/>
   <Grid Grid.Row="3" Margin="0,4,0,8"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
-   <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock x:Name="PositionLabel" VerticalAlignment="Center" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource Muted}" Margin="0,0,14,0"/><Button Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE71F;" Click="ZoomOut_Click" ToolTip="Zoom timeline out · Ctrl+wheel" AutomationProperties.Name="Zoom timeline out"/><TextBlock x:Name="TimelineZoomLabel" MinWidth="30" TextAlignment="Center" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Muted}"/><Button Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE71E;" Click="ZoomIn_Click" ToolTip="Zoom timeline in · Ctrl+wheel" AutomationProperties.Name="Zoom timeline in"/><Button x:Name="TimelineFitButton" Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE9A6;" Click="ZoomFit_Click" ToolTip="Show the whole clip" AutomationProperties.Name="Fit timeline"/></StackPanel>
+   <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock x:Name="PositionLabel" VerticalAlignment="Center" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource Muted}" Margin="0,0,14,0"/><Button Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE71F;" Click="ZoomOut_Click" ToolTip="Zoom timeline out · scroll over the timeline" AutomationProperties.Name="Zoom timeline out"/><TextBlock x:Name="TimelineZoomLabel" MinWidth="30" TextAlignment="Center" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Muted}"/><Button Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE71E;" Click="ZoomIn_Click" ToolTip="Zoom timeline in · scroll over the timeline" AutomationProperties.Name="Zoom timeline in"/><Button x:Name="TimelineFitButton" Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE9A6;" Click="ZoomFit_Click" ToolTip="Show the whole clip" AutomationProperties.Name="Fit timeline"/></StackPanel>
    <StackPanel Grid.Column="1" Orientation="Horizontal">
+    <Border Width="60"/><!-- balances the speed button so Play stays centered -->
     <Button Style="{StaticResource TrimButton}" x:Name="MarkStartButton" Click="MarkStart_Click" Background="#203D33" BorderBrush="#427B64" ToolTip="Set start at playhead · I" AutomationProperties.Name="Set start, shortcut I"><StackPanel Orientation="Horizontal"><TextBlock Text="☛" FontFamily="Segoe UI Symbol" FontSize="18" Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="Start" Foreground="#D3F5E4" VerticalAlignment="Center"/><Border Background="#142C23" BorderBrush="#57866F" BorderThickness="1" CornerRadius="3" Padding="4,0" Margin="7,0,0,0" VerticalAlignment="Center"><TextBlock x:Name="MarkStartKey" Text="I" FontFamily="Consolas" FontSize="10" Foreground="#B0F2D2"/></Border></StackPanel></Button>
     <Button Style="{StaticResource TrimButton}" x:Name="PlayToggle" Content="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="15" Width="44" Margin="8,0" ToolTip="Play / pause · Space" AutomationProperties.Name="Play or pause clip" Click="Play_Click"/>
     <Button Style="{StaticResource TrimButton}" x:Name="MarkEndButton" Click="MarkEnd_Click" Background="#443122" BorderBrush="#886340" ToolTip="Set end at playhead · O" AutomationProperties.Name="Set end, shortcut O"><StackPanel Orientation="Horizontal"><TextBlock Text="☚" FontFamily="Segoe UI Symbol" FontSize="18" Foreground="#F3BF84" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="End" Foreground="#FFE2C1" VerticalAlignment="Center"/><Border Background="#302113" BorderBrush="#956D46" BorderThickness="1" CornerRadius="3" Padding="4,0" Margin="7,0,0,0" VerticalAlignment="Center"><TextBlock x:Name="MarkEndKey" Text="O" FontFamily="Consolas" FontSize="10" Foreground="#FFD49F"/></Border></StackPanel></Button>
+    <Button x:Name="SpeedButton" Style="{StaticResource TrimButton}" Content="1×" Width="52" Margin="8,0,0,0" FontSize="12" Background="Transparent" Click="Speed_Click" ToolTip="Preview speed · Ctrl+wheel over the timeline" AutomationProperties.Name="Preview speed"/>
+    <Popup x:Name="SpeedPopup" PlacementTarget="{Binding ElementName=SpeedButton}" Placement="Top" StaysOpen="False" Closed="SpeedPopup_Closed" AllowsTransparency="True" VerticalOffset="-6">
+     <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="14,12" Width="280">
+      <StackPanel>
+       <DockPanel><TextBlock x:Name="SpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Preview speed" FontSize="13" FontWeight="SemiBold"/></DockPanel>
+       <Slider x:Name="SpeedSlider" Minimum="-2.302585" Maximum="1.386294" Value="0" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,10,0,6" ValueChanged="SpeedSlider_Changed" AutomationProperties.Name="Preview speed"/>
+       <UniformGrid x:Name="SpeedPresets" Rows="1" Margin="0,0,0,6"/>
+       <TextBlock Text="Changes playback here only; exports keep normal speed." Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"/>
+      </StackPanel>
+     </Border>
+    </Popup>
    </StackPanel>
    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
     <StackPanel x:Name="ListControls" Orientation="Horizontal">
@@ -84,18 +96,34 @@
      </StackPanel>
     </StackPanel>
    </StackPanel>
-   <StackPanel x:Name="ExportOptionsPanel" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" Margin="0,10,0,0">
-    <WrapPanel>
-     <StackPanel Orientation="Horizontal" Margin="0,0,18,6"><TextBlock Text="Format" Style="{StaticResource Caption}" Margin="0,0,8,0" VerticalAlignment="Center"/><ComboBox x:Name="SharePreset" Width="210" MinHeight="36" SelectedIndex="0" SelectionChanged="Share_Changed" AutomationProperties.Name="Export format"><ComboBoxItem Content="MP4 · original quality"/><ComboBoxItem Content="MP4 · 1080p 60fps"/><ComboBoxItem Content="MP4 · 720p 30fps"/><ComboBoxItem Content="MOV · original quality"/><ComboBoxItem Content="GIF · 480p 15fps"/><ComboBoxItem Content="MP3 · audio only"/></ComboBox></StackPanel>
-     <StackPanel Orientation="Horizontal" Margin="0,0,18,6"><TextBlock Text="Cut" Style="{StaticResource Caption}" Margin="0,0,8,0" VerticalAlignment="Center"/><ComboBox x:Name="ExportMode" Width="160" SelectedIndex="1" SelectionChanged="ExportMode_Changed" MinHeight="36" AutomationProperties.Name="Cut precision"><ComboBoxItem Content="Precise cut"/><ComboBoxItem Content="Rough cut · fast"/></ComboBox></StackPanel>
-     <StackPanel Orientation="Horizontal" Margin="0,0,18,6"><TextBlock Text="Size limit, MB" Style="{StaticResource Caption}" Margin="0,0,8,0" VerticalAlignment="Center"/><TextBox x:Name="SizeLimit" Width="80" Height="36" Text="0" ToolTip="0 = no limit. MB uses 1,000,000 bytes; enter your upload limit." TextChanged="SizeLimit_Changed"/></StackPanel>
-    </WrapPanel>
-    <WrapPanel x:Name="TrackMixPanel" Visibility="Collapsed">
-     <StackPanel Orientation="Horizontal" Margin="0,0,18,6"><TextBlock Text="Desktop" Style="{StaticResource Caption}" Margin="0,0,8,0" VerticalAlignment="Center"/><Slider x:Name="DesktopMix" Width="140" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Desktop audio volume"/><TextBlock x:Name="DesktopMixLabel" Text="100%" Width="40" Margin="6,0,0,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/></StackPanel>
-     <StackPanel Orientation="Horizontal" Margin="0,0,18,6"><TextBlock Text="Microphone" Style="{StaticResource Caption}" Margin="0,0,8,0" VerticalAlignment="Center"/><Slider x:Name="MicrophoneMix" Width="140" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Microphone volume"/><TextBlock x:Name="MicrophoneMixLabel" Text="100%" Width="40" Margin="6,0,0,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/></StackPanel>
-    </WrapPanel>
-    <TextBlock x:Name="ModeHint" Text="Fast export; edges may extend to nearby keyframes." Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"/>
-   </StackPanel>
+   <Popup x:Name="ExportOptionsPopup" PlacementTarget="{Binding ElementName=ExportOptionsButton}" Placement="Top" StaysOpen="False" AllowsTransparency="True" VerticalOffset="-6" Closed="ExportOptionsPopup_Closed">
+    <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="14,12" Width="330">
+     <StackPanel x:Name="ExportOptionsPanel">
+      <TextBlock Text="Export options" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition/></Grid.ColumnDefinitions>
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+       <TextBlock Text="Format" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+       <ComboBox x:Name="SharePreset" Grid.Column="1" MinHeight="32" SelectedIndex="0" SelectionChanged="Share_Changed" AutomationProperties.Name="Export format"><ComboBoxItem Content="MP4 · original quality"/><ComboBoxItem Content="MP4 · 1080p 60fps"/><ComboBoxItem Content="MP4 · 720p 30fps"/><ComboBoxItem Content="MOV · original quality"/><ComboBoxItem Content="GIF · 480p 15fps"/><ComboBoxItem Content="MP3 · audio only"/></ComboBox>
+       <TextBlock Grid.Row="1" Text="Cut" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,6,0,0"/>
+       <ComboBox x:Name="ExportMode" Grid.Row="1" Grid.Column="1" MinHeight="32" Margin="0,6,0,0" SelectedIndex="1" SelectionChanged="ExportMode_Changed" AutomationProperties.Name="Cut precision"><ComboBoxItem Content="Precise cut"/><ComboBoxItem Content="Rough cut · fast"/></ComboBox>
+       <TextBlock Grid.Row="2" Text="Size limit" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,6,0,0"/>
+       <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,6,0,0"><TextBox x:Name="SizeLimit" Width="70" Height="32" Text="0" ToolTip="0 = no limit. MB uses 1,000,000 bytes; enter your upload limit." TextChanged="SizeLimit_Changed" AutomationProperties.Name="Size limit in megabytes"/><TextBlock Text="MB · 0 = no limit" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/></StackPanel>
+      </Grid>
+      <Grid x:Name="TrackMixPanel" Visibility="Collapsed" Margin="0,8,0,0">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+       <TextBlock Text="Desktop" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+       <Slider x:Name="DesktopMix" Grid.Column="1" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Desktop audio volume"/>
+       <TextBlock x:Name="DesktopMixLabel" Grid.Column="2" Text="100%" TextAlignment="Right" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/>
+       <TextBlock Grid.Row="1" Text="Microphone" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,4,0,0"/>
+       <Slider x:Name="MicrophoneMix" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" Margin="0,4,0,0" AutomationProperties.Name="Microphone volume"/>
+       <TextBlock x:Name="MicrophoneMixLabel" Grid.Row="1" Grid.Column="2" Text="100%" TextAlignment="Right" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0" Foreground="{DynamicResource Accent}"/>
+      </Grid>
+      <TextBlock x:Name="ModeHint" Text="Fast export; edges may extend to nearby keyframes." Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"/>
+     </StackPanel>
+    </Border>
+   </Popup>
    <ProgressBar x:Name="ExportProgress" Grid.Row="2" Grid.ColumnSpan="2" Minimum="0" Maximum="1" Height="3" Margin="0,8,0,0" Background="#303A42" Foreground="{DynamicResource Accent}"/>
   </Grid></Border>
  </Grid>

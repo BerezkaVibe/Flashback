@@ -34,6 +34,33 @@ internal static class ScrubDiagnostics
                 report.Add($"Play after seek to {at}: decoder {trim.Player.Position.TotalSeconds:0.00}, playhead {trim.Playhead:0.00} (expect ~{at + 1.4:0.0})");
                 trim.HandleKey(System.Windows.Input.Key.Space, System.Windows.Input.ModifierKeys.None, true);
             }
+            foreach (double rate in new[] { .1, 4.0 })
+            {
+                trim.SpeedSlider.Value = Math.Log(rate); trim.SeekTo(10); await Task.Delay(400);
+                trim.HandleKey(System.Windows.Input.Key.Space, System.Windows.Input.ModifierKeys.None, true); await Task.Delay(2000);
+                report.Add($"Play 2 s at {rate}x: decoder moved {trim.Player.Position.TotalSeconds - 10:0.00} s (expect ~{2 * rate:0.0}), playhead {trim.Playhead:0.00}");
+                trim.HandleKey(System.Windows.Input.Key.Space, System.Windows.Input.ModifierKeys.None, true);
+            }
+            trim.SpeedSlider.Value = Math.Log(.5); trim.SeekTo(duration / 2);
+            trim.Topmost = true; trim.Activate(); trim.SpeedPopup.IsOpen = true; await Task.Delay(700);
+            var corner = trim.SpeedButton.PointToScreen(new Point(0, 0));
+            using (var bmp = new System.Drawing.Bitmap(900, 330))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen((int)corner.X - 450, (int)corner.Y - 250, 0, 0, bmp.Size);
+                bmp.Save(Path.Combine(Storage.Root, "trim-speed.png"), System.Drawing.Imaging.ImageFormat.Png);
+            }
+            trim.SpeedPopup.IsOpen = false;
+            trim.ExportOptionsPopup.IsOpen = true; await Task.Delay(500);
+            var options = trim.ExportOptionsButton.PointToScreen(new Point(0, 0));
+            using (var bmp = new System.Drawing.Bitmap(900, 420))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen((int)options.X - 600, (int)options.Y - 340, 0, 0, bmp.Size);
+                bmp.Save(Path.Combine(Storage.Root, "trim-options.png"), System.Drawing.Imaging.ImageFormat.Png);
+            }
+            trim.ExportOptionsPopup.IsOpen = false; trim.Topmost = false;
+            trim.SpeedSlider.Value = 0;
+            // Put the start handle right on a labelled second so the shot shows the label stepping aside.
+            trim.SeekTo(4); trim.HandleKey(System.Windows.Input.Key.I, System.Windows.Input.ModifierKeys.None, true);
             trim.SeekTo(duration / 2); await Task.Delay(500); Shot(trim, "trim-audio-folded.png");
             await Sweep("audio folded");
             typeof(TrimWindow).GetMethod("LanesToggleRequested", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(trim, null);

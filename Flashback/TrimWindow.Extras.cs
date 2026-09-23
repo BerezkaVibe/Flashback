@@ -267,4 +267,43 @@ public partial class TrimWindow
     }
     private void SetEditingEnabled(bool enabled) =>
         Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = enabled;
+
+    // Preview speed: a log-scale slider from 0.1x to 4x (so 1x sits near the middle) plus quick presets.
+    private bool syncingSpeed;
+    private long speedClosedAt;
+    private void Speed_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Diagnostics.Stopwatch.GetElapsedTime(speedClosedAt).TotalMilliseconds < 250) return;
+        ShowPreviewRate(); SpeedPopup.IsOpen = true;
+    }
+    private void SpeedPopup_Closed(object? sender, EventArgs e) => speedClosedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+    private void LoadSpeedPresets()
+    {
+        foreach (double rate in new[] { .25, .5, 1, 2, 4 })
+        {
+            var preset = new Button { Content = RateText(rate), Tag = rate, Style = (Style)FindResource("TrimButton"), MinHeight = 26, Height = 26, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), FontSize = 11, Background = System.Windows.Media.Brushes.Transparent };
+            preset.Click += (_, _) => SetPreviewRate(rate);
+            SpeedPresets.Children.Add(preset);
+        }
+        ShowPreviewRate();
+    }
+    private void SpeedSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (syncingSpeed || SpeedButton == null) return;
+        // Round to tidy steps: 0.05 below normal speed, 0.1 above it.
+        double rate = Math.Exp(e.NewValue);
+        rate = rate < 1 ? Math.Round(rate / .05) * .05 : Math.Round(rate, 1);
+        SetPreviewRate(Math.Abs(rate - 1) < .03 ? 1 : rate);
+    }
+    private void ShowPreviewRate()
+    {
+        if (SpeedButton == null) return;
+        string text = RateText(PreviewRate);
+        SpeedButton.Content = text; SpeedLabel.Text = text;
+        SpeedButton.SetResourceReference(Control.ForegroundProperty, PreviewRate == 1 ? "Ink" : "Accent");
+        syncingSpeed = true; SpeedSlider.Value = Math.Log(PreviewRate); syncingSpeed = false;
+        foreach (Button preset in SpeedPresets.Children)
+            preset.SetResourceReference(Control.BorderBrushProperty, Math.Abs((double)preset.Tag - PreviewRate) < 1e-9 ? "Accent" : "Outline");
+    }
+    private static string RateText(double rate) => rate.ToString("0.##", CultureInfo.InvariantCulture) + "×";
 }

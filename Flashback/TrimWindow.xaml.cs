@@ -40,6 +40,8 @@ public partial class TrimWindow : Window
         Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
+        Timeline.SpeedStepRequested += StepPreviewRate;
+        LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
         Timeline.DragCompleted += () => { if (resumeAfterDrag) { resumeAfterDrag = false; StartPlayback(playhead); } else FlushSeek(); };
@@ -69,7 +71,7 @@ public partial class TrimWindow : Window
         if(!FlushProject()) return false; projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
-        pendingSeek=false; seekAwaiting=false; PreviewRate=1; Player.SpeedRatio=1;
+        pendingSeek=false; seekAwaiting=false; Player.SpeedRatio=PreviewRate;
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
@@ -156,7 +158,7 @@ public partial class TrimWindow : Window
     private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
-    private void Player_Opened(object sender, RoutedEventArgs e) { Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
+    private void Player_Opened(object sender, RoutedEventArgs e) { Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
     private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
     { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
@@ -288,13 +290,15 @@ public partial class TrimWindow : Window
         await RunExportAsync(dialog.FileName, exportRanges, options, rough);
     }
     private void CancelExport_Click(object sender, RoutedEventArgs e) => exportCancellation?.Cancel();
-    // Export options stay folded away so the video keeps most of the window.
+    // Export options open as a pop-up over the page, so the video never shrinks to make room.
+    private long optionsClosedAt;
     private void ExportOptions_Click(object sender, RoutedEventArgs e)
     {
-        bool show = ExportOptionsPanel.Visibility != Visibility.Visible;
-        ExportOptionsPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        ExportOptionsChevron.Text = show ? "" : "";
+        // A click on the button while the pop-up is open closes it first; don't reopen it.
+        if (System.Diagnostics.Stopwatch.GetElapsedTime(optionsClosedAt).TotalMilliseconds < 250) return;
+        ExportOptionsPopup.IsOpen = true; ExportOptionsChevron.Text = "";
     }
+    private void ExportOptionsPopup_Closed(object? sender, EventArgs e) { optionsClosedAt = System.Diagnostics.Stopwatch.GetTimestamp(); ExportOptionsChevron.Text = ""; }
     public async Task CloseForQuitAsync()
     {
         if (exportCancellation != null) { var done = exportFinished!.Task; exportCancellation.Cancel(); await done; }

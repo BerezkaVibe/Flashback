@@ -10,13 +10,23 @@ namespace Flashback;
 
 public partial class TrimWindow
 {
+    // Preview speed only; exports always keep the source speed.
     internal double PreviewRate { get; private set; } = 1;
-    private static readonly double[] previewRates={.25,.5,1,1.5,2,4};
+    internal const double MinRate = .1, MaxRate = 4;
+    private static readonly double[] previewRates={.1,.25,.5,.75,1,1.25,1.5,2,3,4};
+    private System.Windows.Threading.DispatcherTimer? realign;
     private void SetPreviewRate(double rate)
     {
+        rate=Math.Clamp(Math.Round(rate,2),MinRate,MaxRate);
         bool changed=rate!=PreviewRate; PreviewRate=rate; Player.SpeedRatio=rate;
-        // A live rate change can leave audio offset from video; restart from the playhead to realign.
-        if (changed && playing) StartPlayback(playhead, previewSection);
+        // A live rate change can leave audio offset from video; once the speed settles,
+        // restart from the playhead to realign (a spun wheel or dragged slider restarts once).
+        if (changed && playing)
+        {
+            realign??=new System.Windows.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(250),System.Windows.Threading.DispatcherPriority.Normal,(_,_)=> { realign!.Stop(); if (playing) StartPlayback(playhead, previewSection); },Dispatcher);
+            realign.Stop(); realign.Start();
+        }
+        ShowPreviewRate();
         StatusLabel.Text=$"Preview {rate:0.##}× · {(userMuted ? "muted" : $"volume {Player.Volume:P0}")}";
     }
     private void StepFrame(int direction)
@@ -71,18 +81,21 @@ public partial class TrimWindow
             (ZoomInMenu,TrimAction.ZoomIn),(ZoomOutMenu,TrimAction.ZoomOut),(GoToTimeMenu,TrimAction.GoToTime),(ShortcutGuideMenu,TrimAction.ShortcutGuide) })
             menu.InputGestureText=Key(action);
     }
+    // Steps along the preset speeds, starting from whatever speed the slider left.
     private void StepPreviewRate(int steps)
     {
-        int i=Array.IndexOf(previewRates,PreviewRate);
-        SetPreviewRate(previewRates[Math.Clamp(i+steps,0,previewRates.Length-1)]);
+        double rate=PreviewRate;
+        for (int s=0; s<Math.Abs(steps); s++)
+            rate = steps>0 ? previewRates.FirstOrDefault(r => r>rate+1e-9, MaxRate) : previewRates.LastOrDefault(r => r<rate-1e-9, MinRate);
+        SetPreviewRate(rate);
     }
     private void RunAction(TrimAction action)
     {
         var none=new RoutedEventArgs();
         switch(action)
         {
-            case TrimAction.PlayPause: SetPreviewRate(1); Play_Click(this,none); break;
-            case TrimAction.PlayPauseKeepSpeed: Play_Click(this,none); break;
+            // Space keeps the speed picked in the speed control.
+            case TrimAction.PlayPause or TrimAction.PlayPauseKeepSpeed: Play_Click(this,none); break;
             case TrimAction.Slower: StepPreviewRate(-1); break;
             case TrimAction.Faster: StepPreviewRate(1); break;
             case TrimAction.MuchSlower: StepPreviewRate(-2); break;

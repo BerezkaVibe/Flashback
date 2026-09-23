@@ -21,7 +21,7 @@ internal static class TrimShortcuts
     internal static readonly TrimShortcut[] All =
     {
         new(TrimAction.PlayPause,"Playback","Play / pause","Space"),
-        new(TrimAction.PlayPauseKeepSpeed,"Playback","Play / pause at current speed","K"),
+        new(TrimAction.PlayPauseKeepSpeed,"Playback","Play / pause (second key)","K"),
         new(TrimAction.Slower,"Playback","Slower preview","J",true),
         new(TrimAction.Faster,"Playback","Faster preview","L",true),
         new(TrimAction.MuchSlower,"Playback","Slower preview, two steps","Shift+J",true),

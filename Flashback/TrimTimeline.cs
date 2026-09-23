@@ -58,7 +58,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private enum Drag { None, Start, End, Playhead, Pan, Cut }
     private Drag drag;
     private double grabOffset;
-    private const double Inset = 20, RulerHeight = 22, TrackTop = 26, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
+    private const double Inset = 20, TrackTop = 8, TrackHeight = 36, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 4;
     // Audio lanes fold away behind a chevron beside the video track, so they only take room (and load) when opened.
     internal bool LanesExpanded
@@ -83,7 +83,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private double LaneTop(int i) => LanesTop + i * (LaneHeight + LaneGap);
     private double LanesSpan => lanes.Count * (LaneHeight + LaneGap);
     private double ScrollTop => LanesTop + LanesSpan * LaneReveal + 2;
-    internal double PreferredHeight => Math.Max(80, ScrollTop + ScrollHeight + 4);
+    internal double PreferredHeight => Math.Max(56, ScrollTop + ScrollHeight + 4);
     private static readonly Brush Track = Brush("#252D36"), Kept = Brush("#456D5D"), Accent = Brush("#9CE2C1"), Ink = Brush("#EDF0F3"), Muted = Brush("#9DA6B1");
     private static readonly Brush EndAccent = Brush("#F3BF84"), Tick = Brush("#4A5561"), LaneFill = Brush("#1A2027"), Wave = Brush("#7FA8C9"), WaveMuted = Brush("#3A444F");
     private static Brush Brush(string color) { var b = (SolidColorBrush)new BrushConverter().ConvertFromString(color)!; b.Freeze(); return b; }
@@ -126,15 +126,14 @@ internal sealed class TrimTimeline : FrameworkElement
         double playhead = XAt(Position);
         if (Position >= ViewStart - 1e-9 && Position <= ViewStart + Span + 1e-9)
         {
-            live.DrawLine(InkPen, new Point(playhead, 6), new Point(playhead, ScrollTop - 2));
-            live.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 4, 10, 7), 2, 2);
+            live.DrawLine(InkPen, new Point(playhead, 2), new Point(playhead, ScrollTop - 2));
+            live.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 0, 10, 7), 2, 2);
         }
     }
     private int SectionsKey() { int hash = Sections.Count; foreach (var s in Sections) hash = HashCode.Combine(hash, s.Start, s.End); return hash; }
     private void DrawStatic(DrawingContext dc)
     {
         double width = ActualWidth-2*Inset, dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        DrawRuler(dc, width, dpi);
         dc.DrawRoundedRectangle(Track, null, new Rect(Inset, TrackTop, width, TrackHeight), 6, 6);
         for (int i = 0; i < Sections.Count; i++)
         {
@@ -142,10 +141,11 @@ internal sealed class TrimTimeline : FrameworkElement
             if (s.End<ViewStart || s.Start>ViewStart+Span) continue;
             var block = new Rect(XAt(s.Start), TrackTop+3, Math.Max(1, XAt(s.End)-XAt(s.Start)), TrackHeight-6);
             dc.DrawRoundedRectangle(Kept, i == SelectedSection ? new Pen(Ink, 1.5) : null, block, 3, 3);
-            // Number each kept block so it matches its chip below the timeline.
+            // Number each kept block (bottom-left, clear of the ruler) so it matches its chip below the timeline.
             var number = Text((i + 1).ToString(CultureInfo.InvariantCulture), 11, Ink, dpi);
-            if (block.Width >= number.Width + 8) dc.DrawText(number, new Point(block.X + 5, block.Y + (block.Height - number.Height) / 2));
+            if (block.Width >= number.Width + 8) dc.DrawText(number, new Point(block.X + 5, block.Bottom - number.Height - 1));
         }
+        DrawRuler(dc, width, dpi);
         dc.DrawRoundedRectangle(null, new Pen(Accent, 1.5), new Rect(XAt(Start), TrackTop-2, Math.Max(1, XAt(End)-XAt(Start)), TrackHeight+4), 3, 3);
         foreach (var edge in new[] { (Time: Start, Color: Accent), (Time: End, Color: EndAccent) })
         {
@@ -171,33 +171,42 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.DrawRoundedRectangle(Track, null, new Rect(Inset, ScrollTop, width, ScrollHeight), 3, 3);
             double left = Inset + ViewStart / Duration * width, thumb = Math.Max(12, Span / Duration * width);
             dc.DrawRoundedRectangle(Accent, null, new Rect(Math.Min(left, Inset + width - thumb), ScrollTop, thumb, ScrollHeight), 3, 3);
-            var badge = Text($"{ZoomFactor:0.#}×", 11, Accent, dpi);
-            dc.DrawText(badge, new Point(ActualWidth - Inset - badge.Width, 2));
         }
         if (IsKeyboardFocusWithin) dc.DrawRoundedRectangle(null, new Pen(Muted, 1), new Rect(1, 1, Math.Max(1, ActualWidth-2), Math.Max(1,ActualHeight-2)), 7, 7);
     }
     private static readonly double[] Steps = { .01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
-    // Major ticks at least ~90 px apart get labels; minor ticks fill in down to frames when zoomed far in.
+    // The ruler sits inside the top of the video track. Major ticks at least ~80 px apart get small labels;
+    // minor ticks fill in down to frames when zoomed far in. Labels step aside from the trim handles.
     private void DrawRuler(DrawingContext dc, double width, double dpi)
     {
         double pixelsPerSecond = width / Span, frame = 1 / Math.Max(1, FrameRate);
-        double major = Steps.FirstOrDefault(s => s * pixelsPerSecond >= 90, Steps[^1]);
-        if (frame * pixelsPerSecond >= 90) major = Math.Max(frame, major);
+        double major = Steps.FirstOrDefault(s => s * pixelsPerSecond >= 80, Steps[^1]);
+        if (frame * pixelsPerSecond >= 80) major = Math.Max(frame, major);
         double minor = frame * pixelsPerSecond >= 10 && major <= .5 ? frame
             : Steps.Where(s => s < major && s * pixelsPerSecond >= 8 && IsMultiple(major, s)).DefaultIfEmpty(major).Min();
         int decimals = major >= 1 ? 0 : major >= .1 ? 1 : 2;
         var labelRight = double.MinValue;
+        var handles = new[] { Start, End }.Where(t => t >= ViewStart && t <= ViewStart + Span).Select(XAt).ToArray();
+        bool Blocked(double left, double w) => handles.Any(h => left < h + 8 && left + w > h - 8);
+        double top = TrackTop + 1;
         // Integer tick counts avoid drift when stepping by a frame (1/60 s).
         for (long k = (long)Math.Ceiling(ViewStart / minor - 1e-9), last = (long)Math.Floor((ViewStart + Span) / minor + 1e-9); k <= last; k++)
         {
             double t = k * minor, x = XAt(t);
             bool isMajor = minor == major || IsMultiple(t, major);
-            dc.DrawLine(isMajor ? MajorPen : TickPen, new Point(x, isMajor ? 12 : 17), new Point(x, RulerHeight));
+            dc.DrawLine(isMajor ? MajorPen : TickPen, new Point(x, top), new Point(x, top + (isMajor ? 6 : 3)));
             if (!isMajor) continue;
-            var label = Text(TimeLabel(t, decimals), 10, Muted, dpi);
-            double lx = Math.Clamp(x + 3, 0, ActualWidth - label.Width);
+            var label = Text(TimeLabel(t, decimals), 9, Muted, dpi);
+            // Right of the tick by default; if a handle covers it, try the left side, then just past
+            // the handle, and only fade it when there is nowhere to go.
+            double lx = x + 3; bool faded = false;
+            if (Blocked(lx, label.Width)) lx = x - 3 - label.Width;
+            if (Blocked(lx, label.Width)) { var h = handles.First(h => Math.Abs(h - x) < label.Width + 12); lx = h + 9; faded = Blocked(lx, label.Width); }
+            lx = Math.Clamp(lx, Inset + 2, ActualWidth - Inset - label.Width - 2);
             if (lx <= labelRight + 6) continue;
-            dc.DrawText(label, new Point(lx, 0)); labelRight = lx + label.Width;
+            if (faded) dc.PushOpacity(.35);
+            dc.DrawText(label, new Point(lx, top)); labelRight = lx + label.Width;
+            if (faded) dc.Pop();
         }
     }
     private static bool IsMultiple(double value, double step) { double r = value / step; return Math.Abs(r - Math.Round(r)) < 1e-6 * Math.Max(1, Math.Abs(r)); }
@@ -347,7 +356,7 @@ internal sealed class TrimTimeline : FrameworkElement
         Cursor = lane >= 0 && lanes[lane].Toggleable ? Cursors.Hand
             : p.Y>=TrackTop-7 && p.Y<=TrackTop+TrackHeight+7 && Math.Min(Math.Abs(p.X-XAt(Start)),Math.Abs(p.X-XAt(End)))<=14 ? Cursors.SizeWE : Cursors.Hand;
         ToolTip = lane >= 0 ? (lanes[lane].Toggleable ? $"Click to {(lanes[lane].Muted ? "include" : "mute")} {lanes[lane].Name.ToLowerInvariant()} audio in exports" : "Record with separate tracks to adjust desktop and microphone audio separately")
-            : "Click to seek; drag the edges to trim. Wheel pans · Ctrl+wheel zooms";
+            : "Click to seek; drag the edges to trim. Wheel zooms · Shift+wheel pans · Ctrl+wheel changes speed";
     }
     protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); if (toggleHover) { toggleHover = false; InvalidateVisual(); } }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
@@ -368,11 +377,21 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnLostMouseCapture(MouseEventArgs e)
     { base.OnLostMouseCapture(e); EndDrag(); }
     internal void EndDrag() { if (drag == Drag.None) return; bool quiet = drag is Drag.Pan or Drag.Cut; drag=Drag.None; if (!quiet) DragCompleted?.Invoke(); }
+    // Wheel zooms around the pointer, Shift+wheel pans, Ctrl+wheel steps the preview speed.
+    // Deltas are scaled rather than counted, so touchpads and free-spinning wheels stay smooth.
+    internal event Action<int>? SpeedStepRequested;
+    private int speedWheel;
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        if (Keyboard.Modifiers==ModifierKeys.Control) Zoom(e.Delta>0 ? 1.5 : 1/1.5,TimeAt(e.GetPosition(this).X));
-        else PanTo(ViewStart-Math.Sign(e.Delta)*Span*.15);
+        var mods = Keyboard.Modifiers;
+        if (mods == ModifierKeys.Control)
+        {
+            speedWheel += e.Delta;
+            while (Math.Abs(speedWheel) >= 120) { int step = Math.Sign(speedWheel); speedWheel -= step * 120; SpeedStepRequested?.Invoke(step); }
+        }
+        else if (mods == ModifierKeys.Shift) PanTo(ViewStart - e.Delta / 120.0 * Span * .15);
+        else Zoom(Math.Pow(1.5, e.Delta / 120.0), TimeAt(e.GetPosition(this).X));
         e.Handled=true;
     }
     internal void MoveTo(double x)
