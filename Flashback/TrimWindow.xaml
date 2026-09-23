@@ -31,7 +31,7 @@
    </StackPanel>
    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
     <StackPanel x:Name="ListControls" Orientation="Horizontal">
-     <Button x:Name="CutToolButton" Style="{StaticResource TrimButton}" Content="Cut out" Click="CutTool_Click" Background="Transparent" BorderBrush="Transparent" FontSize="12" Margin="0,0,4,0" ToolTip="Black out video or mute audio for part of the clip without removing time" AutomationProperties.Name="Cut out tool"/>
+     <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time" AutomationProperties.Name="Cut out tool"/>
      <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE8C6;" Click="Split_Click" ToolTip="Split the section under the playhead into two" AutomationProperties.Name="Split section"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
@@ -62,7 +62,7 @@
    </DockPanel>
   </Grid>
   <Border Grid.Row="6" BorderBrush="{DynamicResource Outline}" BorderThickness="0,1,0,0" Padding="0,10,0,0"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <StackPanel VerticalAlignment="Center"><TextBlock x:Name="TotalLabel" FontSize="13" FontWeight="SemiBold"/><TextBlock x:Name="StatusLabel" Text="Drag the edges to trim. Add sections to remove gaps." Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
+   <StackPanel VerticalAlignment="Center"><TextBlock x:Name="TotalLabel" FontSize="13" FontWeight="SemiBold"/><TextBlock x:Name="StatusLabel" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
     <Button x:Name="ExportOptionsButton" Style="{StaticResource TrimButton}" Click="ExportOptions_Click" Background="Transparent" BorderBrush="Transparent" FontSize="12" Margin="0,0,6,0" ToolTip="Format, cut, size and audio options"><StackPanel Orientation="Horizontal"><TextBlock Text="Options" VerticalAlignment="Center"/><TextBlock x:Name="ExportOptionsChevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="7,1,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/></StackPanel></Button>
     <Button Style="{StaticResource TrimButton}" x:Name="CancelExportButton" Content="Cancel" Click="CancelExport_Click" Visibility="Collapsed" Margin="0,0,8,0"/>

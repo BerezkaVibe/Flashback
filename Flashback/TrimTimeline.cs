@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media.Animation;
 using System.Windows.Media;
 namespace Flashback;
 
@@ -57,15 +58,31 @@ internal sealed class TrimTimeline : FrameworkElement
     private enum Drag { None, Start, End, Playhead, Pan, Cut }
     private Drag drag;
     private double grabOffset;
-    private const double Inset = 16, RulerHeight = 22, TrackTop = 26, TrackHeight = 32, LaneHeight = 24, LaneGap = 4, ScrollHeight = 6;
-    private double LanesTop => TrackTop + TrackHeight + 6;
-    // Audio lanes fold under a small "Audio" strip so they only take room (and load) when opened.
-    internal bool LanesExpanded { get => lanesExpanded; set { lanesExpanded = value; lanesVersion++; Height = PreferredHeight; InvalidateVisual(); } }
-    private bool lanesExpanded;
+    private const double Inset = 20, RulerHeight = 22, TrackTop = 26, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
+    private double LanesTop => TrackTop + TrackHeight + 4;
+    // Audio lanes fold away behind a chevron beside the video track, so they only take room (and load) when opened.
+    internal bool LanesExpanded
+    {
+        get => lanesExpanded;
+        set
+        {
+            if (lanesExpanded == value) return;
+            lanesExpanded = value;
+            // Slide the lanes open or shut; skip the motion when Windows animations are off.
+            if (SystemParameters.ClientAreaAnimation && IsLoaded)
+                BeginAnimation(LaneRevealProperty, new DoubleAnimation(value ? 1 : 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            else { BeginAnimation(LaneRevealProperty, null); LaneReveal = value ? 1 : 0; }
+        }
+    }
+    private bool lanesExpanded, toggleHover;
+    private static readonly DependencyProperty LaneRevealProperty = DependencyProperty.Register(nameof(LaneReveal), typeof(double), typeof(TrimTimeline),
+        new PropertyMetadata(0.0, (d, _) => { var t = (TrimTimeline)d; t.lanesVersion++; t.Height = t.PreferredHeight; t.InvalidateVisual(); }));
+    // 0 folded, 1 open; in between while the lanes slide.
+    private double LaneReveal { get => (double)GetValue(LaneRevealProperty); set => SetValue(LaneRevealProperty, value); }
     internal event Action? LanesToggleRequested;
-    private double ToggleHeight => lanes.Count > 0 ? 18 : 0;
-    private double LaneTop(int i) => LanesTop + ToggleHeight + i * (LaneHeight + LaneGap);
-    private double ScrollTop => LanesTop + ToggleHeight + (lanesExpanded ? lanes.Count * (LaneHeight + LaneGap) : 0) + 2;
+    private double LaneTop(int i) => LanesTop + i * (LaneHeight + LaneGap);
+    private double LanesSpan => lanes.Count * (LaneHeight + LaneGap);
+    private double ScrollTop => LanesTop + LanesSpan * LaneReveal + 2;
     internal double PreferredHeight => Math.Max(80, ScrollTop + ScrollHeight + 4);
     private static readonly Brush Track = Brush("#252D36"), Kept = Brush("#456D5D"), Accent = Brush("#9CE2C1"), Ink = Brush("#EDF0F3"), Muted = Brush("#9DA6B1");
     private static readonly Brush EndAccent = Brush("#F3BF84"), Tick = Brush("#4A5561"), LaneFill = Brush("#1A2027"), Wave = Brush("#7FA8C9"), WaveMuted = Brush("#3A444F");
@@ -76,32 +93,41 @@ internal sealed class TrimTimeline : FrameworkElement
     internal double TimeAt(double x) => Math.Clamp(ViewStart + (x-Inset) / Math.Max(1, ActualWidth-2*Inset) * Span, ViewStart, Math.Min(Duration,ViewStart+Span));
     internal double XAt(double t) => Inset + Math.Clamp((t-ViewStart) / Math.Max(.001, Span), 0, 1) * Math.Max(1, ActualWidth-2*Inset);
     private double Snap(double t) => Math.Clamp(Math.Round(t * FrameRate) / FrameRate, 0, Duration);
-    public TrimTimeline() { Focusable = true; Cursor = Cursors.Hand; Height = PreferredHeight; }
+    public TrimTimeline()
+    {
+        Focusable = true; Cursor = Cursors.Hand; Height = PreferredHeight;
+        staticLayer.CacheMode = new BitmapCache { SnapsToDevicePixels = true };
+        AddVisualChild(staticLayer); AddVisualChild(liveLayer);
+    }
 
-    // The ruler, sections and waveforms only change with the view; playback redraws
-    // just the playhead on top of a cached drawing.
-    private DrawingGroup? cache;
+    // Two layers: the ruler, sections and waveforms are drawn once into a GPU-cached layer and
+    // only redrawn when the view changes. Playback and scrubbing touch just the thin playhead
+    // layer, so the waveform is never re-rasterized while the playhead moves.
+    private readonly DrawingVisual staticLayer = new(), liveLayer = new();
     private object? cacheKey;
+    protected override int VisualChildrenCount => 2;
+    protected override Visual GetVisualChild(int index) => index == 0 ? staticLayer : liveLayer;
+    protected override HitTestResult? HitTestCore(PointHitTestParameters p) =>
+        new Rect(RenderSize).Contains(p.HitPoint) ? new PointHitTestResult(this, p.HitPoint) : null;
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
-        if (Duration <= 0 || ActualWidth <= 2*Inset) return;
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, IsKeyboardFocusWithin, SectionsKey(), SelectedSection, cutsVersion);
-        if (cache == null || !Equals(cacheKey, key))
+        if (Duration <= 0 || ActualWidth <= 2*Inset)
+        { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, IsKeyboardFocusWithin, SectionsKey(), SelectedSection, cutsVersion, toggleHover);
+        if (!Equals(cacheKey, key))
         {
-            cache = new DrawingGroup();
-            using (var layer = cache.Open()) DrawStatic(layer);
-            cache.Freeze(); cacheKey = key;
+            using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
+            cacheKey = key;
         }
-        dc.DrawDrawing(cache);
+        using var live = liveLayer.RenderOpen();
         if (drag == Drag.Cut && Math.Abs(cutEnd - cutAnchor) > 1e-6)
-            DrawCut(dc, cutLane, Math.Min(cutAnchor, cutEnd), Math.Max(cutAnchor, cutEnd), VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            DrawCut(live, cutLane, Math.Min(cutAnchor, cutEnd), Math.Max(cutAnchor, cutEnd), VisualTreeHelper.GetDpi(this).PixelsPerDip);
         double playhead = XAt(Position);
         if (Position >= ViewStart - 1e-9 && Position <= ViewStart + Span + 1e-9)
         {
-            dc.DrawLine(InkPen, new Point(playhead, 6), new Point(playhead, ScrollTop - 2));
-            dc.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 4, 10, 7), 2, 2);
+            live.DrawLine(InkPen, new Point(playhead, 6), new Point(playhead, ScrollTop - 2));
+            live.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 4, 10, 7), 2, 2);
         }
     }
     private int SectionsKey() { int hash = Sections.Count; foreach (var s in Sections) hash = HashCode.Combine(hash, s.Start, s.End); return hash; }
@@ -129,8 +155,16 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.DrawLine(new Pen(Track, 1), new Point(x, TrackTop+8), new Point(x, TrackTop+TrackHeight-8));
         }
         DrawLaneToggle(dc, dpi);
-        if (lanesExpanded) for (int i = 0; i < lanes.Count; i++) DrawLane(dc, lanes[i], LaneTop(i), width, dpi);
-        foreach (var cut in cuts) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+        foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+        if (LaneReveal > 0 && lanes.Count > 0)
+        {
+            // Lanes slide out from under the video track and fade in as they open.
+            dc.PushClip(new RectangleGeometry(new Rect(0, LanesTop, ActualWidth, LanesSpan * LaneReveal)));
+            dc.PushOpacity(LaneReveal);
+            for (int i = 0; i < lanes.Count; i++) DrawLane(dc, lanes[i], LaneTop(i), width, dpi);
+            foreach (var cut in cuts) if (cut.Lane >= 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+            dc.Pop(); dc.Pop();
+        }
         if (ZoomFactor > 1.001)
         {
             // A slim scrollbar shows where the zoomed view sits in the whole clip.
@@ -181,24 +215,32 @@ internal sealed class TrimTimeline : FrameworkElement
         var peaks = lane.Peaks; double mid = top + LaneHeight / 2;
         if (peaks.Length > 0)
         {
-            // One vertical stroke per pixel column, using the loudest peak in that column.
+            // One filled outline (loudest peak per pixel column) rather than a stroke per column:
+            // a single fill is far cheaper for WPF to rasterize than thousands of thin lines.
+            int columns = Math.Max(1, (int)width);
+            var upper = new Point[columns]; var lower = new Point[columns];
+            for (int px = 0; px < columns; px++)
+            {
+                int a = (int)((ViewStart + px / width * Span) * 100), b = Math.Max(a + 1, (int)((ViewStart + (px + 1) / width * Span) * 100));
+                float peak = 0; for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]);
+                double h = Math.Max(.5, peak * (LaneHeight / 2 - 2));
+                upper[px] = new Point(Inset + px + .5, mid - h); lower[columns - 1 - px] = new Point(Inset + px + .5, mid + h);
+            }
             var geometry = new StreamGeometry();
             using (var g = geometry.Open())
-                for (int px = 0; px < (int)width; px++)
-                {
-                    int a = (int)((ViewStart + px / width * Span) * 100), b = Math.Max(a + 1, (int)((ViewStart + (px + 1) / width * Span) * 100));
-                    float peak = 0; for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]);
-                    double h = Math.Max(.5, peak * (LaneHeight / 2 - 2));
-                    g.BeginFigure(new Point(Inset + px + .5, mid - h), false, false); g.LineTo(new Point(Inset + px + .5, mid + h), true, false);
-                }
+            {
+                g.BeginFigure(upper[0], true, true);
+                g.PolyLineTo(upper, false, false); g.PolyLineTo(lower, false, false);
+            }
             geometry.Freeze();
-            var pen = new Pen(lane.Muted ? WaveMuted : Wave, 1); pen.Freeze();
-            dc.DrawGeometry(null, pen, geometry);
+            dc.DrawGeometry(lane.Muted ? WaveMuted : Wave, null, geometry);
         }
+        // A single mixed track needs no name; separate tracks get a small tag to tell them apart.
+        if (lanes.Count == 1 && !lane.Toggleable) return;
         var name = Text(lane.Name + (lane.Muted ? " · muted" : ""), 10, lane.Muted ? Muted : Ink, dpi);
-        var chip = new Rect(Inset + 4, top + (LaneHeight - 16) / 2, name.Width + 12, 16);
+        var chip = new Rect(Inset + 3, top + (LaneHeight - 15) / 2, name.Width + 10, 15);
         dc.DrawRoundedRectangle(Track, lane.Toggleable ? new Pen(lane.Muted ? Tick : Accent, 1) : null, chip, 4, 4);
-        dc.DrawText(name, new Point(chip.X + 6, chip.Y + 1));
+        dc.DrawText(name, new Point(chip.X + 5, chip.Y + (chip.Height - name.Height) / 2));
     }
     private static readonly Brush CutFill = Brush("#99B42C38"), CutEdge = Brush("#E5484D");
     // Band rectangle for the video track (-1) or an audio lane.
@@ -210,17 +252,25 @@ internal sealed class TrimTimeline : FrameworkElement
         if (lanesExpanded) for (int i = 0; i < lanes.Count; i++) { var b = Band(i); if (p.Y >= b.Top && p.Y <= b.Bottom) return i; }
         return -2;
     }
-    private Rect ToggleArea => new(Inset, LanesTop, 170, ToggleHeight);
+    // The audio toggle lives in the left margin beside the video track, so folding costs no height.
+    private Rect ToggleArea => new(0, TrackTop, Inset - 7, TrackHeight);
+    private static readonly Typeface Glyphs = new("Segoe MDL2 Assets");
+    // Just a chevron that turns down as the lanes open; a small red dot marks muted audio while folded.
     private void DrawLaneToggle(DrawingContext dc, double dpi)
     {
         if (lanes.Count == 0) return;
-        int audioCuts = cuts.Count(c => c.Lane >= 0);
-        string text = (lanesExpanded ? "▾ Audio" : "▸ Audio") + (lanes.Count > 1 ? $" · {lanes.Count} tracks" : "") + (!lanesExpanded && audioCuts > 0 ? $" · {audioCuts} muted" : "");
-        dc.DrawText(Text(text, 11, lanesExpanded ? Ink : Muted, dpi), new Point(Inset + 2, LanesTop + 1));
+        var strong = lanesExpanded || toggleHover ? Ink : Muted;
+        var chevron = new FormattedText("", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyphs, 9, strong, dpi);
+        var center = new Point((Inset - 7) / 2, TrackTop + TrackHeight / 2);
+        if (toggleHover) dc.DrawRoundedRectangle(Track, null, new Rect(0, TrackTop, Inset - 7, TrackHeight), 3, 3);
+        dc.PushTransform(new RotateTransform(90 * LaneReveal, center.X, center.Y));
+        dc.DrawText(chevron, new Point(center.X - chevron.Width / 2, center.Y - chevron.Height / 2));
+        dc.Pop();
+        if (!lanesExpanded && cuts.Any(c => c.Lane >= 0)) dc.DrawEllipse(CutEdge, null, new Point(center.X, TrackTop + TrackHeight - 5), 2, 2);
     }
     private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi)
     {
-        if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && !lanesExpanded)) return;
+        if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
         dc.DrawRoundedRectangle(CutFill, new Pen(CutEdge, 1), area, 3, 3);
@@ -284,7 +334,9 @@ internal sealed class TrimTimeline : FrameworkElement
             else if (drag == Drag.Pan) PanToPointer(p.X); else MoveTo(p.X);
             return;
         }
-        if (lanes.Count > 0 && ToggleArea.Contains(p)) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
+        bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
+        if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
+        if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
         if (CutMode && BandAt(p) > -2)
         {
             Cursor = Cursors.Cross;
@@ -297,6 +349,7 @@ internal sealed class TrimTimeline : FrameworkElement
         ToolTip = lane >= 0 ? (lanes[lane].Toggleable ? $"Click to {(lanes[lane].Muted ? "include" : "mute")} {lanes[lane].Name.ToLowerInvariant()} audio in exports" : "Record with separate tracks to adjust desktop and microphone audio separately")
             : "Click to seek; drag the edges to trim. Wheel pans · Ctrl+wheel zooms";
     }
+    protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); if (toggleHover) { toggleHover = false; InvalidateVisual(); } }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);

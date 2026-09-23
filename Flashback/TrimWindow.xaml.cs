@@ -20,7 +20,7 @@ public partial class TrimWindow : Window
     private readonly DispatcherTimer clock;
     private CancellationTokenSource? exportCancellation;
     private TaskCompletionSource? exportFinished;
-    private bool playing, updating, closeAfterCancel, closed, pendingSeek, seekAwaiting;
+    private bool playing, updating, closeAfterCancel, closed, pendingSeek, seekAwaiting, resumeAfterDrag;
     private double playhead;
     private long seekIssued;
     private readonly bool previewEnabled;
@@ -40,8 +40,9 @@ public partial class TrimWindow : Window
         Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
-        Timeline.DragStarted += Pause;
-        Timeline.DragCompleted += FlushSeek;
+        // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
+        Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
+        Timeline.DragCompleted += () => { if (resumeAfterDrag) { resumeAfterDrag = false; StartPlayback(playhead); } else FlushSeek(); };
         EndBox.Text = KeepSection.TimeText(media.Duration);
         SectionsList.ItemsSource = sections;
         sections.CollectionChanged += (_, _) => UpdateSummary(); UpdateSummary(); SetPlayhead(0);
@@ -71,7 +72,7 @@ public partial class TrimWindow : Window
         pendingSeek=false; seekAwaiting=false; PreviewRate=1; Player.SpeedRatio=1;
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
-        StatusLabel.Text="Drag the edges to trim. Add sections to remove gaps.";
+        StatusLabel.Text="";
         if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
         LoadLanes();
         return true;
@@ -153,16 +154,19 @@ public partial class TrimWindow : Window
     // Scrubbing renders frames for paused seeks, but left on during playback it lets
     // Media Foundation's audio run ahead of video after a seek.
     private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; }
-    private void Player_Opened(object sender, RoutedEventArgs e) { pendingSeek=true; FlushSeek(); if (playing) Player.Play(); else Player.Pause(); }
+    // The first Play after opening restarts from zero unless the player has already been run once
+    // since MediaOpened, so prime it here before applying the pending position.
+    private void Player_Opened(object sender, RoutedEventArgs e) { Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
     private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
     { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
     private void StartPlayback(double start, int section = -1)
     {
         // Seek while paused, then play, so audio and video restart from the same point.
-        Player.Pause(); Player.ScrubbingEnabled=false;
+        Player.Pause();
         SetPlayhead(start); previewSection=section;
         pendingSeek=true; FlushSeek();
+        Player.ScrubbingEnabled=false;
         Player.Play(); playing=true; PlayToggle.Content="\uE769";
     }
     private void Play_Click(object sender, RoutedEventArgs e)

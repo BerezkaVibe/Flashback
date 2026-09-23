@@ -97,8 +97,7 @@ public partial class TrimWindow
     {
         if (source.Length == 0 || exportCancellation != null) return;
         Timeline.CutMode = !Timeline.CutMode;
-        CutToolButton.SetResourceReference(Control.BorderBrushProperty, Timeline.CutMode ? "Accent" : "Outline");
-        CutToolButton.SetResourceReference(Control.ForegroundProperty, Timeline.CutMode ? "Accent" : "Ink");
+        ShowCutTool();
         if (Timeline.CutMode && Timeline.Lanes.Count > 0 && !Timeline.LanesExpanded) LanesToggleRequested();
         StatusLabel.Text = Timeline.CutMode ? "Drag across the video to black it out, or across an audio lane to mute it. Click a cut to restore it." : "Cut out tool off.";
     }
@@ -126,7 +125,13 @@ public partial class TrimWindow
         CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
         Player.IsMuted = userMuted || mute;
     }
-    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.CutMode = false; CutToolButton.SetResourceReference(Control.BorderBrushProperty, "Outline"); CutToolButton.SetResourceReference(Control.ForegroundProperty, "Ink"); }
+    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.CutMode = false; ShowCutTool(); }
+    // Lit in the accent color while the tool is on; otherwise it looks like the other icons.
+    private void ShowCutTool()
+    {
+        if (Timeline.CutMode) { CutToolButton.SetResourceReference(Control.BorderBrushProperty, "Accent"); CutToolButton.SetResourceReference(Control.ForegroundProperty, "Accent"); }
+        else { CutToolButton.ClearValue(Control.BorderBrushProperty); CutToolButton.ClearValue(Control.ForegroundProperty); }
+    }
     private bool LaneMuted(int lane) => media.HasSeparateTracks && (lane == 0 ? DesktopMix.Value : MicrophoneMix.Value) < .5;
     private void LaneToggled(int lane)
     {
