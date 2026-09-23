@@ -14,12 +14,12 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Flashback Setup")]
-[assembly: AssemblyVersion("0.5.3.0")]
-[assembly: AssemblyFileVersion("0.5.3.0")]
+[assembly: AssemblyVersion("0.5.4.0")]
+[assembly: AssemblyFileVersion("0.5.4.0")]
 
 internal static class Setup
 {
-    const string Version="0.5.3";
+    const string Version="0.5.4";
     const string Marker="Flashback-install-4a0fe501-ea28-4327-802f-21a68ab327e9";
     const string Manifest="installed-files.txt";
     const string RegistryPath=@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Flashback";

@@ -148,16 +148,20 @@ public partial class TrimWindow : Window
         ProjectChanged(); UpdateExportHint();
         ExportButton.IsEnabled = source.Length>0 && exportCancellation == null && (sections.Count > 0 || Timeline.End-Timeline.Start >= .1);
     }
-    private void Pause() { Player.Pause(); playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; }
+    // Scrubbing renders frames for paused seeks, but left on during playback it lets
+    // Media Foundation's audio run ahead of video after a seek.
+    private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; }
     private void Player_Opened(object sender, RoutedEventArgs e) { pendingSeek=true; FlushSeek(); if (playing) Player.Play(); else Player.Pause(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
     private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
     { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
     private void StartPlayback(double start, int section = -1)
     {
+        // Seek while paused, then play, so audio and video restart from the same point.
+        Player.Pause(); Player.ScrubbingEnabled=false;
         SetPlayhead(start); previewSection=section;
-        Player.Play(); playing=true; PlayToggle.Content="\uE769";
         pendingSeek=true; FlushSeek();
+        Player.Play(); playing=true; PlayToggle.Content="\uE769";
     }
     private void Play_Click(object sender, RoutedEventArgs e)
     {

@@ -6,12 +6,17 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <Version>0.5.3</Version>
+    <Version>0.5.4</Version>
     <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
     <AssemblyName>Flashback</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/Flashback.ico</ApplicationIcon>
     <RestorePackagesPath>../.packages</RestorePackagesPath>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />

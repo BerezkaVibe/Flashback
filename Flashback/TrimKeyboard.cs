@@ -12,7 +12,9 @@ public partial class TrimWindow
     private static readonly double[] previewRates={.25,.5,1,1.5,2,4};
     private void SetPreviewRate(double rate)
     {
-        PreviewRate=rate; Player.SpeedRatio=rate;
+        bool changed=rate!=PreviewRate; PreviewRate=rate; Player.SpeedRatio=rate;
+        // A live rate change can leave audio offset from video; restart from the playhead to realign.
+        if (changed && playing) StartPlayback(playhead, previewSection);
         StatusLabel.Text=$"Preview {rate:0.##}× · {(Player.IsMuted ? "muted" : $"volume {Player.Volume:P0}")}";
     }
     private void StepFrame(int direction)

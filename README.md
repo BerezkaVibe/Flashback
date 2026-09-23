@@ -1,6 +1,13 @@
-# Flashback 0.5.3 for Windows
+# Flashback 0.5.4 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
+
+**[Download the latest Flashback Setup.exe](https://github.com/BerezkaVibe/Flashback/releases/latest)** — one installer with the app, .NET runtime and FFmpeg included.
+
+## 0.5.4 trimmer playback sync and smaller package
+
+- Trimmer preview audio no longer drifts away from the video. Playback now seeks while paused and then starts, instead of seeking a clip that is already playing. Frame scrubbing is used only while paused. Changing preview speed during playback restarts from the playhead so audio and video line up again. Saved and exported clips were never affected.
+- The package drops 13 unused .NET language folders and the debug symbols file, and turns off the unused BinaryFormatter serializer.
 
 ## 0.5.3 installer lock fix
 
@@ -8,7 +15,7 @@ Setup retries temporary file-sharing locks. A locked temporary uninstaller no lo
 
 ## 0.5.2 installation and timeline zoom
 
-Download and run `Flashback-0.5.3-Setup.exe`. Quit any running Flashback using its tray menu first. Choose Install, then Launch. The installer includes the app, .NET runtime and FFmpeg; it needs no additional download or administrator access. Start menu and optional desktop shortcuts point to `%LOCALAPPDATA%\Programs\Flashback\Flashback.exe`. Windows Settings > Apps includes an uninstall entry. Uninstall removes installed application files while preserving saved clips and preferences. A future setup can update the same installation. This build is unsigned.
+Download and run `Flashback-0.5.4-Setup.exe`. Quit any running Flashback using its tray menu first. Choose Install, then Launch. The installer includes the app, .NET runtime and FFmpeg; it needs no additional download or administrator access. Start menu and optional desktop shortcuts point to `%LOCALAPPDATA%\Programs\Flashback\Flashback.exe`. Windows Settings > Apps includes an uninstall entry. Uninstall removes installed application files while preserving saved clips and preferences. A future setup can update the same installation. This build is unsigned.
 
 The trimmer now explicitly labels timeline zoom (for example, `Timeline · 4× zoom`). The small full-clip overview highlights the portion currently visible. Drag the highlighted window or click elsewhere in the overview to pan, without changing cut points. The adjacent minus/plus buttons change zoom; Fit restores the entire clip. Keyboard and wheel zoom keep the indicator and overview synchronized. These controls affect only the timeline, not video magnification or exported resolution.
 
@@ -42,7 +49,7 @@ Build setup with `./build-installer.ps1` after publishing the app. It uses the W
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.5.3-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.5.4-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.
