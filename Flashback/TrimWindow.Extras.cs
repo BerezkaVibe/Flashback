@@ -13,15 +13,35 @@ namespace Flashback;
 public partial class TrimWindow
 {
     private CancellationTokenSource? waveformLoad;
-    // Compress for Discord targets Nitro Basic's 50 MB upload limit.
-    private const double DiscordLimitMb = 50;
-    // Shown only when the export would not already fit, estimated from the clip's bitrate.
-    private void UpdateDiscordButton()
+    private double lastCompressMb;
+    // Size of the selected part of the original, from the clip's own bitrate.
+    private double SelectionMb()
     {
-        if (DiscordButton == null) return;
         double selected = sections.Count > 0 ? sections.Sum(s => s.Duration) : Math.Max(0, Timeline.End - Timeline.Start);
-        double estimate = media.Duration > 0 ? sourceBytes * selected / media.Duration : 0;
-        DiscordButton.Visibility = source.Length > 0 && estimate > DiscordLimitMb * 1_000_000 ? Visibility.Visible : Visibility.Collapsed;
+        return media.Duration > 0 ? sourceBytes * selected / media.Duration / 1_000_000 : 0;
+    }
+    private void Compress_Click(object sender, RoutedEventArgs e)
+    {
+        if (source.Length == 0 || exportCancellation != null) return;
+        double original = Math.Max(2, Math.Ceiling(SelectionMb()));
+        CompressSlider.Maximum = original;
+        CompressSlider.Value = Math.Clamp(lastCompressMb > 0 ? lastCompressMb : Math.Round(original / 2), 1, original);
+        UpdateCompressLabels(); CompressPopup.IsOpen = true;
+    }
+    private void CompressSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e) { if (CompressLabel != null && CompressHint != null && Timeline != null) UpdateCompressLabels(); }
+    private void UpdateCompressLabels()
+    {
+        double original = CompressSlider.Maximum, target = CompressSlider.Value;
+        CompressLabel.Text = $"{target:0} MB of {original:0} MB ({target / original:P0})";
+        double seconds = sections.Count > 0 ? sections.Sum(s => s.Duration) : Math.Max(.1, Timeline.End - Timeline.Start);
+        double mbps = (target * 1_000_000 * .92 * 8 / seconds - 128000) / 1_000_000;
+        CompressHint.Text = mbps < .4 ? "Too small for this length. Raise the size or shorten the selection."
+            : $"About {mbps:0.#} Mbps for video. {(mbps >= 12 ? "Keeps the original resolution." : mbps >= 4.5 ? "Exports at 1080p 60fps." : "Exports at 720p 30fps.")} Discord allows 10 MB free, 50 MB with Nitro Basic and 500 MB with Nitro.";
+    }
+    private async void CompressGo_Click(object sender, RoutedEventArgs e)
+    {
+        CompressPopup.IsOpen = false; lastCompressMb = CompressSlider.Value;
+        await CompressAsync(CompressSlider.Value, CompressCopy.IsChecked == true);
     }
 
     private void UpdateAddButton()
@@ -96,7 +116,7 @@ public partial class TrimWindow
     private void CropDone_Click(object sender, RoutedEventArgs e)
     {
         CropArea.Editing = false; CropBar.Visibility = Visibility.Collapsed; RefreshCropState();
-        if (CurrentCrop() is { } c) StatusLabel.Text = $"Cropping to {c.Width & ~1} × {c.Height & ~1}.";
+        if (CurrentCrop() is { } c) StatusLabel.Text = $"Cropping to {c.Width & ~1} Ã— {c.Height & ~1}.";
     }
     private void RefreshCropState()
     {
@@ -113,13 +133,12 @@ public partial class TrimWindow
     }
     private void ResetCrop() { CropArea.Crop = null; CropArea.Aspect = 0; CropArea.Editing = false; CropArea.Visibility = CropBar.Visibility = Visibility.Collapsed; CropButton.SetResourceReference(Control.ForegroundProperty, "Ink"); }
 
-    // One click: an MP4 under 50 MB next to the original, then copied for pasting.
-    private async void DiscordExport_Click(object sender, RoutedEventArgs e)
+    // Saves an MP4 at the chosen size next to the original, optionally copied for pasting.
+    private async Task CompressAsync(double limit, bool copy)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         KeepSection[] ranges;
         try { ranges = ExportRanges(); } catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
-        double limit = ((FrameworkElement)sender).Tag is string tag && double.TryParse(tag, NumberStyles.Float, CultureInfo.InvariantCulture, out var mb) ? mb : DiscordLimitMb;
         double seconds = ranges.Sum(r => r.Duration);
         double budget = limit * 1_000_000 * .92 * 8 / seconds - 128000;
         if (budget < 400_000) { StatusLabel.Text = $"That's too long to fit under {limit:0} MB. Keep it under about {limit * 1_000_000 * .92 * 8 / 528000:0} seconds."; return; }
@@ -130,31 +149,33 @@ public partial class TrimWindow
         ShareExportOptions options;
         try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100 }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
-        string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + " — discord";
+        string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" â€” {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");
         for (int i = 2; File.Exists(destination); i++) destination = Path.Combine(folder, $"{name} {i}.mp4");
         var result = await RunExportAsync(destination, ranges, options, rough: false);
         if (result == null) return;
+        string size = $"{new FileInfo(result.Path).Length / 1_000_000d:0.#} MB";
+        if (!copy) { StatusLabel.Text = $"Saved {Path.GetFileName(result.Path)} ({size})."; return; }
         try
         {
             Clipboard.SetFileDropList(new StringCollection { result.Path });
-            StatusLabel.Text = $"Copied {Path.GetFileName(result.Path)} ({new FileInfo(result.Path).Length / 1_000_000d:0.#} MB). Paste it into Discord with Ctrl+V.";
+            StatusLabel.Text = $"Copied {Path.GetFileName(result.Path)} ({size}). Paste it anywhere with Ctrl+V.";
         }
-        catch { StatusLabel.Text = "Saved " + Path.GetFileName(result.Path) + ", but it couldn't be copied. Drag it into Discord instead."; }
+        catch { StatusLabel.Text = $"Saved {Path.GetFileName(result.Path)} ({size}), but it couldn't be copied. Drag it in from its folder instead."; }
     }
     private KeepSection[] ExportRanges() =>
         ClipEditor.Validate(sections.Count > 0 ? sections : new[] { new KeepSection(KeepSection.Parse(StartBox.Text), KeepSection.Parse(EndBox.Text)) }, media.Duration).ToArray();
 
-    // Shared by Export and Export for Discord. Returns null when canceled or failed.
+    // Shared by Export and Compress. Returns null when canceled or failed.
     private async Task<ClipResult?> RunExportAsync(string destination, KeepSection[] ranges, ShareExportOptions options, bool rough)
     {
         Pause(); exportCancellation = new(); exportFinished = new(TaskCreationOptions.RunContinuationsAsynchronously); SetEditingEnabled(false);
-        ExportProgress.Value = 0; CancelExportButton.Visibility = Visibility.Visible; UpdateSummary(); StatusLabel.Text = "Exporting your selected sections…";
+        ExportProgress.Value = 0; CancelExportButton.Visibility = Visibility.Visible; UpdateSummary(); StatusLabel.Text = "Exporting your selected sectionsâ€¦";
         try
         {
             var progress = new Progress<double>(p => ExportProgress.Value = p);
             if (!rough) await WaitForCaptureAsync(exportCancellation.Token);
-            StatusLabel.Text = "Exporting selected sections…";
+            StatusLabel.Text = "Exporting selected sectionsâ€¦";
             var result = rough
                 ? await FastClipExport.ExportAsync(source, destination, ranges, progress, exportCancellation.Token)
                 : await ExportServices.PreciseAsync(source, destination, ranges, progress, exportCancellation.Token, options: options);
@@ -171,5 +192,5 @@ public partial class TrimWindow
         }
     }
     private void SetEditingEnabled(bool enabled) =>
-        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = DiscordButton.IsEnabled = enabled;
+        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = enabled;
 }

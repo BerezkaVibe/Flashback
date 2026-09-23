@@ -64,7 +64,18 @@
    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
     <Button x:Name="ExportOptionsButton" Style="{StaticResource TrimButton}" Click="ExportOptions_Click" Background="Transparent" BorderBrush="Transparent" FontSize="12" Margin="0,0,6,0" ToolTip="Format, cut, size and audio options"><StackPanel Orientation="Horizontal"><TextBlock Text="Options" VerticalAlignment="Center"/><TextBlock x:Name="ExportOptionsChevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="7,1,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/></StackPanel></Button>
     <Button Style="{StaticResource TrimButton}" x:Name="CancelExportButton" Content="Cancel" Click="CancelExport_Click" Visibility="Collapsed" Margin="0,0,8,0"/>
-    <Button x:Name="DiscordButton" Style="{StaticResource TrimButton}" Content="Compress for Discord" Tag="50" Click="DiscordExport_Click" Visibility="Collapsed" Margin="0,0,8,0" FontSize="12" ToolTip="Makes a copy under 50 MB next to the original and copies it, ready to paste into Discord"/>
+    <Button x:Name="CompressButton" Style="{StaticResource TrimButton}" Content="Compress" Click="Compress_Click" Margin="0,0,8,0" FontSize="12" ToolTip="Make a smaller copy at a size you choose"/>
+    <Popup x:Name="CompressPopup" PlacementTarget="{Binding ElementName=CompressButton}" Placement="Top" StaysOpen="False" AllowsTransparency="True" VerticalOffset="-6">
+     <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="14" Width="300">
+      <StackPanel>
+       <DockPanel><TextBlock x:Name="CompressLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Compress to" FontSize="13" FontWeight="SemiBold"/></DockPanel>
+       <Slider x:Name="CompressSlider" Minimum="1" Maximum="100" Value="50" SmallChange="1" LargeChange="10" IsSnapToTickEnabled="True" TickFrequency="1" IsMoveToPointEnabled="True" Margin="0,10,0,4" ValueChanged="CompressSlider_Changed" AutomationProperties.Name="Target size in megabytes"/>
+       <TextBlock x:Name="CompressHint" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"/>
+       <CheckBox x:Name="CompressCopy" Content="Copy it when done, ready to paste" IsChecked="True" FontSize="12" Margin="0,8,0,4"/>
+       <Button Content="Compress" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" MinHeight="34" Padding="16,6" FontSize="12" Click="CompressGo_Click"/>
+      </StackPanel>
+     </Border>
+    </Popup>
     <Button x:Name="ExportButton" Content="Export clip…" MinHeight="36" Padding="16,6" FontSize="13" Style="{StaticResource PrimaryButton}" Click="Export_Click"/>
    </StackPanel>
    <StackPanel x:Name="ExportOptionsPanel" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" Margin="0,10,0,0">
