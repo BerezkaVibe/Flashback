@@ -142,7 +142,7 @@ public partial class TrimWindow : Window
     {
         if (ExportButton == null || media == null) return;
         Timeline.Sections = sections; Timeline.InvalidateVisual();
-        SectionsList.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed;
+        SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed;
         TotalLabel.Text = sections.Count > 0 ? $"{sections.Count} sections · {sections.Sum(s => s.Duration):0.##} s" : $"Selected range · {Math.Max(0,Timeline.End-Timeline.Start):0.##} s";
         ProjectChanged(); UpdateExportHint();
         ExportButton.IsEnabled = source.Length>0 && exportCancellation == null && (sections.Count > 0 || Timeline.End-Timeline.Start >= .1);
@@ -298,6 +298,13 @@ public partial class TrimWindow : Window
         }
     }
     private void CancelExport_Click(object sender, RoutedEventArgs e) => exportCancellation?.Cancel();
+    // Export options stay folded away so the video keeps most of the window.
+    private void ExportOptions_Click(object sender, RoutedEventArgs e)
+    {
+        bool show = ExportOptionsPanel.Visibility != Visibility.Visible;
+        ExportOptionsPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        ExportOptionsChevron.Text = show ? "" : "";
+    }
     public async Task CloseForQuitAsync()
     {
         if (exportCancellation != null) { var done = exportFinished!.Task; exportCancellation.Cancel(); await done; }

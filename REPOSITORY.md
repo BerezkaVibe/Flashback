@@ -5,6 +5,7 @@
 - 0.5.2 is the original single-EXE installer and timeline overview baseline. Preserve its source as a separate release commit. Its installer has a known cleanup-lock bug.
 - 0.5.3 changes installer reliability. The recorder and trimmer behavior remain the same as 0.5.2.
 - 0.5.4 fixes trimmer preview A/V sync and slims the package.
+- 0.6.0 reworks settings, hotkeys, audio controls and the trimmer layout.
 
 ## Source layout
 
