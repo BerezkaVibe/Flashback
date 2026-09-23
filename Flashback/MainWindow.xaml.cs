@@ -435,7 +435,6 @@ public partial class MainWindow : Window
     private void SnapClapper() => ClapperTilt.BeginAnimation(RotateTransform.AngleProperty, new System.Windows.Media.Animation.DoubleAnimation(-14, 0, TimeSpan.FromMilliseconds(110)) { AutoReverse = true, BeginTime = TimeSpan.Zero });
     private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenFolder();
     private void Play_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) Process.Start(new ProcessStartInfo(lastClip) { UseShellExecute = true }); } catch (Exception ex) { Tell(ex.Message, true); } }
-    private void Reveal_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) { var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true }; start.ArgumentList.Add("/select,"); start.ArgumentList.Add(lastClip); Process.Start(start); } } catch (Exception ex) { Tell(ex.Message, true); } }
     public void ShowWindow() { Show(); WindowState = WindowState.Normal; Activate(); if (LibraryTab.IsSelected) _ = ReloadLibraryAsync(); }
     private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); } }
     private void SessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)

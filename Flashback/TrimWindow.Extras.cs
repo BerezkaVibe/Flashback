@@ -177,7 +177,7 @@ public partial class TrimWindow
     private void CropDone_Click(object sender, RoutedEventArgs e)
     {
         CropArea.Editing = false; CropBar.Visibility = Visibility.Collapsed; RefreshCropState();
-        if (CurrentCrop() is { } c) StatusLabel.Text = $"Cropping to {c.Width & ~1} Ã— {c.Height & ~1}.";
+        if (CurrentCrop() is { } c) StatusLabel.Text = $"Cropping to {c.Width & ~1} × {c.Height & ~1}.";
     }
     private void RefreshCropState()
     {
@@ -210,7 +210,7 @@ public partial class TrimWindow
         ShareExportOptions options;
         try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
-        string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" â€” {limit:0} MB";
+        string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" — {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");
         for (int i = 2; File.Exists(destination); i++) destination = Path.Combine(folder, $"{name} {i}.mp4");
         var result = await RunExportAsync(destination, ranges, options, rough: false);
@@ -252,11 +252,11 @@ public partial class TrimWindow
     private async Task<ClipResult?> RunExportAsync(string destination, KeepSection[] ranges, ShareExportOptions options, bool rough)
     {
         Pause(); exportCancellation = new(); exportFinished = new(TaskCreationOptions.RunContinuationsAsynchronously); SetEditingEnabled(false);
-        ExportProgress.Value = 0; CancelExportButton.Visibility = Visibility.Visible; UpdateSummary(); StatusLabel.Text = "Exporting your selected sectionsâ€¦";
+        ExportProgress.Value = 0; CancelExportButton.Visibility = Visibility.Visible; UpdateSummary(); StatusLabel.Text = "Exporting your selected sections…";
         try
         {
             var progress = new Progress<double>(p => ExportProgress.Value = p);
-            StatusLabel.Text = "Exporting selected sectionsâ€¦";
+            StatusLabel.Text = "Exporting selected sections…";
             var result = rough
                 ? await FastClipExport.ExportAsync(source, destination, ranges, progress, exportCancellation.Token)
                 : await ExportServices.PreciseAsync(source, destination, ranges, progress, exportCancellation.Token, options: options);
