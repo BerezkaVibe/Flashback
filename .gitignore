@@ -1,0 +1,21 @@
+# Track only project source and documentation from this development workspace.
+/*
+!/.gitignore
+!/.gitattributes
+!/Flashback/
+!/installer/
+!/licenses/
+!/build.ps1
+!/build-installer.ps1
+!/LICENSE
+!/README.md
+!/REPOSITORY.md
+!/THIRD-PARTY-NOTICES.md
+!/VALIDATION.md
+**/bin/
+**/obj/
+*.user
+*.suo
+*.pfx
+*.snk
+.env*
