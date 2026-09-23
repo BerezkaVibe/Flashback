@@ -30,6 +30,8 @@ public sealed class Settings
     public int MicrophoneVolume { get; set; } = 100;
     public int AudioBitrate { get; set; } = 160;
     public bool CheckForUpdates { get; set; } = true;
+    public bool SeparateAudioTracks { get; set; }
+    public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Flashback");
     public string GameOverride { get; set; } = "";
@@ -70,7 +72,7 @@ public sealed class Settings
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
         || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
-        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate;
+        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks;
     public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
     public int BitrateMbps => (int)Math.Round((Quality switch { "Compact" => 8, "High" => 24, _ => 14 }) * (Height switch { 720 => 0.6, 1440 => 1.7, 2160 => 3.0, 0 => 2.0, _ => 1.0 }) * Math.Max(0.65, FrameRate / 60.0));
     public double EstimatedBufferMb => BitrateMbps * (ReplaySeconds + 12) / 8.0 * 1.1;

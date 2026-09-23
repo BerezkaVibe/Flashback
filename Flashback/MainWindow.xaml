@@ -49,6 +49,7 @@
       </Grid>
       <TextBlock Text="Audio quality" Style="{StaticResource Caption}" Margin="0,14,0,7"/>
       <ComboBox x:Name="AudioBitrateBox" HorizontalAlignment="Left" MinWidth="220"/>
+      <CheckBox x:Name="SeparateTracksCheck" Content="Keep desktop and microphone on separate tracks" Margin="0,12,0,0" ToolTip="Clips keep a combined track for players and Discord, plus desktop and microphone tracks you can adjust in the trimmer."/>
       <TextBlock Text="Choose the headphones you listen through. Their audio is captured across apps, tabs and screens. Microphone adds your voice; both sources share one track. Volume only changes your recordings, not what you hear." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,14,0,6"/>
       <TextBlock Text="Use the lock beside the speaker or microphone icon to keep a device no matter what. Flashback won't switch when Windows does, and if the device disconnects, recording continues with silence for it until it's back." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,10"/>
       <Button Content="Refresh audio devices" Click="RefreshAudio_Click" HorizontalAlignment="Left"/>
@@ -86,6 +87,7 @@
       <TextBlock Text="Leave blank to sort by the foreground game / app. Example: Rainbow Six Siege / Rainbow Six Siege — 2026-09-12_21-34-08-125 — 60s.mp4" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,13"/>
       <CheckBox x:Name="LaunchCheck" Content="Launch in the tray when I sign into Windows"/>
       <CheckBox x:Name="AutoBufferCheck" Content="Start the replay buffer when Flashback launches"/>
+      <CheckBox x:Name="AutoGameCheck" Content="Start recording when a game opens, and stop after it closes"/>
       <TextBlock Text="External editor" Style="{StaticResource Caption}" Margin="0,18,0,7"/>
       <TextBlock x:Name="EditorLabel" Foreground="{DynamicResource Muted}" Margin="0,0,0,10" TextWrapping="Wrap"/><Button Content="Choose app…" Click="ChooseEditor_Click" HorizontalAlignment="Left" Margin="0,0,0,12"/>
       <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,18,0,0"/>

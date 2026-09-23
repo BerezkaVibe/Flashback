@@ -38,6 +38,11 @@ public record KeepSection(double Start, double End)
 public record ClipMedia(double Duration, bool HasAudio)
 {
     public double FrameRate { get; init; } = 60;
+    // Flashback records 1 track, or 3 when desktop and microphone are kept separate: combined, desktop, microphone.
+    public int AudioTracks { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public bool HasSeparateTracks => AudioTracks >= 3;
     public static ClipMedia Read(string path)
     {
         using var stream = File.OpenRead(path);
@@ -57,9 +62,14 @@ public record ClipMedia(double Duration, bool HasAudio)
                 start += (long)size;
             }
         }
-        double duration = 0, frameRate = 60; bool audio = false;
+        double duration = 0, frameRate = 60; bool audio = false; int audioTracks = 0, width = 0, height = 0;
         foreach (var movie in Atoms(0, stream.Length).Where(a => a.Type == "moov"))
             foreach (var track in Atoms(movie.Start, movie.End).Where(a => a.Type == "trak"))
+            {
+                // tkhd ends with the track's display width and height as 16.16 fixed point.
+                int trackWidth = 0, trackHeight = 0;
+                foreach (var header in Atoms(track.Start, track.End).Where(a => a.Type == "tkhd" && a.End - a.Start >= 84))
+                { stream.Position = header.End - 8; trackWidth = (int)(U32() >> 16); trackHeight = (int)(U32() >> 16); }
                 foreach (var media in Atoms(track.Start, track.End).Where(a => a.Type == "mdia"))
                 {
                     string kind = ""; double trackDuration = 0; uint trackScale = 0;
@@ -78,6 +88,7 @@ public record ClipMedia(double Duration, bool HasAudio)
                     if (kind == "vide")
                     {
                         duration = Math.Max(duration, trackDuration);
+                        if (trackWidth > 0 && trackHeight > 0) { width = trackWidth; height = trackHeight; }
                         foreach (var minf in Atoms(media.Start,media.End).Where(a=>a.Type=="minf"))
                         foreach (var stbl in Atoms(minf.Start,minf.End).Where(a=>a.Type=="stbl"))
                         foreach (var stts in Atoms(stbl.Start,stbl.End).Where(a=>a.Type=="stts"))
@@ -91,10 +102,11 @@ public record ClipMedia(double Duration, bool HasAudio)
                             if (double.IsFinite(rate) && rate>=1 && rate<=1000) frameRate=rate;
                         }
                     }
-                    if (kind == "soun") audio = true;
+                    if (kind == "soun") { audio = true; audioTracks++; }
                 }
+            }
         if (!double.IsFinite(duration) || duration <= 0) throw new IOException("This clip has no readable MP4 video duration.");
-        return new(duration, audio) { FrameRate=frameRate };
+        return new(duration, audio) { FrameRate=frameRate, AudioTracks=audioTracks, Width=width, Height=height };
     }
 }
 

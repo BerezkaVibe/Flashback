@@ -45,6 +45,31 @@ internal static class EditorDiagnostics
         Check(Math.Abs(result.Duration - 4) < .1 && ClipMedia.Read(joined).HasAudio, "Hardware export joins two sections in chronological order with audio");
         await Ffmpeg("-i", joined, "-f", "null", "-");
         Check(true, "Combined clip fully decodes without errors");
+        Check(metadata.Width == 640 && metadata.Height == 360 && metadata.AudioTracks == 1 && !metadata.HasSeparateTracks, "Read video size and audio track count from MP4 headers");
+        var cropped = Path.Combine(folder, "Cropped square.mp4");
+        await ExportServices.PreciseAsync(source, cropped, new[] { new KeepSection(1, 3) }, null, CancellationToken.None, true, new ShareExportOptions { Crop = new CropRect(100, 20, 300, 300) });
+        Check(ClipMedia.Read(cropped).Width == 300 && ClipMedia.Read(cropped).Height == 300, "Crop exports the selected area at its source size");
+        foreach (var format in new[] { ExportFormat.Gif, ExportFormat.Mp3, ExportFormat.Mov })
+        {
+            var options = ShareExportOptions.For(format);
+            var output = Path.Combine(folder, "Format check" + options.Extension);
+            await ExportServices.PreciseAsync(source, output, new[] { new KeepSection(1, 3) }, null, CancellationToken.None, true, options);
+            var header = File.ReadAllBytes(output).Take(12).ToArray();
+            bool valid = format switch
+            {
+                ExportFormat.Gif => header[0] == 'G' && header[1] == 'I' && header[2] == 'F',
+                ExportFormat.Mp3 => header[0] == 'I' && header[1] == 'D' && header[2] == '3' || header[0] == 0xFF,
+                _ => System.Text.Encoding.ASCII.GetString(header, 4, 4) is "ftyp" or "moov" or "wide" or "mdat"
+            };
+            Check(valid && new FileInfo(output).Length > 1000, $"{format} export writes a valid file");
+        }
+        var tracks = Path.Combine(folder, "Three tracks.mp4");
+        await Ffmpeg("-y", "-f", "lavfi", "-i", "color=gray:s=320x180:r=30:d=3", "-f", "lavfi", "-i", "sine=f=440:d=3", "-f", "lavfi", "-i", "sine=f=660:d=3", "-f", "lavfi", "-i", "sine=f=880:d=3",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", tracks);
+        Check(ClipMedia.Read(tracks).HasSeparateTracks, "Clips with desktop and microphone tracks are recognized");
+        var remixed = Path.Combine(folder, "Microphone muted.mp4");
+        await ExportServices.PreciseAsync(tracks, remixed, new[] { new KeepSection(.5, 2.5) }, null, CancellationToken.None, true, new ShareExportOptions { MicrophoneVolume = 0 });
+        Check(ClipMedia.Read(remixed).AudioTracks == 1 && Math.Abs(ClipMedia.Read(remixed).Duration - 2) < .15, "Track volumes mix separate recordings down to one playable track");
         var colors = Path.Combine(Storage.Root, "frames.rgb");
         await Ffmpeg("-y", "-i", joined, "-vf", "fps=1,scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", colors);
         var rgb = File.ReadAllBytes(colors);

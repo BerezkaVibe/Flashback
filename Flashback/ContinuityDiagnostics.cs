@@ -17,7 +17,7 @@ internal static class ContinuityDiagnostics
             File.AppendAllText(Path.Combine(Storage.Root, "continuity-results.txt"), "PASS " + message + "\n");
         }
         await RecoveryDiagnostics.RunAsync(Check);
-        Check(VideoFrameBridge.RetryDelay(0).TotalMilliseconds == 200 && VideoFrameBridge.RetryDelay(20).TotalSeconds == 2, "Display reconnect starts at 200 ms and caps retry delay at two seconds without a retry limit");
+        Check(VideoFrameBridge.RetryDelay(0).TotalMilliseconds == 0 && VideoFrameBridge.RetryDelay(1).TotalMilliseconds == 50 && VideoFrameBridge.RetryDelay(20).TotalSeconds == 1, "Display reconnect retries immediately and caps retry delay at one second without a retry limit");
         await using var recorder = new Recorder { UseBridgeForTests = true };
         string? fault = null; recorder.Faulted += (_, error) => fault = error;
         var settings = hardware ? Storage.Load(out _) : new Settings { MicrophoneAudio = true };

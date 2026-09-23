@@ -119,6 +119,7 @@ public static class GameTracker
         ["FortniteClient-Win64-Shipping"] = "Fortnite", ["RocketLeague"] = "Rocket League", ["cod"] = "Call of Duty"
     };
     public static string LastForeground { get; private set; } = "Desktop";
+    internal static bool IsKnownGame(string processName) => Known.ContainsKey(processName);
     public static void Update()
     {
         try

@@ -12,15 +12,21 @@ internal sealed class FrameHistory : IDisposable
     private readonly object gate = new();
     private readonly Queue<Sample> pending = new();
     private readonly int capacity;
+    private readonly FramePool pool;
     private byte[]? current;
     private long lastLive;
     private bool live;
     internal long Dropped { get; private set; }
     internal int Capacity => capacity;
+    // Half a second of pictures, capped at 48 MB of frames.
+    internal static int CapacityFor(int frameBytes, int fps) => Math.Clamp(Math.Min((fps + 1) / 2, 48 * 1024 * 1024 / frameBytes), 2, 60);
     private readonly record struct Sample(long Tick, byte[]? Pixels, bool Live);
 
-    internal FrameHistory(int frameBytes, int fps) =>
-        capacity = Math.Clamp(Math.Min((fps + 1) / 2, 48 * 1024 * 1024 / frameBytes), 2, 60);
+    internal FrameHistory(FramePool pool, int fps)
+    {
+        this.pool = pool;
+        capacity = CapacityFor(pool.FrameBytes, fps);
+    }
 
     internal void Publish(byte[]? pixels, long tick, bool available)
     {
@@ -66,5 +72,5 @@ internal sealed class FrameHistory : IDisposable
             while (pending.TryDequeue(out var sample)) Return(sample.Pixels);
         }
     }
-    private static void Return(byte[]? pixels) { if (pixels != null) ArrayPool<byte>.Shared.Return(pixels); }
+    private void Return(byte[]? pixels) => pool.Return(pixels);
 }

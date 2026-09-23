@@ -88,15 +88,15 @@ internal static class TrimInteractionDiagnostics
             trim.HandleKey(Key.Z,ModifierKeys.None,false);
             Check(trim.Timeline.ViewDuration==0,"Z restores the full timeline");
             trim.Timeline.Zoom(4,6);
-            Check(trim.TimelineZoomLabel.Text.Contains("4× zoom") && trim.TimelineFitButton.IsEnabled,"Timeline zoom is explicitly labeled and exposes Fit");
+            Check(trim.TimelineZoomLabel.Text.Contains("4×") && trim.TimelineFitButton.IsEnabled,"Timeline zoom is explicitly labeled and exposes Fit");
             double markedStart=trim.Timeline.Start,markedEnd=trim.Timeline.End,oldPlayhead=trim.Playhead;
             trim.Timeline.PanTo(7);
-            Check(trim.Timeline.ViewStart==7 && trim.Timeline.Start==markedStart && trim.Timeline.End==markedEnd && trim.Playhead==oldPlayhead,"Overview panning preserves trim marks and playhead");
+            Check(trim.Timeline.ViewStart==7 && trim.Timeline.Start==markedStart && trim.Timeline.End==markedEnd && trim.Playhead==oldPlayhead,"Panning preserves trim marks and playhead");
             EditorDiagnostics.Render(content,1120,900,"trim-zoomed.png");
-            Check(Math.Abs(trim.TimelineMap.Viewport.Width/(trim.TimelineMap.ActualWidth-4)-.25)<.001,"Full clip overview highlights one quarter of the clip at 4x zoom");
+            Check(Math.Abs(trim.Timeline.ZoomFactor-4)<.001,"Timeline reports a 4x zoom for its scrollbar and badge");
             EditorDiagnostics.Render(content,860,700,"trim-zoomed-small.png");
             trim.Timeline.Fit();
-            Check(trim.TimelineZoomLabel.Text.Contains("Full clip") && !trim.TimelineFitButton.IsEnabled,"Fit restores the full-clip indicator");
+            Check(trim.TimelineZoomLabel.Text=="1×" && !trim.TimelineFitButton.IsEnabled,"Fit restores the full-clip indicator");
             Check(trim.SeekTimecode("00:00:08.500") && trim.Playhead==8.5 && !trim.SeekTimecode("99") && !trim.SeekTimecode("garbage"),"Go-to-time validates input and preserves the current position on invalid input");
             EditorDiagnostics.Render(ShortcutGuide.Content(TrimShortcuts.Resolve(new Settings())),680,720,"shortcut-guide.png");
         }

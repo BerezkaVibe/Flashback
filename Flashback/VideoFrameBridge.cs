@@ -18,7 +18,12 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
     private readonly CancellationTokenSource cancellation = new();
     private readonly Func<string, Process> launch;
     private readonly Action<string> report;
-    private readonly Func<GpuDesktopCapture>? nativeCapture;
+    private readonly Func<FramePool, GpuDesktopCapture>? nativeCapture;
+    private readonly FramePool pool;
+    // Capture gaps: time from losing the display to the next fresh frame.
+    internal long Recoveries;
+    internal double LastGapMilliseconds, LongestGapMilliseconds;
+    private long gapStarted;
     private readonly int frameBytes;
     private readonly byte[] black;
     private readonly FrameHistory frames;
@@ -46,11 +51,12 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
     internal Exception? Failure { get; private set; }
     internal int Connections { get; private set; }
 
-    internal VideoFrameBridge(int width, int height, string pixelFormat, int fps, Func<string, Process> launch, Action<string> report, Func<GpuDesktopCapture>? nativeCapture = null)
+    internal VideoFrameBridge(int width, int height, string pixelFormat, int fps, Func<string, Process> launch, Action<string> report, Func<FramePool, GpuDesktopCapture>? nativeCapture = null)
     {
         this.fps = fps; this.launch = launch; this.report = report; this.nativeCapture = nativeCapture; PixelFormat = pixelFormat;
         frameBytes = checked(width * height * (pixelFormat == "nv12" ? 3 : 8) / 2);
-        frames = new FrameHistory(frameBytes, fps);
+        pool = new FramePool(frameBytes, FrameHistory.CapacityFor(frameBytes, fps) + 4);
+        frames = new FrameHistory(pool, fps);
         black = new byte[frameBytes];
         if (pixelFormat == "nv12") { Array.Fill(black, (byte)16, 0, width * height); Array.Fill(black, (byte)128, width * height, frameBytes - width * height); }
         else for (int i = 3; i < black.Length; i += 4) black[i] = 255;
@@ -90,7 +96,7 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
                 { connect.CancelAfter(TimeSpan.FromSeconds(10)); await capturePipe.WaitForConnectionAsync(connect.Token); }
                 while (true)
                 {
-                    buffer = ArrayPool<byte>.Shared.Rent(frameBytes);
+                    buffer = pool.Rent();
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(TimeSpan.FromSeconds(10));
                     await capturePipe.ReadExactlyAsync(buffer.AsMemory(0, frameBytes), timeout.Token);
@@ -106,7 +112,7 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
             {
         
                 frames.Publish(null, Stopwatch.GetTimestamp(), false);
-                if (buffer != null) ArrayPool<byte>.Shared.Return(buffer);
+                pool.Return(buffer);
                 try { if (running is { HasExited: false }) running.Kill(true); } catch { }
                 if (errors != null) try { await errors; } catch { }
                 producer = null; running?.Dispose();
@@ -116,7 +122,25 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
             catch (OperationCanceledException) { break; }
         }
     }
-    internal static TimeSpan RetryDelay(int failures) => TimeSpan.FromMilliseconds(Math.Min(2000, 200 * (1 << Math.Min(failures, 4))));
+    // Reconnect immediately, then back off gently; a missing display is retried at least once a second.
+    private void EndGap(long now)
+    {
+        double ms = (now - gapStarted) * 1000.0 / Stopwatch.Frequency;
+        gapStarted = 0; Interlocked.Increment(ref Recoveries);
+        LastGapMilliseconds = ms; LongestGapMilliseconds = Math.Max(LongestGapMilliseconds, ms);
+        string line = $"{DateTimeOffset.Now:O} display gap {ms:0} ms\n";
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var path = Path.Combine(Storage.Root, "capture-gaps.log");
+                if (File.Exists(path) && new FileInfo(path).Length > 256 * 1024) File.Delete(path);
+                File.AppendAllText(path, line);
+            }
+            catch { }
+        });
+    }
+    internal static TimeSpan RetryDelay(int failures) => TimeSpan.FromMilliseconds(failures switch { 0 => 0, 1 => 50, 2 => 100, 3 => 250, 4 => 500, _ => 1000 });
     internal bool UsingNative { get; private set; }
     private bool CaptureNative(CancellationToken token)
     {
@@ -128,7 +152,7 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
             {
                 while (Stopwatch.GetTimestamp() < Interlocked.Read(ref holdUntil))
                     if (token.WaitHandle.WaitOne(25)) return true;
-                using var source = nativeCapture!(); Connections++; UsingNative = true;
+                using var source = nativeCapture!(pool); Connections++; UsingNative = true;
                 long previousBusy = 0, previousSubmitted = 0;
                 report("Native DXGI capture: GPU resize/color conversion, NV12 readback.");
                 cadence.Reset();
@@ -143,13 +167,16 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
                     GpuBusyReads += source.BusyReads-previousBusy; GpuSubmittedFrames += source.SubmittedFrames-previousSubmitted;
                     previousBusy=source.BusyReads; previousSubmitted=source.SubmittedFrames;
 
+                    long now = Stopwatch.GetTimestamp();
                     if (frame != null)
                     {
                         Interlocked.Increment(ref ReceivedFrames);
-
                         failures = 0;
+                        if (gapStarted != 0) EndGap(now);
                     }
-                    frames.Publish(frame, Stopwatch.GetTimestamp(), true);
+                    else if (source.Lost && gapStarted == 0) gapStarted = now;
+                    // Brief gaps hold the last picture; longer ones fall back to black.
+                    frames.Publish(frame, now, gapStarted == 0 || Stopwatch.GetElapsedTime(gapStarted).TotalSeconds < .5);
                 }
             }
             catch (Exception ex) when (!token.IsCancellationRequested && (ex is NotSupportedException ||
@@ -160,9 +187,14 @@ internal sealed class VideoFrameBridge : IAsyncDisposable
                 report("Native GPU conversion unavailable; using compatibility capture. " + ex.Message);
                 return false;
             }
-            catch (Exception ex) when (!token.IsCancellationRequested) { report("Display capture unavailable; recording black frames. " + ex.Message); }
+            catch (Exception ex) when (!token.IsCancellationRequested)
+            {
+                if (gapStarted == 0) gapStarted = Stopwatch.GetTimestamp();
+                report("Display capture unavailable; rebuilding capture. " + ex.Message);
+            }
             catch (OperationCanceledException) { }
-            finally { frames.Publish(null, Stopwatch.GetTimestamp(), false); }
+            // No black frame is published here: the writer holds the last picture briefly
+            // and only turns black if the rebuild takes longer.
             if (token.WaitHandle.WaitOne(RetryDelay(failures++))) break;
         }
         return true;

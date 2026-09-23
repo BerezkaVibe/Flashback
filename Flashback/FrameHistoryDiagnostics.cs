@@ -16,7 +16,7 @@ internal static class FrameHistoryDiagnostics
         }
         long Tick(int frame) => (long)(frame * (double)Stopwatch.Frequency / 60);
         byte[] Picture(int id) { var data = ArrayPool<byte>.Shared.Rent(16); data[0] = (byte)id; return data; }
-        using (var history = new FrameHistory(1920 * 1080 * 3 / 2, 60))
+        using (var history = new FrameHistory(new FramePool(1920 * 1080 * 3 / 2, 64), 60))
         {
             Check(history.Capacity == 16, "1080p history is bounded to sixteen pictures");
             for (int i = 0; i < 12; i++) history.Publish(Picture(i), Tick(i), true);
@@ -32,7 +32,7 @@ internal static class FrameHistoryDiagnostics
             Check(history.Select(Tick(35), out _)![0] == 22, "Static desktop heartbeat preserves its last image");
             Check(history.Select(Tick(55), out _) == null, "Missing capture heartbeat produces black after timeout");
         }
-        using (var history = new FrameHistory(1920 * 1080 * 3 / 2, 60))
+        using (var history = new FrameHistory(new FramePool(1920 * 1080 * 3 / 2, 64), 60))
         {
             for (int i = 0; i < 40; i++) history.Publish(Picture(i), Tick(i), true);
             Check(history.Dropped == 24, "Long stalls drop bounded history without blocking capture or growing memory");

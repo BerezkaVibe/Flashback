@@ -36,8 +36,8 @@ public partial class TrimWindow : Window
         Activated += (_, _) => LoadKeys();
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         Timeline.Duration = media.Duration; Timeline.End = media.Duration; Timeline.FrameRate = media.FrameRate;
-        TimelineMap.Timeline=Timeline; Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
-        Timeline.RangeChanged += SetRange;
+        Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
+        Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
         Timeline.DragStarted += Pause;
         Timeline.DragCompleted += FlushSeek;
@@ -65,13 +65,14 @@ public partial class TrimWindow : Window
         bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
         if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current trim selection. Your original video is unchanged.","Open video")) return false;
         if(!FlushProject()) return false; projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
-        sections.Clear(); undo.Clear(); redo.Clear();
+        sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; PreviewRate=1; Player.SpeedRatio=1;
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="Drag the edges to trim. Add sections to remove gaps.";
         if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
+        LoadLanes();
         return true;
     }
     private void ImportError(string message) { StatusLabel.Text=message; ImportStatus.Text=message; }
@@ -186,7 +187,8 @@ public partial class TrimWindow : Window
         double end=Math.Max(Math.Min(.1,media.Duration),playhead);
         SetRange(Math.Min(Timeline.Start,Math.Max(0,end-.1)),end);
     }
-    private void Add_Click(object sender, RoutedEventArgs e) => ChangeSection(false);
+    // With a section selected the same button updates it; otherwise it adds a new one.
+    private void Add_Click(object sender, RoutedEventArgs e) => ChangeSection(SectionsList.SelectedItem is KeepSection);
     private void Update_Click(object sender, RoutedEventArgs e) => ChangeSection(true);
     private void ChangeSection(bool replace)
     {
@@ -198,8 +200,8 @@ public partial class TrimWindow : Window
             var item = new KeepSection(KeepSection.Parse(StartBox.Text), KeepSection.Parse(EndBox.Text)); list.Add(item);
             list = ClipEditor.Validate(list, media.Duration);
             double previousPosition=playhead;
-            Snapshot(); Pause(); sections.Clear(); foreach (var s in list) sections.Add(s); SectionsList.SelectedItem = item; SeekTo(previousPosition);
-            StatusLabel.Text = "Sections will be joined in their original order.";
+            Snapshot(); Pause(); sections.Clear(); foreach (var s in list) sections.Add(s); SectionsList.SelectedIndex = -1; SeekTo(previousPosition);
+            StatusLabel.Text = $"Section {list.IndexOf(item) + 1} {(replace ? "updated" : "added")}. Sections are joined in order.";
         }
         catch (Exception ex) { StatusLabel.Text = ex.Message; }
     }
@@ -207,6 +209,7 @@ public partial class TrimWindow : Window
     {
         if (SectionsList.SelectedItem is KeepSection s)
         { Pause(); StartBox.Text = KeepSection.TimeText(s.Start); EndBox.Text = KeepSection.TimeText(s.End); SeekTo(s.Start); }
+        Timeline.SelectedSection = SectionsList.SelectedIndex; Timeline.InvalidateVisual(); UpdateAddButton();
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
@@ -268,34 +271,15 @@ public partial class TrimWindow : Window
         if (source.Length==0 || exportCancellation != null) return;
         ShareExportOptions options;
         try { options=ExportOptions(); } catch(ArgumentException ex) { StatusLabel.Text=ex.Message; return; }
-        bool convert=SharePreset.SelectedIndex>0 || options.TargetMb>0;
-        bool rough=ExportMode.SelectedIndex==1 && !convert;
+        bool rough=ExportMode.SelectedIndex==1 && !NeedsReencode(options);
         KeepSection[] exportRanges;
-        try { exportRanges=ClipEditor.Validate(sections.Count > 0 ? sections : new[] { new KeepSection(KeepSection.Parse(StartBox.Text),KeepSection.Parse(EndBox.Text)) },media.Duration).ToArray(); }
+        try { exportRanges=ExportRanges(); }
         catch (ArgumentException ex) { StatusLabel.Text=ex.Message; return; }
-        var dialog = new Microsoft.Win32.SaveFileDialog { Title = "Export combined clip", Filter = "MP4 video|*.mp4", DefaultExt = ".mp4", AddExtension = true, OverwritePrompt = false,
-            InitialDirectory = Path.GetDirectoryName(source), FileName = Path.GetFileNameWithoutExtension(source) + " — edit " + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".mp4" };
+        string ext = options.Extension, kind = options.Format switch { ExportFormat.Gif => "GIF animation", ExportFormat.Mp3 => "MP3 audio", ExportFormat.Mov => "MOV video", _ => "MP4 video" };
+        var dialog = new Microsoft.Win32.SaveFileDialog { Title = "Export combined clip", Filter = $"{kind}|*{ext}", DefaultExt = ext, AddExtension = true, OverwritePrompt = false,
+            InitialDirectory = Path.GetDirectoryName(source), FileName = Path.GetFileNameWithoutExtension(source) + " — edit " + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ext };
         if (dialog.ShowDialog(this) != true) return;
-        Pause(); exportCancellation = new(); exportFinished = new(TaskCreationOptions.RunContinuationsAsynchronously); Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = false;
-        ExportProgress.Value = 0; CancelExportButton.Visibility = Visibility.Visible; UpdateSummary(); StatusLabel.Text = "Exporting your selected sections…";
-        try
-        {
-            var progress = new Progress<double>(p => ExportProgress.Value = p);
-            if(!rough) await WaitForCaptureAsync(exportCancellation.Token);
-            StatusLabel.Text="Exporting selected sections…";
-            var result = rough
-                ? await FastClipExport.ExportAsync(source, dialog.FileName, exportRanges, progress, exportCancellation.Token)
-                : await ExportServices.PreciseAsync(source, dialog.FileName, exportRanges, progress, exportCancellation.Token, options:options);
-            StatusLabel.Text = "Saved: " + Path.GetFileName(result.Path); Exported?.Invoke(result);
-        }
-        catch (OperationCanceledException) { StatusLabel.Text = "Export canceled. The original clip is unchanged."; ExportProgress.Value = 0; }
-        catch (Exception ex) { StatusLabel.Text = ex.Message; }
-        finally
-        {
-            exportCancellation.Dispose(); exportCancellation = null;
-            Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = true;
-            CancelExportButton.Visibility = Visibility.Collapsed; UpdateSummary(); exportFinished.TrySetResult(); if (closeAfterCancel) Close();
-        }
+        await RunExportAsync(dialog.FileName, exportRanges, options, rough);
     }
     private void CancelExport_Click(object sender, RoutedEventArgs e) => exportCancellation?.Cancel();
     // Export options stay folded away so the video keeps most of the window.

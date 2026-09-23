@@ -62,8 +62,8 @@ public partial class TrimWindow
     {
         keys=TrimShortcuts.Resolve(Storage.Load(out _));
         string Key(TrimAction action) => TrimShortcuts.Display(keys[action]);
-        AddSectionButton.Content="Add section  "+Key(TrimAction.AddSection);
-        AddSectionButton.ToolTip="Add the marked range · "+Key(TrimAction.AddSection);
+        UpdateAddButton();
+
         MarkStartKey.Text=Key(TrimAction.MarkStart); MarkStartButton.ToolTip="Set start at playhead · "+MarkStartKey.Text; AutomationProperties.SetName(MarkStartButton,"Set start, shortcut "+MarkStartKey.Text);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
         foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
@@ -105,7 +105,7 @@ public partial class TrimWindow
             case TrimAction.GoToTime: Timecode_Click(this,none); break;
             case TrimAction.MarkStart: MarkStart_Click(this,none); break;
             case TrimAction.MarkEnd: MarkEnd_Click(this,none); break;
-            case TrimAction.AddSection: ChangeSection(false); break;
+            case TrimAction.AddSection: Add_Click(this,none); break;
             case TrimAction.Split: Split_Click(this,none); break;
             case TrimAction.RemoveSection: Remove_Click(this,none); break;
             case TrimAction.PreviousSection: NavigateSection(-1); break;

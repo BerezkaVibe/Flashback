@@ -16,7 +16,16 @@ internal sealed class GpuDesktopCapture : IDisposable
 {
     private ID3D11Device device = null!;
     private ID3D11DeviceContext context = null!;
-    private IDXGIOutputDuplication duplication = null!;
+    private IDXGIOutputDuplication? duplication;
+    private IDXGIOutput1 monitorOutput = null!;
+    private uint modeWidth, modeHeight;
+    private long nextRecoveryTick;
+    private readonly FramePool? pool;
+    // Windows revokes duplication on fullscreen switches, UAC prompts and mode changes.
+    // While Lost, Read re-creates only the duplication on the same device.
+    internal bool Lost { get; private set; }
+    internal long Recoveries { get; private set; }
+    private const int AccessLost = unchecked((int)0x887A0026), WaitTimeout = unchecked((int)0x887A0027);
     private ID3D11VideoDevice videoDevice = null!;
     private ID3D11VideoContext videoContext = null!;
     private ID3D11VideoProcessorEnumerator enumerator = null!;
@@ -35,9 +44,9 @@ internal sealed class GpuDesktopCapture : IDisposable
     private readonly bool cursor;
     private readonly int left, top;
     
-    internal GpuDesktopCapture(CaptureDisplay display, int width, int height, int fps, bool cursor)
+    internal GpuDesktopCapture(CaptureDisplay display, int width, int height, int fps, bool cursor, FramePool? pool = null)
     {
-        this.width = width; this.height = height; this.cursor = cursor; acquireWaitMs = (uint)Math.Clamp(500 / fps, 1, 8);
+        this.width = width; this.height = height; this.cursor = cursor; this.pool = pool; acquireWaitMs = (uint)Math.Clamp(500 / fps, 1, 8);
         try
         {
             using var factory = CreateDXGIFactory1<IDXGIFactory1>();
@@ -48,15 +57,16 @@ internal sealed class GpuDesktopCapture : IDisposable
                     new[] { FeatureLevel.Level_11_1, FeatureLevel.Level_11_0 }, out device, out context).CheckError();
                 adapter.EnumOutputs((uint)display.OutputIndex, out var monitor).CheckError();
                 using (monitor)
-                using (var monitor1 = monitor.QueryInterface<IDXGIOutput1>())
                 {
+                    monitorOutput = monitor.QueryInterface<IDXGIOutput1>();
                     left = monitor.Description.DesktopCoordinates.Left; top = monitor.Description.DesktopCoordinates.Top;
                     if (monitor.Description.Rotation is not ModeRotation.Identity and not ModeRotation.Unspecified)
                         throw new NotSupportedException("Rotated displays use compatibility capture.");
-                    duplication = monitor1.DuplicateOutput(device);
+                    duplication = monitorOutput.DuplicateOutput(device);
                 }
             }
             var mode = duplication.Description.ModeDescription;
+            modeWidth = mode.Width; modeHeight = mode.Height;
             videoDevice = device.QueryInterface<ID3D11VideoDevice>();
             videoContext = context.QueryInterface<ID3D11VideoContext>();
             var content = new VideoProcessorContentDescription
@@ -88,11 +98,19 @@ internal sealed class GpuDesktopCapture : IDisposable
         byte[]? ready = ReadCompleted();
         try
         {
+            if (Lost && !TryRecover()) return ready;
             // Keep ownership between ticks so Windows coalesces desktop changes instead
             // of spending GPU time copying every game present into an unused surface.
-            if (ownsDesktopFrame) { ownsDesktopFrame = false; duplication.ReleaseFrame().CheckError(); }
-            var result = duplication.AcquireNextFrame(acquireWaitMs, out var info, out var resource);
-            if (result.Code == unchecked((int)0x887A0027)) return ready;
+            if (ownsDesktopFrame)
+            {
+                ownsDesktopFrame = false;
+                var released = duplication!.ReleaseFrame();
+                if (released.Code == AccessLost) { MarkLost(); return ready; }
+                released.CheckError();
+            }
+            var result = duplication!.AcquireNextFrame(acquireWaitMs, out var info, out var resource);
+            if (result.Code == WaitTimeout) return ready;
+            if (result.Code == AccessLost) { MarkLost(); return ready; }
             result.CheckError();
             ownsDesktopFrame = true;
             using (resource)
@@ -126,8 +144,36 @@ internal sealed class GpuDesktopCapture : IDisposable
             context.Flush(); // Submit work; never wait for its completion here.
             return ready ?? ReadCompleted();
         }
-        catch { if (ready != null) ArrayPool<byte>.Shared.Return(ready); throw; }
+        catch { Recycle(ready); throw; }
     }
+    private void MarkLost()
+    {
+        Lost = true; ownsDesktopFrame = false; nextRecoveryTick = 0;
+        try { duplication?.Dispose(); } catch { }
+        duplication = null;
+    }
+    // Re-duplicates on the existing device. A changed desktop size needs new textures,
+    // so it throws and the caller rebuilds everything.
+    private bool TryRecover()
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (now < nextRecoveryTick) return false;
+        try
+        {
+            var next = monitorOutput.DuplicateOutput(device);
+            var mode = next.Description.ModeDescription;
+            if (mode.Width != modeWidth || mode.Height != modeHeight) { next.Dispose(); throw new InvalidOperationException($"Display mode changed to {mode.Width}×{mode.Height}."); }
+            duplication = next; Lost = false; Recoveries++;
+            return true;
+        }
+        catch (SharpGen.Runtime.SharpGenException ex) when (ex.HResult is unchecked((int)0x80070005) or unchecked((int)0x887A0004) or unchecked((int)0x887A0022) or AccessLost)
+        {
+            // Secure desktop (UAC, lock screen) or a fullscreen transition in progress: retry shortly.
+            nextRecoveryTick = now + System.Diagnostics.Stopwatch.Frequency / 20;
+            return false;
+        }
+    }
+    private void Recycle(byte[]? bytes) { if (bytes == null) return; if (pool != null) pool.Return(bytes); else ArrayPool<byte>.Shared.Return(bytes); }
     private byte[]? ReadCompleted()
     {
         if (pending == 0) return null;
@@ -135,7 +181,7 @@ internal sealed class GpuDesktopCapture : IDisposable
         var result = context.Map(texture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.DoNotWait, out var mapped);
         if (result.Code == unchecked((int)0x887A000A)) { BusyReads++; return null; }
         result.CheckError();
-        byte[] bytes = ArrayPool<byte>.Shared.Rent(width * height * 3 / 2);
+        byte[] bytes = pool?.Rent() ?? ArrayPool<byte>.Shared.Rent(width * height * 3 / 2);
         try
         {
             if(mapped.RowPitch == width) Marshal.Copy(mapped.DataPointer, bytes, 0, width*height*3/2);
@@ -143,7 +189,7 @@ internal sealed class GpuDesktopCapture : IDisposable
                 Marshal.Copy(mapped.DataPointer + row * (int)mapped.RowPitch, bytes, row * width, width);
             return bytes;
         }
-        catch { ArrayPool<byte>.Shared.Return(bytes); throw; }
+        catch { Recycle(bytes); throw; }
         finally { context.Unmap(texture, 0); head=(head+1)%staging.Length; pending--; }
     }
     public void Dispose()
@@ -151,7 +197,7 @@ internal sealed class GpuDesktopCapture : IDisposable
         if (ownsDesktopFrame) { ownsDesktopFrame = false; try { duplication?.ReleaseFrame(); } catch { } }
         outputView?.Dispose(); inputView?.Dispose(); foreach(var texture in staging) texture?.Dispose(); output?.Dispose(); input?.Dispose();
         processor?.Dispose(); enumerator?.Dispose(); videoContext?.Dispose(); videoDevice?.Dispose();
-        duplication?.Dispose(); context?.Dispose(); device?.Dispose();
+        duplication?.Dispose(); monitorOutput?.Dispose(); context?.Dispose(); device?.Dispose();
     }
     [StructLayout(LayoutKind.Sequential)] private struct CursorInfo { public int Size, Flags; public IntPtr Cursor; public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct IconInfo { public int IsIcon; public uint XHotspot, YHotspot; public IntPtr Mask, Color; }

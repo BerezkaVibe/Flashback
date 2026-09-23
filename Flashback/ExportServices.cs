@@ -9,14 +9,40 @@ using System.Threading.Tasks;
 
 namespace Flashback;
 
+internal enum ExportFormat { Mp4, Mp4Hd60, Mp4Sd30, Mov, Gif, Mp3 }
+// Source-pixel rectangle; width and height are kept even for 4:2:0 video.
+internal sealed record CropRect(int X, int Y, int Width, int Height)
+{
+    internal string Filter => $"crop={Width & ~1}:{Height & ~1}:{X & ~1}:{Y & ~1}";
+}
+
 internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, int Fps = 0)
 {
+    internal ExportFormat Format { get; init; } = ExportFormat.Mp4;
+    internal CropRect? Crop { get; init; }
+    // Applied only to clips recorded with separate desktop and microphone tracks.
+    internal double DesktopVolume { get; init; } = 1;
+    internal double MicrophoneVolume { get; init; } = 1;
+    internal bool CustomMix => Math.Abs(DesktopVolume - 1) > .001 || Math.Abs(MicrophoneVolume - 1) > .001;
+    internal bool HasVideo => Format != ExportFormat.Mp3;
+    internal bool IsGif => Format == ExportFormat.Gif;
+    internal string Extension => Format switch { ExportFormat.Mov => ".mov", ExportFormat.Gif => ".gif", ExportFormat.Mp3 => ".mp3", _ => ".mp4" };
+    // Formats that change size, frame rate or container always re-encode.
+    internal static ShareExportOptions For(ExportFormat format, double targetMb = 0) => format switch
+    {
+        ExportFormat.Mp4Hd60 => new(targetMb, 1080, 60) { Format = format },
+        ExportFormat.Mp4Sd30 => new(targetMb, 720, 30) { Format = format },
+        ExportFormat.Gif => new(0, 480, 15) { Format = format },
+        _ => new(format == ExportFormat.Mp3 ? 0 : targetMb) { Format = format }
+    };
     internal long MaxBytes => (long)(TargetMb * 1_000_000);
     internal void Validate()
     {
         if (!double.IsFinite(TargetMb) || TargetMb < 0 || TargetMb > 10000 || (TargetMb > 0 && TargetMb < 1))
             throw new ArgumentException("Choose a file limit from 1 to 10,000 MB, or 0 for no size limit.");
-        if (Height is not (0 or 720 or 1080) || Fps is not (0 or 30 or 60)) throw new ArgumentException("Choose a supported export size and frame rate.");
+        if (Height is not (0 or 480 or 720 or 1080) || Fps is not (0 or 15 or 30 or 60)) throw new ArgumentException("Choose a supported export size and frame rate.");
+        if (Crop is { } c && (c.X < 0 || c.Y < 0 || c.Width < 32 || c.Height < 32)) throw new ArgumentException("The crop area is too small.");
+        if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
     }
     internal int VideoBitrate(double seconds, bool audio)
     {
@@ -62,37 +88,61 @@ internal static class ExportServices
         if (source.Equals(destination, StringComparison.OrdinalIgnoreCase) || File.Exists(destination)) throw new IOException("Choose a new filename. Existing files are never overwritten.");
         var media = ClipMedia.Read(source); var ranges = ClipEditor.Validate(sections, media.Duration);
         options ??= new(); options.Validate(); double total = ranges.Sum(s => s.Duration);
-        int bitrate = options.TargetMb > 0 ? options.VideoBitrate(total, media.HasAudio) : 0;
+        bool video = options.HasVideo, audio = media.HasAudio && !options.IsGif;
+        if (!video && !media.HasAudio) throw new ArgumentException("This clip has no audio to export as MP3.");
+        bool encodeVideo = video && !options.IsGif;
+        int bitrate = options.TargetMb > 0 && encodeVideo ? options.VideoBitrate(total, audio) : 0;
         await Gate.WaitAsync(token);
         string temp = destination + "." + Guid.NewGuid().ToString("N") + ".partial";
         try
         {
             Storage.EnsureWritable(Path.GetDirectoryName(destination)!);
-            var encoder = syntheticEncoder ? null : await VideoEncoder.SelectAsync(Path.Combine(AppContext.BaseDirectory,"tools","ffmpeg.exe"), Storage.Load(out _).Encoder, null, null, token);
+            var encoder = syntheticEncoder || !encodeVideo ? null : await VideoEncoder.SelectAsync(Path.Combine(AppContext.BaseDirectory,"tools","ffmpeg.exe"), Storage.Load(out _).Encoder, null, null, token);
             // Seek each input at the demuxer before decoding. Only retained sections enter the graph.
             // Thread counts are capped per input; no preview decoder or thumbnail job is started here.
             var inputs = new List<string>(); var filters = new List<string>(); var labels = "";
+            bool mixTracks = audio && media.HasSeparateTracks && options.CustomMix;
             for (int i = 0; i < ranges.Count; i++)
             {
-                var range = ranges[i];
+                var range = ranges[i]; string trim = $"atrim=duration={Number(range.Duration)},asetpts=PTS-STARTPTS";
                 inputs.AddRange(new[] { "-threads", "1", "-ss", Number(range.Start), "-t", Number(range.Duration), "-i", source });
-                filters.Add($"[{i}:v:0]trim=duration={Number(range.Duration)},setpts=PTS-STARTPTS[v{i}]");
-                labels += $"[v{i}]";
-                if (media.HasAudio) { filters.Add($"[{i}:a:0]atrim=duration={Number(range.Duration)},asetpts=PTS-STARTPTS[a{i}]"); labels += $"[a{i}]"; }
+                if (video) { filters.Add($"[{i}:v:0]trim=duration={Number(range.Duration)},setpts=PTS-STARTPTS[v{i}]"); labels += $"[v{i}]"; }
+                if (mixTracks)
+                {
+                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes.
+                    filters.Add($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0[a{i}]");
+                    labels += $"[a{i}]";
+                }
+                else if (audio) { filters.Add($"[{i}:a:0]{trim}[a{i}]"); labels += $"[a{i}]"; }
             }
-            filters.Add(labels + $"concat=n={ranges.Count}:v=1:a={(media.HasAudio ? 1 : 0)}[joined]" + (media.HasAudio ? "[a]" : ""));
-            var conversion = new List<string>();
-            if (options.Height > 0) conversion.Add($"scale=w=-2:h='min(ih,{options.Height})':flags=fast_bilinear");
-            if (options.Fps > 0) conversion.Add("fps=" + Number(Math.Min(options.Fps, media.FrameRate)));
-            conversion.Add(encoder?.IsAmd == true ? "format=nv12,hwupload" : "format=yuv420p");
-            filters.Add("[joined]" + string.Join(',', conversion) + "[v]");
+            filters.Add(labels + $"concat=n={ranges.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
+            if (video)
+            {
+                var conversion = new List<string>();
+                if (options.Crop != null) conversion.Add(options.Crop.Filter);
+                if (options.IsGif)
+                {
+                    // Palette pass keeps GIF colors clean; diff mode favors moving areas.
+                    filters.Add($"[joined]{(conversion.Count > 0 ? conversion[0] + "," : "")}fps=15,scale=w=-2:h='min(ih,480)':flags=lanczos,split[g0][g1];[g0]palettegen=max_colors=128:stats_mode=diff[pal];[g1][pal]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[v]");
+                }
+                else
+                {
+                    if (options.Height > 0) conversion.Add($"scale=w=-2:h='min(ih,{options.Height})':flags=fast_bilinear");
+                    if (options.Fps > 0) conversion.Add("fps=" + Number(Math.Min(options.Fps, media.FrameRate)));
+                    conversion.Add(encoder?.IsAmd == true ? "format=nv12,hwupload" : "format=yuv420p");
+                    filters.Add("[joined]" + string.Join(',', conversion) + "[v]");
+                }
+            }
             // One bounded retry handles encoder/container overhead. Oversize output is never published as a success.
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 var args = new List<string>();
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
-                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(';',filters), "-map", "[v]" });
-                if (media.HasAudio) args.AddRange(new[] { "-map", "[a]", "-c:a", "aac", "-b:a", "128k" });
+                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(';',filters) });
+                if (video) args.AddRange(new[] { "-map", "[v]" });
+                if (!video) { args.AddRange(new[] { "-map", "[a]", "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await RunAsync(args, token, progress, total); break; }
+                if (options.IsGif) { args.AddRange(new[] { "-loop", "0", "-f", "gif", temp }); await RunAsync(args, token, progress, total); break; }
+                if (audio) args.AddRange(new[] { "-map", "[a]", "-c:a", "aac", "-b:a", "128k" });
                 if (syntheticEncoder) args.AddRange(new[] { "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2" });
                 else if (bitrate == 0) args.AddRange(encoder!.EncodingArguments(new Settings(), export: true));
                 else args.AddRange(encoder!.IsAmd
@@ -100,7 +150,7 @@ internal static class ExportServices
                     : new[] { "-c:v", "h264_nvenc", "-preset", "p1", "-rc", "cbr", "-rc-lookahead", "0", "-multipass", "disabled" });
                 if (bitrate > 0) args.AddRange(new[] { "-b:v", bitrate.ToString(CultureInfo.InvariantCulture), "-maxrate", bitrate.ToString(CultureInfo.InvariantCulture), "-bufsize", (bitrate * 2L).ToString(CultureInfo.InvariantCulture) });
                 else if (syntheticEncoder) args.AddRange(new[] { "-crf", "20" });
-                args.AddRange(new[] { "-bf", "0", "-fps_mode", "vfr", "-movflags", "+faststart", "-f", "mp4", temp });
+                args.AddRange(new[] { "-bf", "0", "-fps_mode", "vfr", "-movflags", "+faststart", "-f", options.Format == ExportFormat.Mov ? "mov" : "mp4", temp });
                 await RunAsync(args, token, progress, total);
                 if (options.TargetMb == 0 || new FileInfo(temp).Length <= options.MaxBytes) break;
                 long actual = new FileInfo(temp).Length;
@@ -108,12 +158,18 @@ internal static class ExportServices
                 if (attempt == 1) throw new IOException("The encoder could not meet this file limit. Choose a larger limit or a shorter selection.");
                 bitrate = Math.Max(100000, (int)(bitrate * (double)options.MaxBytes / actual * .85));
             }
-            var verified = ClipMedia.Read(temp);
-            double tolerance = Math.Max(.25, ranges.Count / media.FrameRate + .05);
-            if (Math.Abs(verified.Duration - total) > tolerance || verified.HasAudio != media.HasAudio) throw new IOException("Export timing or audio did not match the selected sections.");
+            double duration = total;
+            if (encodeVideo)
+            {
+                var verified = ClipMedia.Read(temp);
+                double tolerance = Math.Max(.25, ranges.Count / media.FrameRate + .05);
+                if (Math.Abs(verified.Duration - total) > tolerance || verified.HasAudio != audio) throw new IOException("Export timing or audio did not match the selected sections.");
+                duration = verified.Duration;
+            }
+            else if (!File.Exists(temp) || new FileInfo(temp).Length == 0) throw new IOException("The export produced an empty file.");
             token.ThrowIfCancellationRequested(); File.Move(temp, destination);
-            var result = new ClipResult(destination, verified.Duration, new DirectoryInfo(Path.GetDirectoryName(destination)!).Name, DateTimeOffset.Now);
-            try { ClipLibrary.Remember(result); } catch { }
+            var result = new ClipResult(destination, duration, new DirectoryInfo(Path.GetDirectoryName(destination)!).Name, DateTimeOffset.Now);
+            if (encodeVideo) try { ClipLibrary.Remember(result); } catch { }
             progress?.Report(1); return result;
         }
         finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { Gate.Release(); } }

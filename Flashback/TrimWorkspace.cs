@@ -96,13 +96,25 @@ public partial class TrimWindow
     private void ZoomIn_Click(object sender,RoutedEventArgs e) { Timeline.Zoom(2,playhead); Timeline.Focus(); }
     private void ZoomOut_Click(object sender,RoutedEventArgs e) { Timeline.Zoom(.5,playhead); Timeline.Focus(); }
     private void ZoomFit_Click(object sender,RoutedEventArgs e) { Timeline.Fit(); Timeline.Focus(); }
+    private void RefreshTimelineZoom()
+    {
+        double zoom=Timeline.ZoomFactor; bool zoomed=zoom>1.001;
+        TimelineZoomLabel.Text=zoomed ? $"{zoom:0.#}×" : "1×";
+        TimelineZoomLabel.SetResourceReference(TextBlock.ForegroundProperty,zoomed ? "Accent" : "Muted");
+        TimelineFitButton.IsEnabled=zoomed;
+        System.Windows.Automation.AutomationProperties.SetName(Timeline,$"Clip timeline. Showing {KeepSection.TimeText(Timeline.ViewStart)} to {KeepSection.TimeText(Timeline.ViewStart+Timeline.VisibleDuration)} of {KeepSection.TimeText(Timeline.Duration)}");
+    }
 
     private ShareExportOptions ExportOptions()
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
-        var options=new ShareExportOptions(mb,SharePreset.SelectedIndex switch { 1=>1080,2=>720,_=>0 },SharePreset.SelectedIndex switch {1=>60,2=>30,_=>0});
+        var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
+        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100 };
         options.Validate(); return options;
     }
+    // Anything beyond copying the original MP4 streams needs a re-encode.
+    private bool NeedsReencode(ShareExportOptions options) =>
+        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || (media.HasSeparateTracks && options.CustomMix);
     private void Share_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     private void SizeLimit_Changed(object sender,TextChangedEventArgs e) => UpdateExportHint();
     private void UpdateExportHint()
@@ -110,7 +122,7 @@ public partial class TrimWindow
         if(SizeLimit==null || SharePreset==null || ModeHint==null || ExportMode==null) return;
         try
         {
-            var options=ExportOptions(); bool convert=SharePreset.SelectedIndex>0 || options.TargetMb>0;
+            var options=ExportOptions(); bool convert=NeedsReencode(options);
             if(convert!=sharingEnabled)
             {
                 sharingEnabled=convert;
@@ -119,9 +131,15 @@ public partial class TrimWindow
             }
             ExportMode.IsEnabled=exportCancellation==null && !convert;
             double duration=sections.Count>0 ? sections.Sum(s=>s.Duration) : Math.Max(.1,Timeline.End-Timeline.Start);
-            ModeHint.Text=options.TargetMb>0 ? $"Up to {options.TargetMb:0.##} MB · video budget {options.VideoBitrate(duration,media.HasAudio)/1_000_000d:0.##} Mbps · re-encodes"
-                : convert ? "H.264 / AAC MP4 · re-encodes selected sections only."
-                : ExportMode.SelectedIndex==1 ? "Fast export; edges may extend to nearby keyframes." : "Exact edges; re-encodes on export.";
+            string crop=options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "";
+            ModeHint.Text=options.Format switch
+            {
+                ExportFormat.Gif => "Animated GIF · 480p, 15 fps, no sound. Best for short moments"+crop+".",
+                ExportFormat.Mp3 => "Audio only · MP3. Size limit and crop don't apply.",
+                _ when options.TargetMb>0 => $"Up to {options.TargetMb:0.##} MB · video budget {options.VideoBitrate(duration,media.HasAudio)/1_000_000d:0.##} Mbps · re-encodes"+crop,
+                _ when convert => (options.Format==ExportFormat.Mov ? "MOV" : "MP4")+" · re-encodes the selected sections"+crop+".",
+                _ => ExportMode.SelectedIndex==1 ? "Fast export; edges may extend to nearby keyframes." : "Exact edges; re-encodes on export."
+            };
         }
         catch(ArgumentException ex) { ModeHint.Text=ex.Message; }
     }

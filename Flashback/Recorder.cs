@@ -27,7 +27,7 @@ public sealed class Recorder : IAsyncDisposable
     internal bool SyncPatternForTests { get; set; }
     internal int VideoConnections => video?.Connections ?? 0;
     internal (double Cpu, long Memory) Performance => (Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds + (process?.TotalProcessorTime.TotalSeconds ?? 0) + (video?.ProducerCpu ?? 0), Process.GetCurrentProcess().WorkingSet64 + (process?.WorkingSet64 ?? 0) + (video?.ProducerMemory ?? 0));
-    internal string VideoStats => video == null ? "No frame bridge" : $"Native GPU capture: {video.UsingNative}; GPU busy polls: {video.GpuBusyReads}; submitted: {video.GpuSubmittedFrames}; average capture call ms: {video.CaptureMilliseconds/Math.Max(1,video.CaptureCalls):0.00}; worst capture call ms: {video.MaxCaptureMilliseconds:0.00}; received frames: {video.ReceivedFrames}; repeated frames: {video.RepeatedFrames}; history drops: {video.DroppedFrames}; slow pipe writes: {video.SlowWrites}; worst pipe write ms: {video.MaxWriteMilliseconds:0.00}; timeline seconds: {Stopwatch.GetElapsedTime(video.TimelineOrigin).TotalSeconds:0.00}\nAudio: {audio?.SyncReport}\nMic: {microphone?.SyncReport}";
+    internal string VideoStats => video == null ? "No frame bridge" : $"Native GPU capture: {video.UsingNative}; GPU busy polls: {video.GpuBusyReads}; submitted: {video.GpuSubmittedFrames}; average capture call ms: {video.CaptureMilliseconds/Math.Max(1,video.CaptureCalls):0.00}; worst capture call ms: {video.MaxCaptureMilliseconds:0.00}; received frames: {video.ReceivedFrames}; repeated frames: {video.RepeatedFrames}; history drops: {video.DroppedFrames}; slow pipe writes: {video.SlowWrites}; worst pipe write ms: {video.MaxWriteMilliseconds:0.00}; timeline seconds: {Stopwatch.GetElapsedTime(video.TimelineOrigin).TotalSeconds:0.00}; display gaps: {video.Recoveries}; last gap ms: {video.LastGapMilliseconds:0}; longest gap ms: {video.LongestGapMilliseconds:0}\nAudio: {audio?.SyncReport}\nMic: {microphone?.SyncReport}";
     internal void InterruptVideoForTest(TimeSpan duration) => video?.InterruptForTest(duration);
     private Exception? injectedFailure;
     private CancellationTokenSource? maintenanceCancel;
@@ -178,7 +178,7 @@ public sealed class Recorder : IAsyncDisposable
                     lock (logLock) { log.Enqueue(line); while (log.Count > 100) log.Dequeue(); }
                     if (line.StartsWith("Display capture unavailable", StringComparison.Ordinal))
                         try { File.WriteAllText(Path.Combine(Storage.Root, "last-display-recovery.txt"), $"{DateTimeOffset.Now:O}\n{ErrorTail()}"); } catch { }
-                }, synthetic || DisableNativeForTests ? null : () => new GpuDesktopCapture(CaptureDisplay.Resolve(originalDisplay!, CaptureDisplay.Enumerate()), size.Width, size.Height, settings.FrameRate, settings.ShowCursor));
+                }, synthetic || DisableNativeForTests ? null : framePool => new GpuDesktopCapture(CaptureDisplay.Resolve(originalDisplay!, CaptureDisplay.Enumerate()), size.Width, size.Height, settings.FrameRate, settings.ShowCursor, framePool));
             }
             var args = BuildArguments(settings, session, audio, synthetic, transfer, display, nextSegmentNumber, microphone, selectedEncoder, video, SyncPatternForTests);
             UsesGpuTransfer = args.Any(a => a.Contains("hwupload_cuda", StringComparison.Ordinal));
@@ -313,11 +313,20 @@ public sealed class Recorder : IAsyncDisposable
             // Normalize each independent device clock before mixing to one stereo track.
             for (int i = 0; i < audioInputs.Count; i++)
                 filters.Add($"[{audioInputs[i]}:a:0]aresample=48000:async=1000:first_pts=0,aformat=channel_layouts=stereo[a{i}]");
-            filters.Add("[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0:latency=1[mixed]");
+            if (s.SeparateAudioTracks)
+            {
+                // Track 1 stays the combined mix so every player and Discord hears everything;
+                // tracks 2 and 3 keep desktop and microphone apart for editing.
+                filters.Add("[a0]asplit=2[a0mix][desktop];[a1]asplit=2[a1mix][voice]");
+                filters.Add("[a0mix][a1mix]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0:latency=1[mixed]");
+            }
+            else filters.Add("[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0:latency=1[mixed]");
         }
         if (filters.Count > 0) args.AddRange(new[] { "-filter_complex", string.Join(";", filters) });
         if (!synthetic) args.AddRange(new[] { "-map", "[video]" });
         if (audioInputs.Count > 0) args.AddRange(new[] { "-map", audioInputs.Count == 2 ? "[mixed]" : $"{audioInputs[0]}:a:0" });
+        if (audioInputs.Count == 2 && s.SeparateAudioTracks)
+            args.AddRange(new[] { "-map", "[desktop]", "-map", "[voice]", "-metadata:s:a:0", "title=Combined", "-metadata:s:a:1", "title=Desktop", "-metadata:s:a:2", "title=Microphone" });
         if (synthetic)
             args.AddRange(new[] { "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25", "-threads", "2", "-pix_fmt", "yuv420p" });
         else
@@ -523,8 +532,12 @@ public sealed class Recorder : IAsyncDisposable
                 // Snapshot completed chunks while cleanup is locked. Never overwrite or move saved clips.
                 foreach (var seg in selected)
                 {
-                    using var input = new FileStream(Path.Combine(session, seg.Name), FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true);
-                    using var copy = new FileStream(Path.Combine(staging, seg.Name), FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true);
+                    // A hard link keeps the chunk alive after buffer cleanup without rewriting
+                    // hundreds of megabytes mid-game; copying is only the fallback.
+                    string source = Path.Combine(session, seg.Name), target = Path.Combine(staging, seg.Name);
+                    if (CreateHardLink(target, source, IntPtr.Zero)) continue;
+                    using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true);
+                    using var copy = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true);
                     await input.CopyToAsync(copy).ConfigureAwait(false);
                 }
             }
@@ -627,6 +640,8 @@ public sealed class Recorder : IAsyncDisposable
     }
     private static void TryDeleteDirectory(string path) { try { Directory.Delete(path, true); } catch { } }
     public async ValueTask DisposeAsync() { await StopAsync(); job.Dispose(); }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLink(string newFile, string existingFile, IntPtr security);
 }
 
 

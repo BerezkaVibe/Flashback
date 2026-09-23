@@ -21,6 +21,8 @@
   <ItemGroup>
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <Resource Include="Assets/Flashback.ico" />
+    <!-- Compact the large-object heap more eagerly; frame buffers live there. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 </Project>
