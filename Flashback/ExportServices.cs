@@ -32,6 +32,8 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     // Slow-motion regions from the timeline, in source time. They never overlap cuts.
     internal IReadOnlyList<SpeedRegion> SlowRegions { get; init; } = Array.Empty<SpeedRegion>();
     internal static readonly double[] RegionSpeeds = { .75, .5, .25 };
+    // Zoomed stretches, in source time. They may overlap slow motion and cuts.
+    internal IReadOnlyList<ZoomRegion> ZoomRegions { get; init; } = Array.Empty<ZoomRegion>();
     // Kept ranges split at slow-motion edges; each piece carries its combined speed.
     internal List<(double Start, double End, double Speed)> Pieces(IEnumerable<KeepSection> ranges)
     {
@@ -159,7 +161,15 @@ internal static class ExportServices
                 if (video)
                 {
                     string blackout = Window(-1) is { } w ? $",drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{w}'" : "";
-                    filters.Add($"[{i}:v:0]trim=duration={Number(length)},setpts=PTS-STARTPTS{blackout}{slowVideo}[v{i}]"); labels += $"[v{i}]";
+                    // Zoom renders per frame in source time, before any speed change.
+                    string zoom = "";
+                    var zooms = options.ZoomRegions.Where(z => z.End > start && z.Start < end).ToList();
+                    if (zooms.Count > 0)
+                    {
+                        var (z, x, y) = ZoomRegion.Expressions(zooms, start, media.FrameRate);
+                        zoom = $",zoompan=z='{z}':x='{x}':y='{y}':d=1:s={media.Width}x{media.Height}:fps={Number(media.FrameRate)}";
+                    }
+                    filters.Add($"[{i}:v:0]trim=duration={Number(length)},setpts=PTS-STARTPTS{zoom}{blackout}{slowVideo}[v{i}]"); labels += $"[v{i}]";
                 }
                 if (mixTracks)
                 {

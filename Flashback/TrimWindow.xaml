@@ -5,10 +5,35 @@
  </Window.Resources>
  <DockPanel Background="{DynamicResource AppBackground}"><Menu x:Name="EditorMenu" DockPanel.Dock="Top" Background="Transparent" Foreground="{DynamicResource Ink}" Margin="14,6" FontSize="12"><MenuItem Header="_File"><MenuItem x:Name="OpenVideoMenu" Header="_Open video…" Click="OpenVideo_Click"/><MenuItem x:Name="RecentMenu" Header="Recent videos" SubmenuOpened="RecentMenu_Opened"/><Separator/><MenuItem Header="Open trim project…" Click="OpenProject_Click"/><MenuItem x:Name="SaveProjectMenu" Header="Save trim project" Click="SaveProject_Click"/><MenuItem Header="Save trim project as…" Click="SaveProjectAs_Click"/><MenuItem x:Name="AutoSaveProject" Header="Autosave named projects" IsCheckable="True" IsChecked="True"/><Separator/><MenuItem x:Name="ExportMenu" Header="Export selected sections…" Click="Export_Click"/><MenuItem x:Name="SnapshotMenu" Header="Save snapshot…" Click="Snapshot_Click"/></MenuItem><MenuItem Header="_Edit"><MenuItem x:Name="UndoMenu" Header="Undo" Click="Undo_Click"/><MenuItem x:Name="RedoMenu" Header="Redo" Click="Redo_Click"/><Separator/><MenuItem x:Name="AddSectionMenu" Header="Add marked section" Click="Add_Click"/><MenuItem x:Name="SplitMenu" Header="Split section at playhead" Click="Split_Click"/><MenuItem x:Name="RemoveMenu" Header="Remove selected section" Click="Remove_Click"/></MenuItem><MenuItem Header="_View"><MenuItem x:Name="ZoomInMenu" Header="Zoom in" Click="ZoomIn_Click"/><MenuItem x:Name="ZoomOutMenu" Header="Zoom out" Click="ZoomOut_Click"/><MenuItem Header="Fit timeline" Click="ZoomFit_Click"/><MenuItem x:Name="GoToTimeMenu" Header="Go to time…" Click="Timecode_Click"/></MenuItem><MenuItem Header="_Help"><MenuItem x:Name="ShortcutGuideMenu" Header="Keyboard and mouse shortcuts" Click="ShortcutGuide_Click"/></MenuItem></Menu><Grid><Grid x:Name="TrimContent" Visibility="Collapsed" Margin="16,6,16,12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <Grid Margin="0,0,0,8"><TextBlock x:Name="SourceLabel" Foreground="{DynamicResource Muted}" FontSize="12" TextTrimming="CharacterEllipsis"/></Grid>
-  <Grid Grid.Row="1">
+  <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <Border x:Name="PreviewFrame" Background="#000000" CornerRadius="8" ClipToBounds="True"><MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Close" ScrubbingEnabled="True" Stretch="Uniform" MediaOpened="Player_Opened" MediaEnded="Player_Ended" MediaFailed="Player_Failed"/></Border>
    <Border x:Name="CensorOverlay" Background="#000000" CornerRadius="8" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="Blacked out in the export" Foreground="#9DA6B1" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
    <local:CropOverlay x:Name="CropArea" Visibility="Collapsed" AutomationProperties.Name="Crop area"/>
+   <local:ZoomTargetOverlay x:Name="ZoomTarget" Visibility="Collapsed" AutomationProperties.Name="Zoom target"/>
+   <Border x:Name="ZoomPanel" Grid.Column="1" Width="300" Margin="10,0,0,0" Visibility="Collapsed" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="12,10">
+    <DockPanel>
+     <DockPanel DockPanel.Dock="Top">
+      <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" MinHeight="26" FontSize="10" Content="&#xE711;" Click="ZoomDone_Click" ToolTip="Done editing this zoom" AutomationProperties.Name="Close zoom editor"/>
+      <TextBlock Text="Zoom" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <TextBlock x:Name="ZoomTitle" Foreground="{DynamicResource Muted}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+     </DockPanel>
+     <DockPanel DockPanel.Dock="Top" Margin="0,10,0,0">
+      <Button x:Name="ZoomDeletePreset" DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE74D;" Click="ZoomDeletePreset_Click" ToolTip="Delete this saved preset" Margin="4,0,0,0" AutomationProperties.Name="Delete preset"/>
+      <Button DockPanel.Dock="Right" Style="{StaticResource TrimButton}" Content="Save…" Click="ZoomSavePreset_Click" Margin="6,0,0,0" MinHeight="28" Height="28" ToolTip="Save this curve and max zoom as a preset"/>
+      <ComboBox x:Name="ZoomPresetBox" MinHeight="28" SelectionChanged="ZoomPreset_Changed" AutomationProperties.Name="Zoom preset"/>
+     </DockPanel>
+     <StackPanel x:Name="ZoomCurveTabs" DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+      <Button x:Name="ZoomInTab" Style="{StaticResource TrimButton}" Content="Zoom in" Click="ZoomTab_Click" MinHeight="26" Height="26" FontSize="11"/>
+      <Button x:Name="ZoomOutTab" Style="{StaticResource TrimButton}" Content="Zoom out" Click="ZoomTab_Click" MinHeight="26" Height="26" FontSize="11" Margin="4,0,0,0"/>
+     </StackPanel>
+     <local:ZoomCurveEditor x:Name="ZoomGraph" DockPanel.Dock="Top" Height="180" Margin="0,8,0,0" AutomationProperties.Name="Zoom curve"/>
+     <TextBlock x:Name="ZoomReadout" DockPanel.Dock="Top" Foreground="{DynamicResource Accent}" FontSize="11" Margin="0,4,0,0"/>
+     <CheckBox x:Name="ZoomOutCheck" DockPanel.Dock="Top" Content="Zoom back out at the end" Margin="0,10,0,0" Click="ZoomOutToggle_Click"/>
+     <CheckBox x:Name="ZoomOutSameCheck" DockPanel.Dock="Top" Content="Same curve as zoom in" Margin="22,6,0,0" IsChecked="True" Click="ZoomOutToggle_Click" Visibility="Collapsed"/>
+     <Button DockPanel.Dock="Bottom" Style="{StaticResource TrimButton}" Content="Remove zoom" Click="ZoomRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" HorizontalAlignment="Left" Margin="-8,0,0,0"/>
+     <TextBlock Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,6" Text="Drag the box on the video to aim; drag its corners to zoom further. On the graph, drag points; Ctrl-drag scales the height, Alt-drag the timing. Double-click adds a point, right-click removes one."/>
+    </DockPanel>
+   </Border>
    <Border x:Name="CropBar" Visibility="Collapsed" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,10,0,0" Background="#E6111318" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="4">
     <StackPanel Orientation="Horizontal">
      <Button Style="{StaticResource TrimButton}" Content="Free" Tag="0" Click="CropAspect_Click" Background="Transparent" BorderBrush="Transparent"/>
@@ -57,7 +82,8 @@
         <Button Style="{StaticResource TrimButton}" Content="Remove slow motion" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
        </StackPanel>
       </Border>
-     </Popup>     <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
+     </Popup>     <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
+     <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE8C6;" Click="Split_Click" ToolTip="Split the section under the playhead into two" AutomationProperties.Name="Split section"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE894;" Click="Clear_Click" ToolTip="Remove all sections" AutomationProperties.Name="Clear sections"/>

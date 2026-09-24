@@ -52,11 +52,22 @@ internal sealed class TrimTimeline : FrameworkElement
     // Cut tool: a thin cutter line follows the pointer over the video track or an audio lane.
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
-    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) slowMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) { slowMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
     // Slow-motion tool: the same two clicks mark a stretch that plays slower (video and audio together).
-    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) cutMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    private bool cutMode, slowMode, cutPress;
-    private bool Placing => cutMode || slowMode;
+    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) { cutMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    // Zoom tool: the same two clicks mark a zoomed stretch. It may overlap cuts and slow motion,
+    // and snaps to slow-motion edges as well as the playhead.
+    internal bool ZoomMode { get => zoomMode; set { zoomMode = value; if (value) { cutMode = false; slowMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    private bool cutMode, slowMode, zoomMode, cutPress;
+    private bool Placing => cutMode || slowMode || zoomMode;
+    private IReadOnlyList<ZoomRegion> zoomRegions = Array.Empty<ZoomRegion>();
+    internal IReadOnlyList<ZoomRegion> ZoomRegions { get => zoomRegions; set { zoomRegions = value; zoomVersion++; InvalidateVisual(); } }
+    private int zoomVersion;
+    internal int SelectedZoom { get => selectedZoom; set { selectedZoom = value; zoomVersion++; InvalidateVisual(); } }
+    private int selectedZoom = -1;
+    internal event Action<double, double>? ZoomAdded;
+    internal event Action<int>? ZoomTagClicked, ZoomRemoved;
+    private readonly List<Rect> zoomTags = new();
     private IReadOnlyList<SpeedRegion> slowRegions = Array.Empty<SpeedRegion>();
     internal IReadOnlyList<SpeedRegion> SlowRegions { get => slowRegions; set { slowRegions = value; slowVersion++; InvalidateVisual(); } }
     private int slowVersion;
@@ -74,7 +85,17 @@ internal sealed class TrimTimeline : FrameworkElement
     private int cutsVersion;
     internal bool HasPendingCut => pendingCut != null;
     internal void CancelPendingCut() { pendingCut = null; InvalidateVisual(); }
-    private double CutTimeAt(double x) => Math.Abs(x - XAt(Position)) <= PlayheadLock ? Position : Snap(TimeAt(x));
+    private double CutTimeAt(double x)
+    {
+        if (Math.Abs(x - XAt(Position)) <= PlayheadLock) return Position;
+        // Zoom edges also lock onto the ends of slow-motion parts.
+        if (zoomMode)
+            foreach (var r in slowRegions)
+                foreach (double edge in new[] { r.Start, r.End })
+                    if (Math.Abs(x - XAt(edge)) <= PlayheadLock) return edge;
+        return Snap(TimeAt(x));
+    }
+    private bool LockedAt(double t) => Math.Abs(t - Position) < 1e-9 || (zoomMode && slowRegions.Any(r => Math.Abs(t - r.Start) < 1e-9 || Math.Abs(t - r.End) < 1e-9));
     internal event Action<CutRegion>? CutAdded, CutRemoved;
     private enum Drag { None, Start, End, Playhead, Pan }
     private Drag drag;
@@ -135,7 +156,7 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         if (Duration <= 0 || ActualWidth <= 2*Inset)
         { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion);
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion, zoomVersion);
         if (!Equals(cacheKey, key))
         {
             using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
@@ -147,7 +168,7 @@ internal sealed class TrimTimeline : FrameworkElement
             if (pendingCut is { } from)
             {
                 double to = cutHover?.Time ?? from.Time;
-                if (Math.Abs(to - from.Time) > 1e-6) DrawCut(live, from.Lane, Math.Min(from.Time, to), Math.Max(from.Time, to), 0, slowMode);
+                if (Math.Abs(to - from.Time) > 1e-6) DrawCut(live, from.Lane, Math.Min(from.Time, to), Math.Max(from.Time, to), 0, slowMode, zoomMode);
                 DrawCutter(live, from.Lane, from.Time);
             }
             if (cutHover is { } hover) DrawCutter(live, pendingCut?.Lane ?? hover.Lane, hover.Time);
@@ -204,6 +225,7 @@ internal sealed class TrimTimeline : FrameworkElement
         DrawLaneToggle(dc, dpi);
         foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
         DrawSlowRegions(dc, dpi);
+        DrawZoomRegions(dc, dpi);
         if (LaneReveal > 0 && lanes.Count > 0)
         {
             // Lanes slide out from under the video track and fade in as they open.
@@ -325,13 +347,37 @@ internal sealed class TrimTimeline : FrameworkElement
         if (!lanesExpanded && cuts.Any(c => c.Lane >= 0)) dc.DrawEllipse(CutEdge, null, new Point(center.X, TrackTop + TrackHeight - 5), 2, 2);
     }
     private static readonly Brush SlowFill = Brush("#558B7CF6"), SlowEdge = Brush("#A99BFA"), SlowInk = Brush("#15121F");
-    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false)
+    // Zoom is teal; drawn translucent over slow motion, the two blend into a blue-violet.
+    private static readonly Brush ZoomFill = Brush("#552DD4BF"), ZoomEdge = Brush("#5EEAD4"), ZoomInk = Brush("#0B1F1C");
+    private static readonly Typeface Glyph = new("Segoe MDL2 Assets");
+    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false, bool zoom = false)
     {
         if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
-        dc.DrawRoundedRectangle(slow ? SlowFill : CutFill, new Pen(slow ? SlowEdge : CutEdge, 1), area, 3, 3);
+        dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, 1), area, 3, 3);
     }
+    // Zoom regions: teal boxes with a magnifier tag (top-right) that selects the region for editing.
+    private void DrawZoomRegions(DrawingContext dc, double dpi)
+    {
+        zoomTags.Clear();
+        for (int i = 0; i < zoomRegions.Count; i++)
+        {
+            var r = zoomRegions[i];
+            if (r.End < ViewStart || r.Start > ViewStart + Span) { zoomTags.Add(Rect.Empty); continue; }
+            double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
+            dc.DrawRoundedRectangle(ZoomFill, new Pen(i == selectedZoom ? Ink : ZoomEdge, i == selectedZoom ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            var icon = new FormattedText("\uE71E", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, ZoomInk, dpi);
+            var label = Text(r.MaxZoom.ToString("0.#", CultureInfo.InvariantCulture) + "×", 10, ZoomInk, dpi);
+            double width = icon.Width + label.Width + 11;
+            var tag = new Rect(Math.Max(x + 1, x + w - width - 3), TrackTop + 2, width, 13);
+            dc.DrawRoundedRectangle(ZoomEdge, null, tag, 3, 3);
+            dc.DrawText(icon, new Point(tag.X + 4, tag.Y + (tag.Height - icon.Height) / 2));
+            dc.DrawText(label, new Point(tag.X + 6 + icon.Width, tag.Y + (tag.Height - label.Height) / 2));
+            zoomTags.Add(tag);
+        }
+    }
+    private int ZoomTagAt(Point p) { for (int i = 0; i < zoomTags.Count; i++) if (zoomTags[i].Contains(p)) return i; return -1; }
     // Slow-motion regions: a purple box on the video track with a small speed tag (bottom-right) that opens
     // the speed choices when clicked. Tag rectangles are kept for hit-testing.
     private void DrawSlowRegions(DrawingContext dc, double dpi)
@@ -352,18 +398,18 @@ internal sealed class TrimTimeline : FrameworkElement
     }
     private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
     // The cutter: red (purple for slow motion), or white while it is locked onto the playhead.
-    private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
+    private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), ZoomCutterPen = new(Brush("#5EEAD4"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
     {
         if (t < ViewStart || t > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(t);
-        dc.DrawLine(Math.Abs(t - Position) < 1e-9 ? LockedCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
+        dc.DrawLine(LockedAt(t) ? LockedCutterPen : zoomMode ? ZoomCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
     }
     private void PlaceCutPoint(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
         if (band < -1) return;
-        if (slowMode) band = -1; // slow motion always covers video and audio together
+        if (slowMode || zoomMode) band = -1; // slow motion and zoom cover the whole picture
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
         else
@@ -372,7 +418,8 @@ internal sealed class TrimTimeline : FrameworkElement
             double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
             if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9)
             {
-                if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
+                if (zoomMode) ZoomAdded?.Invoke(a, b);
+                else if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
             }
         }
         InvalidateVisual();
@@ -380,7 +427,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private void UpdateCutHover(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
-        (int, double)? next = Placing && band > -2 ? (slowMode ? -1 : band, CutTimeAt(p.X)) : null;
+        (int, double)? next = Placing && band > -2 ? (slowMode || zoomMode ? -1 : band, CutTimeAt(p.X)) : null;
         if (!Equals(next, cutHover)) { cutHover = next; InvalidateVisual(); }
     }
     private int LaneAt(Point p)
@@ -399,6 +446,7 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
+        if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
         if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
         if (Placing && (pendingCut != null || BandAt(point) > -2))
         {
@@ -447,11 +495,14 @@ internal sealed class TrimTimeline : FrameworkElement
         bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
+        if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom"; return; }
         if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change the slow-motion speed"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
-            ToolTip = slowMode
+            ToolTip = zoomMode
+                ? pendingCut == null ? "Click to start a zoom; it snaps to the playhead and slow-motion edges. Right-click a zoom to remove it" : "Click to finish the zoom · Esc cancels"
+                : slowMode
                 ? pendingCut == null ? "Click to start slow motion; drag to move the playhead. Right-click a slow part to remove it" : "Click to finish the slow-motion part · Esc cancels"
                 : pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
             return;
@@ -474,6 +525,12 @@ internal sealed class TrimTimeline : FrameworkElement
         // Right-click cancels a half-placed cut, or restores the cut (or slow part) under the pointer.
         if (pendingCut != null) { CancelPendingCut(); e.Handled = true; return; }
         var p = e.GetPosition(this); int band = BandAt(p); double t = TimeAt(p.X);
+        if (zoomMode)
+        {
+            int zoom = zoomRegions.ToList().FindIndex(r => t >= r.Start && t <= r.End);
+            if (zoom >= 0 && band > -2) { ZoomRemoved?.Invoke(zoom); e.Handled = true; }
+            return;
+        }
         if (slowMode)
         {
             int slow = slowRegions.ToList().FindIndex(r => t >= r.Start && t <= r.End);

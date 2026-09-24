@@ -134,11 +134,11 @@ public partial class TrimWindow
         CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
         Player.IsMuted = userMuted || mute;
     }
-    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.CutMode = false; Timeline.SlowMode = false; ShowCutTool(); }
+    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.CutMode = false; Timeline.SlowMode = false; ResetZoom(); ShowCutTool(); }
     // Lit in the accent color while the tool is on; otherwise it looks like the other icons.
     private void ShowCutTool()
     {
-        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode) })
+        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode), (ZoomToolButton, Timeline.ZoomMode) })
         {
             if (on) { button.SetResourceReference(Control.BorderBrushProperty, "Accent"); button.SetResourceReference(Control.ForegroundProperty, "Accent"); }
             else { button.ClearValue(Control.BorderBrushProperty); button.ClearValue(Control.ForegroundProperty); }
@@ -270,7 +270,7 @@ public partial class TrimWindow
         // Never spend more than ~24 Mbps: beyond that a bigger file looks no better than the recording.
         double target = Math.Min(limit, Math.Ceiling(seconds * (24_000_000 + 128000) / 8 / 1_000_000 / .92));
         ShareExportOptions options;
-        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions }; options.Validate(); }
+        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions, ZoomRegions = Timeline.ZoomRegions }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
         string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" — {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");

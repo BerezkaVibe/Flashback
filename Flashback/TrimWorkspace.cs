@@ -110,7 +110,7 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions };
+        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions };
         options.Validate(); return options;
     }
     // What the export keeps, before validation: the sections, or the marked range.
@@ -121,7 +121,7 @@ public partial class TrimWindow
     private void ExportSpeed_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     // Anything beyond copying the original MP4 streams needs a re-encode.
     private bool NeedsReencode(ShareExportOptions options) =>
-        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0;
+        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0 || options.ZoomRegions.Count>0;
     private void Share_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     private void SizeLimit_Changed(object sender,TextChangedEventArgs e) => UpdateExportHint();
     private void UpdateExportHint()

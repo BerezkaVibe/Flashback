@@ -27,7 +27,7 @@ public partial class TrimWindow : Window
     private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
     // Undo covers kept sections, cut-outs and slow motion.
-    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow);
+    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow, ZoomRegion[] Zoom);
     private readonly Stack<EditState> undo = new(), redo = new();
     private int previewSection = -1;
     public event Action<ClipResult>? Exported;
@@ -45,6 +45,7 @@ public partial class TrimWindow : Window
         Timeline.SpeedStepRequested += StepPreviewRate;
         Timeline.SlowAdded += SlowAdded; Timeline.SlowTagClicked += SlowTagClicked; Timeline.SlowRemoved += SlowRemoved;
         LoadSlowChoices();
+        InitZoom();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -132,6 +133,7 @@ public partial class TrimWindow : Window
         playhead = Math.Clamp(time, 0, media.Duration); Timeline.Position = playhead; if (!Timeline.IsDragging) Timeline.Reveal(playhead); Timeline.InvalidateVisual();
         PositionLabel.Text = $"{KeepSection.TimeText(playhead)} / {KeepSection.TimeText(media.Duration)}";
         if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
+        if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
     }
     internal void SeekTo(double time, bool defer = false)
     {
@@ -163,7 +165,7 @@ public partial class TrimWindow : Window
     }
     // Scrubbing renders frames for paused seeks, but left on during playback it lets
     // Media Foundation's audio run ahead of video after a seek.
-    private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; }
+    private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
     private void Player_Opened(object sender, RoutedEventArgs e) { Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
@@ -177,7 +179,7 @@ public partial class TrimWindow : Window
         SetPlayhead(start); previewSection=section;
         pendingSeek=true; FlushSeek();
         Player.ScrubbingEnabled=false;
-        Player.Play(); playing=true; PlayToggle.Content="\uE769";
+        Player.Play(); playing=true; PlayToggle.Content="\uE769"; ApplyZoomPreview();
     }
     private void Play_Click(object sender, RoutedEventArgs e)
     {
@@ -229,7 +231,7 @@ public partial class TrimWindow : Window
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
-    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray());
+    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray());
     private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
     private void Restore(Stack<EditState> from, Stack<EditState> to)
@@ -238,7 +240,8 @@ public partial class TrimWindow : Window
         Pause(); to.Push(CurrentEdit()); var saved = from.Pop();
         if (!saved.Sections.SequenceEqual(sections))
         { sections.Clear(); foreach(var s in saved.Sections) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0; }
-        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
+        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; Timeline.ZoomRegions = saved.Zoom; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
+        if (ZoomPanel.Visibility == Visibility.Visible) LoadZoomUi(); else ApplyZoomPreview();
     }
     private void Split_Click(object sender, RoutedEventArgs e)
     {
@@ -272,9 +275,10 @@ public partial class TrimWindow : Window
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
         // Esc drops a half-placed cut first, then leaves the cut tool.
-        if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode))
+        if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode || Timeline.ZoomMode))
         {
-            if (Timeline.HasPendingCut) { Timeline.CancelPendingCut(); StatusLabel.Text=Timeline.SlowMode ? "Slow motion cancelled." : "Cut cancelled."; }
+            if (Timeline.HasPendingCut) { Timeline.CancelPendingCut(); StatusLabel.Text=Timeline.ZoomMode ? "Zoom cancelled." : Timeline.SlowMode ? "Slow motion cancelled." : "Cut cancelled."; }
+            else if (Timeline.ZoomMode) ZoomTool_Click(this,new RoutedEventArgs());
             else if (Timeline.SlowMode) SlowTool_Click(this,new RoutedEventArgs());
             else CutTool_Click(this,new RoutedEventArgs());
             return true;
