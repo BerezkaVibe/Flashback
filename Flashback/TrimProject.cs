@@ -16,6 +16,7 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     public OverlayItem[]? Overlays { get; init; }
     public VolumeRegion[]? Volumes { get; init; }
     public SoundItem[]? Sounds { get; init; }
+    public FreezeFrame[]? Freezes { get; init; }
     // Crop as a fraction of the frame: x, y, width, height.
     public double[]? Crop { get; init; }
     public DateTime? Saved { get; init; }
@@ -35,7 +36,7 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
         project.Validate(); return project.Cleaned();
     }
     // True when there is anything to keep beyond the untouched clip.
-    internal bool HasEdits(double duration) => Sections.Length > 0 || Start > .001 || End < duration - .001 || Cuts?.Length > 0 || Speed?.Length > 0 || Zoom?.Length > 0 || Overlays?.Length > 0 || Volumes?.Length > 0 || Sounds?.Length > 0 || Crop != null;
+    internal bool HasEdits(double duration) => Sections.Length > 0 || Start > .001 || End < duration - .001 || Cuts?.Length > 0 || Speed?.Length > 0 || Zoom?.Length > 0 || Overlays?.Length > 0 || Volumes?.Length > 0 || Sounds?.Length > 0 || Freezes?.Length > 0 || Crop != null;
     internal void Validate()
     {
         if (Version is < 1 or > CurrentVersion || string.IsNullOrWhiteSpace(Source) || !Path.IsPathFullyQualified(Source) || Sections == null) throw new IOException("Unsupported project.");
@@ -54,7 +55,11 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
         return this with
         {
             Cuts = Cuts?.Where(c => c != null && Ok(c.Start, c.End) && c.Lane >= -1).ToArray(),
-            Speed = Speed?.Where(s => s != null && Ok(s.Start, s.End) && (s.Freeze || s.Speed >= ShareExportOptions.MinRegionSpeed - 1e-9 && s.Speed <= ShareExportOptions.MaxRegionSpeed + 1e-9)).ToArray(),
+            Speed = Speed?.Where(s => s != null && Ok(s.Start, s.End) && s.Speed >= ShareExportOptions.MinRegionSpeed - 1e-9 && s.Speed <= ShareExportOptions.MaxRegionSpeed + 1e-9).ToArray(),
+            // 0.8.1 saved freezes as speed parts at 0x; they become freeze frames at their start.
+            Freezes = (Freezes ?? Array.Empty<FreezeFrame>()).Where(f => f != null && double.IsFinite(f.At) && f.At >= 0 && double.IsFinite(f.Seconds))
+                .Concat((Speed ?? Array.Empty<SpeedRegion>()).Where(s => s != null && s.Speed == 0 && Ok(s.Start, s.End)).Select(s => new FreezeFrame(s.Start, s.End - s.Start)))
+                .Select(f => f with { Seconds = Math.Clamp(f.Seconds, FreezeFrame.MinSeconds, FreezeFrame.MaxSeconds) }).GroupBy(f => Math.Round(f.At, 4)).Select(g => g.First()).OrderBy(f => f.At).ToArray(),
             Zoom = Zoom?.Where(z => z?.In?.Points is { Count: >= 2 } && Ok(z.Start, z.End)).Select(z => z with { In = z.In.Validated(), Out = z.Out?.Validated(), MaxZoom = Math.Clamp(z.MaxZoom, 1.1, ZoomRegion.Limit), X = Math.Clamp(z.X, 0, 1), Y = Math.Clamp(z.Y, 0, 1) }).ToArray(),
             Overlays = Overlays?.Where(o => o != null && Ok(o.Start, o.End)).Select(o => o.Validated()).ToArray(),
             Volumes = Volumes?.Where(v => v != null && Ok(v.Start, v.End) && v.Lane >= 0).Select(v => v with { Gain = Math.Clamp(v.Gain, 0, 2) }).ToArray(),

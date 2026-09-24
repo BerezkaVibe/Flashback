@@ -24,7 +24,7 @@ public partial class TrimWindow
     // Everything about the edit: sections, cut-outs, speed parts, zooms, text, pictures and crop.
     private TrimProject CurrentProject() => new(TrimProject.CurrentVersion,source,sourceBytes,sourceWriteTicks,sections.ToArray(),Timeline.Start,Timeline.End,playhead,(sharingEnabled ? preferredPrecision : ExportMode.SelectedIndex)==1)
     {
-        Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(), Volumes=Timeline.VolumeRegions.ToArray(), Sounds=Timeline.Sounds.ToArray(),
+        Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(), Volumes=Timeline.VolumeRegions.ToArray(), Sounds=Timeline.Sounds.ToArray(), Freezes=Timeline.Freezes.ToArray(),
         Crop=CropArea.Crop is { } c && CurrentCrop()!=null ? new[] { c.X,c.Y,c.Width,c.Height } : null,
     };
     // Called after any edit. Half a second later the named project (if autosaving) and the
@@ -49,8 +49,8 @@ public partial class TrimWindow
         restoringProject=true;
         try
         {
-            sections.Clear(); foreach(var section in project.Sections.OrderBy(s=>s.Start)) sections.Add(section);
-            Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
+            sections.Clear(); foreach(var section in project.Sections) sections.Add(section);
+            Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.Freezes=project.Freezes ?? Array.Empty<FreezeFrame>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
             CloseOverlay(); CloseZoom(); SetOverlays(OverlayOrder.Compact(project.Overlays ?? Array.Empty<OverlayItem>()));
             Timeline.VolumeRegions=project.Volumes ?? Array.Empty<VolumeRegion>(); SetSounds(project.Sounds ?? Array.Empty<SoundItem>());
             ResetCrop();
@@ -142,18 +142,18 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds };
+        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds, Freezes=Timeline.Freezes };
         options.Validate(); return options;
     }
     // What the export keeps, before validation: the sections, or the marked range.
     private IEnumerable<KeepSection> SelectedRanges() => sections.Count>0 ? sections : new[] { new KeepSection(Timeline.Start, Math.Max(Timeline.Start+.1, Timeline.End)) };
     // Length of the finished export after any speed changes.
-    private double OutputLength(IEnumerable<KeepSection> ranges) => new ShareExportOptions { Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions }.OutputSeconds(ranges);
+    private double OutputLength(IEnumerable<KeepSection> ranges) => new ShareExportOptions { Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, Freezes=Timeline.Freezes }.OutputSeconds(ranges);
     private double ExportSpeedValue => ShareExportOptions.Speeds[Math.Clamp(ExportSpeed?.SelectedIndex ?? 0, 0, ShareExportOptions.Speeds.Length-1)];
     private void ExportSpeed_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     // Anything beyond copying the original MP4 streams needs a re-encode.
     private bool NeedsReencode(ShareExportOptions options) =>
-        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0 || options.ZoomRegions.Count>0 || options.Overlays.Count>0 || options.VolumeRegions.Count>0 || options.Sounds.Count>0;
+        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0 || options.ZoomRegions.Count>0 || options.Overlays.Count>0 || options.VolumeRegions.Count>0 || options.Sounds.Count>0 || options.Freezes.Count>0;
     private void Share_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     private void SizeLimit_Changed(object sender,TextChangedEventArgs e) => UpdateExportHint();
     private void UpdateExportHint()
@@ -170,7 +170,7 @@ public partial class TrimWindow
             }
             ExportMode.IsEnabled=exportCancellation==null && !convert;
             double duration=Math.Max(.1,options.OutputSeconds(SelectedRanges()));
-            string crop=(options.Speed!=1 || options.SlowRegions.Count>0 ? $" · speed changes, {duration:0.#} s long" : "")+(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "")+(options.Overlays.Count>0 ? $" · {options.Overlays.Count} text and picture part{(options.Overlays.Count==1 ? "" : "s")}" : "");
+            string crop=(options.Speed!=1 || options.SlowRegions.Count>0 || options.Freezes.Count>0 ? $" · speed changes, {duration:0.#} s long" : "")+(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "")+(options.Overlays.Count>0 ? $" · {options.Overlays.Count} text and picture part{(options.Overlays.Count==1 ? "" : "s")}" : "");
             ModeHint.Text=options.Format switch
             {
                 ExportFormat.Gif => "Animated GIF · 480p, 15 fps, no sound. Best for short moments"+crop+".",

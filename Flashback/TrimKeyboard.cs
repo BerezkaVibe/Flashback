@@ -132,6 +132,7 @@ public partial class TrimWindow
             case TrimAction.ImageTool: ImageTool_Click(this,none); break;
             case TrimAction.ShapeTool: ShapeTool_Click(this,none); break;
             case TrimAction.DrawTool: DrawTool_Click(this,none); break;
+            case TrimAction.FreezeFrame: FreezeHere_Click(this,none); break;
             case TrimAction.VolumeTool: VolumeTool_Click(this,none); break;
             case TrimAction.SoundTool: SoundTool_Click(this,none); break;
             case TrimAction.CopyPart: CopyPart(); break;

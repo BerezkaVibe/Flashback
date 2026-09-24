@@ -10,7 +10,7 @@ internal enum TrimAction
     PreviousFrame, NextFrame, FrameBack, FrameForward, HalfSecondBack, HalfSecondForward, SecondBack, SecondForward, TenSecondsBack, TenSecondsForward,
     VideoStart, VideoEnd, MarkedStart, MarkedEnd, GoToTime,
     MarkStart, MarkEnd, AddSection, Split, RemoveSection, PreviousSection, NextSection, FirstSection, LastSection, Undo, Redo,
-    ZoomIn, ZoomOut, ZoomToggle, Snapshot, Export, OpenVideo, SaveProject, ShortcutGuide, CutTool, SpeedTool, ZoomTool, TextTool, ImageTool, CopyPart, PastePart, ShapeTool, VolumeTool, SoundTool, DrawTool
+    ZoomIn, ZoomOut, ZoomToggle, Snapshot, Export, OpenVideo, SaveProject, ShortcutGuide, CutTool, SpeedTool, ZoomTool, TextTool, ImageTool, CopyPart, PastePart, ShapeTool, VolumeTool, SoundTool, DrawTool, FreezeFrame
 }
 
 // Default is a comma-separated list; a user binding replaces it with a single shortcut.
@@ -61,7 +61,8 @@ internal static class TrimShortcuts
         new(TrimAction.TextTool,"Editing","Text tool (Esc leaves)","T"),
         new(TrimAction.ImageTool,"Editing","Picture or video tool (Esc leaves)","P"),
         new(TrimAction.ShapeTool,"Editing","Shape tool (Esc leaves)","D"),
-        new(TrimAction.DrawTool,"Editing","Draw tool: freehand, straight or joined lines (Esc leaves)","B"),
+        new(TrimAction.DrawTool,"Editing","Draw tool: freehand, straight or joined lines (Esc leaves)","W"),
+        new(TrimAction.FreezeFrame,"Editing","Freeze frame at the playhead","F"),
         new(TrimAction.VolumeTool,"Editing","Volume tool, on the audio lanes (Esc leaves)","V"),
         new(TrimAction.SoundTool,"Editing","Sound tool, adds music or sounds (Esc leaves)","N"),
         new(TrimAction.CopyPart,"Editing","Copy the clicked timeline part","Ctrl+C"),

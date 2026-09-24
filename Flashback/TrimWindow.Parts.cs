@@ -10,7 +10,7 @@ namespace Flashback;
 // section, hands Delete back to removing the selected section.
 public partial class TrimWindow
 {
-    private enum PartKind { None, Cut, Speed, Zoom, Overlay, Volume, Sound }
+    private enum PartKind { None, Cut, Speed, Zoom, Overlay, Volume, Sound, Freeze }
     private PartKind focusedKind;
     private void InitParts()
     {
@@ -28,7 +28,7 @@ public partial class TrimWindow
     }
     private void FocusPart(object? part)
     {
-        focusedKind = part switch { CutRegion => PartKind.Cut, SpeedRegion => PartKind.Speed, ZoomRegion => PartKind.Zoom, OverlayItem => PartKind.Overlay, VolumeRegion => PartKind.Volume, SoundItem => PartKind.Sound, _ => PartKind.None };
+        focusedKind = part switch { CutRegion => PartKind.Cut, SpeedRegion => PartKind.Speed, ZoomRegion => PartKind.Zoom, OverlayItem => PartKind.Overlay, VolumeRegion => PartKind.Volume, SoundItem => PartKind.Sound, FreezeFrame => PartKind.Freeze, _ => PartKind.None };
         Timeline.FocusedPart = part;
     }
     // The part being edited or last clicked, in its current form.
@@ -41,6 +41,7 @@ public partial class TrimWindow
         PartKind.Cut => Timeline.FocusedPart is CutRegion c && Timeline.Cuts.Contains(c) ? c : null,
         PartKind.Volume => Timeline.FocusedPart is VolumeRegion v && Timeline.VolumeRegions.Contains(v) ? v : null,
         PartKind.Sound => Timeline.FocusedPart is SoundItem s ? CurrentVersion(s) : null,
+        PartKind.Freeze => Timeline.FocusedPart is FreezeFrame f ? Timeline.Freezes.FirstOrDefault(x => Math.Abs(x.At - f.At) < 1e-9) : null,
         _ => null
     };
     // Copy and paste: Ctrl+C copies the clicked part (kept while Flashback runs, even across clips);
@@ -52,7 +53,7 @@ public partial class TrimWindow
         copiedPart = part;
         StatusLabel.Text = $"Copied the {PartName(part)}. Ctrl+V pastes it at the playhead.";
     }
-    private static string PartName(object part) => part switch { CutRegion { Lane: < 0 } => "video cut-out", CutRegion => "audio cut-out", SpeedRegion => "speed part", ZoomRegion => "zoom", VolumeRegion => "volume change", SoundItem => "sound", OverlayItem { Kind: OverlayKind.Image } => "picture", OverlayItem { Kind: OverlayKind.Video } => "video", OverlayItem { Kind: OverlayKind.Shape } => "shape", _ => "text" };
+    private static string PartName(object part) => part switch { CutRegion { Lane: < 0 } => "video cut-out", CutRegion => "audio cut-out", SpeedRegion => "speed part", ZoomRegion => "zoom", VolumeRegion => "volume change", SoundItem => "sound", FreezeFrame => "freeze frame", OverlayItem { Kind: OverlayKind.Image } => "picture", OverlayItem { Kind: OverlayKind.Video } => "video", OverlayItem { Kind: OverlayKind.Shape } => "shape", _ => "text" };
     private void PastePart()
     {
         if (copiedPart is not { } part) { StatusLabel.Text = "Nothing copied yet. Click a part and press Ctrl+C."; return; }
@@ -62,6 +63,7 @@ public partial class TrimWindow
         bool Overlaps(double a, double b) => b > start + 1e-9 && a < end - 1e-9;
         switch (part)
         {
+            case FreezeFrame freeze: AddFreeze(start, freeze.Seconds); break;
             case CutRegion cut:
                 if (cut.Lane >= Timeline.Lanes.Count) { StatusLabel.Text = "This clip has no matching audio track for that cut-out."; return; }
                 CutAdded(cut with { Start = start, End = end }); break;
@@ -130,6 +132,11 @@ public partial class TrimWindow
                 if (Timeline.VolumeRegions.Contains(volume)) RemoveVolume(volume); return true;
             case PartKind.Sound when part is SoundItem sound:
                 if (CurrentVersion(sound) is SoundItem now) RemoveSound(now); return true;
+            case PartKind.Freeze when part is FreezeFrame freeze:
+            {
+                int i = Timeline.Freezes.ToList().FindIndex(f => Math.Abs(f.At - freeze.At) < 1e-9);
+                if (i >= 0) RemoveFreeze(i); return true;
+            }
             case PartKind.Overlay:            {
                 int i = Timeline.SelectedOverlay >= 0 ? Timeline.SelectedOverlay : Timeline.Overlays.ToList().FindIndex(o => ReferenceEquals(o, part));
                 if (i < 0) return true;

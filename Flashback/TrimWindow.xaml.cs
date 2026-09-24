@@ -27,10 +27,13 @@ public partial class TrimWindow : Window
     private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
     // Undo covers kept sections, cut-outs, speed parts, zooms, text, pictures, shapes, videos, volume parts and sounds.
-    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow, ZoomRegion[] Zoom, OverlayItem[] Overlays, VolumeRegion[] Volumes, SoundItem[] Sounds);
+    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow, ZoomRegion[] Zoom, OverlayItem[] Overlays, VolumeRegion[] Volumes, SoundItem[] Sounds, FreezeFrame[] Freezes);
     private readonly Stack<EditState> undo = new(), redo = new();
     private int previewSection = -1;
-    private (SpeedRegion Part, long Began)? freezing;
+    // A freeze frame being held in the preview, and the last one finished (so playing on from it
+    // doesn't hold it again).
+    private (FreezeFrame Part, long Began)? freezing;
+    private double? freezeDone;
     public event Action<ClipResult>? Exported;
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
@@ -49,7 +52,7 @@ public partial class TrimWindow : Window
         InitZoom();
         InitOverlays();
         InitParts();
-        InitTiming();
+        InitTiming(); InitFreezes(); InitSectionOrder();
         InitAudioParts();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
@@ -107,12 +110,14 @@ public partial class TrimWindow : Window
     }
     private void Video_DragOver(object sender,DragEventArgs e)
     {
+        if (e.Data.GetDataPresent(typeof(KeepSection))) return;
         var files=TrimImport.Files(e.Data);
         bool picture=source.Length>0 && files.Length==1 && (PictureExtensions.Contains(Path.GetExtension(files[0]).ToLowerInvariant()) || SoundExtensions.Contains(Path.GetExtension(files[0]).ToLowerInvariant()));
         e.Effects=exportCancellation==null && (picture || TrimImport.CanDrop(files)) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled=true;
     }
     private void Video_Drop(object sender,DragEventArgs e)
     {
+        if (e.Data.GetDataPresent(typeof(KeepSection))) return;
         e.Handled=true;
         try
         {
@@ -121,6 +126,8 @@ public partial class TrimWindow : Window
             // A picture dropped on an open clip is added over it at the playhead.
             if (DropPicture(paths[0])) { e.Effects=DragDropEffects.Copy; return; }
             if (SoundExtensions.Contains(Path.GetExtension(paths[0]).ToLowerInvariant()) && source.Length>0) { _ = DropSoundAsync(paths[0]); e.Effects=DragDropEffects.Copy; return; }
+            // A video dropped on the timeline joins the end of it; dropped anywhere else it opens on its own.
+            if (OverTimeline(e) && TrimImport.CanDrop(paths)) { _ = AddClipAsync(paths[0]); e.Effects=DragDropEffects.Copy; return; }
             if (LoadClip(paths[0])) e.Effects=DragDropEffects.Copy;
         }
         catch(Exception ex) { e.Effects=DragDropEffects.None; ImportError(ex.Message); }
@@ -131,12 +138,12 @@ public partial class TrimWindow : Window
         // A paused decoder may report an old position while a seek is pending.
         // Never let it overwrite the user's playhead or I/O marks.
         if (!playing || Timeline.IsDragging) return;
-        // A freeze frame holds the picture while the playhead carries on through the part, then plays on.
+        // A freeze frame holds the picture with the playhead parked on it, then plays on from there.
         if (freezing is { } held)
         {
             double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(held.Began).TotalSeconds * PreviewRate;
-            if (elapsed >= held.Part.End - held.Part.Start) { freezing = null; int keep = previewSection; StartPlayback(held.Part.End, keep); }
-            else SetPlayhead(held.Part.Start + elapsed);
+            if (elapsed >= held.Part.Seconds) { freezing = null; freezeDone = held.Part.At; int keep = previewSection; StartPlayback(held.Part.At, keep); }
+            else SetPlayhead(held.Part.At);
             return;
         }
         double actual = Player.Position.TotalSeconds;
@@ -149,8 +156,10 @@ public partial class TrimWindow : Window
             else { SetPlayhead(sections[previewSection].End); Pause(); }
             return;
         }
-        if (Timeline.SlowRegions.FirstOrDefault(r => r.Freeze && actual >= r.Start && actual < r.End - .02) is { } freeze)
-        { Player.Pause(); Player.Position = TimeSpan.FromSeconds(freeze.Start); freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp() - (long)((actual - freeze.Start) / Math.Max(.1, PreviewRate) * System.Diagnostics.Stopwatch.Frequency)); SetPlayhead(actual); return; }
+        // Reaching a freeze frame: hold the picture there, then play on from the same moment.
+        if (freezeDone is double done && (actual > done + .15 || actual < done - .05)) freezeDone = null;
+        if (Timeline.Freezes.FirstOrDefault(f => f.At >= playhead - 1e-6 && f.At <= actual + .001 && (freezeDone is not double d || Math.Abs(d - f.At) > 1e-6)) is { } freeze)
+        { Player.Pause(); Player.Position = TimeSpan.FromSeconds(freeze.At); freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp()); SetPlayhead(freeze.At); return; }
         SetPlayhead(actual);
         // Speed parts play at their speed in the preview as well.
         double speed = PreviewRate * RegionSpeedAt(actual);
@@ -163,7 +172,7 @@ public partial class TrimWindow : Window
         if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
         if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
         // A freeze frame holds everything on the video, pictures and videos included.
-        OverlayView.Time = freezing is { } held ? held.Part.Start : playhead;
+        OverlayView.Time = freezing is { } held ? held.Part.At : playhead;
         OverlayView.PlaybackSpeed = freezing != null ? 0 : PreviewRate * RegionSpeedAt(playhead);
         // Keyframed items look different at each moment; the panel shows them as they are at the playhead.
         if (!playing && OverlayPanel.Visibility == Visibility.Visible && SelectedOverlayItem is { Keys.Count: > 1 }) LoadOverlayUi();
@@ -248,9 +257,14 @@ public partial class TrimWindow : Window
         if (exportCancellation!=null) return;
         try
         {
+            // Sections play in the order listed. While they're in time order, new ones slot into place;
+            // once they've been rearranged, a new one goes on the end and an updated one keeps its place.
             var list = sections.ToList();
-            if (replace) { if (SectionsList.SelectedItem is not KeepSection old) throw new ArgumentException("Select a section to update."); list.Remove(old); }
-            var item = new KeepSection(KeepSection.Parse(StartBox.Text), KeepSection.Parse(EndBox.Text)); list.Add(item);
+            bool inOrder = list.Zip(list.Skip(1)).All(p => p.First.Start <= p.Second.Start);
+            var item = new KeepSection(KeepSection.Parse(StartBox.Text), KeepSection.Parse(EndBox.Text));
+            if (replace) { if (SectionsList.SelectedItem is not KeepSection old) throw new ArgumentException("Select a section to update."); list[list.IndexOf(old)] = item; }
+            else list.Add(item);
+            if (inOrder) list = list.OrderBy(s => s.Start).ToList();
             list = ClipEditor.Validate(list, media.Duration);
             double previousPosition=playhead;
             Snapshot(); Pause(); sections.Clear(); foreach (var s in list) sections.Add(s); SectionsList.SelectedIndex = -1; SeekTo(previousPosition);
@@ -267,7 +281,7 @@ public partial class TrimWindow : Window
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
-    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray(), Timeline.Overlays.ToArray(), Timeline.VolumeRegions.ToArray(), Timeline.Sounds.ToArray());
+    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray(), Timeline.Overlays.ToArray(), Timeline.VolumeRegions.ToArray(), Timeline.Sounds.ToArray(), Timeline.Freezes.ToArray());
     private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); ProjectChanged(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
     private void Restore(Stack<EditState> from, Stack<EditState> to)
@@ -276,7 +290,7 @@ public partial class TrimWindow : Window
         Pause(); to.Push(CurrentEdit()); var saved = from.Pop();
         if (!saved.Sections.SequenceEqual(sections))
         { sections.Clear(); foreach(var s in saved.Sections) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0; }
-        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; Timeline.ZoomRegions = saved.Zoom; SetOverlays(saved.Overlays); Timeline.VolumeRegions = saved.Volumes; SetSounds(saved.Sounds); ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
+        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; Timeline.ZoomRegions = saved.Zoom; SetOverlays(saved.Overlays); Timeline.VolumeRegions = saved.Volumes; SetSounds(saved.Sounds); Timeline.Freezes = saved.Freezes; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
         if (ZoomPanel.Visibility == Visibility.Visible) LoadZoomUi(); else ApplyZoomPreview();
         if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi();
     }

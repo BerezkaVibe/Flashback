@@ -13,10 +13,12 @@ internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool To
 // A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
 internal sealed record CutRegion(int Lane, double Start, double End);
 // A stretch played back slower (video and audio together), in source time.
-// Speed 0 is a freeze frame: the part shows its first frame for its whole length, with or without its sound.
-internal sealed record SpeedRegion(double Start, double End, double Speed, bool FreezeSound = true)
+internal sealed record SpeedRegion(double Start, double End, double Speed);
+// A freeze frame: the picture at At (source time) holds for Seconds, then the clip plays on from the
+// same moment. It adds time to the export instead of replacing footage; the hold is silent.
+internal sealed record FreezeFrame(double At, double Seconds)
 {
-    internal bool Freeze => Speed == 0;
+    internal const double MinSeconds = .2, MaxSeconds = 10;
 }
 
 internal sealed class TrimTimeline : FrameworkElement
@@ -101,6 +103,15 @@ internal sealed class TrimTimeline : FrameworkElement
     internal event Action<double, double>? SlowAdded;
     internal event Action<int>? SlowTagClicked, SlowRemoved;
     private readonly List<Rect> slowTags = new();
+    // Freeze frames: a slit on the video track with a tag showing how long it holds. Click the tag (or the
+    // slit) for its settings; drag the slit to move it.
+    private IReadOnlyList<FreezeFrame> freezes = Array.Empty<FreezeFrame>();
+    internal IReadOnlyList<FreezeFrame> Freezes { get => freezes; set { freezes = value; slowVersion++; InvalidateVisual(); } }
+    internal event Action<int>? FreezeTagClicked;
+    internal event Action? FreezeEditStarted, FreezeEditFinished;
+    internal event Action<int, double>? FreezeMoved;
+    private readonly List<Rect> freezeTags = new();
+    private int dragFreeze = -1; private bool freezeDragMoved;
     private (int Lane, double Time)? pendingCut, cutHover;
     private Point pressPoint;
     private const double PlayheadLock = 3;
@@ -244,6 +255,7 @@ internal sealed class TrimTimeline : FrameworkElement
         OverlayItem o => part is OverlayItem p && ReferenceEquals(p, o),
         VolumeRegion v => part is VolumeRegion p && p == v,
         SoundItem s => part is SoundItem p && p.Start == s.Start && p.End == s.End && p.Row == s.Row,
+        FreezeFrame f => part is FreezeFrame p && Math.Abs(p.At - f.At) < 1e-9,
         _ => false
     };
     // The part under a point: on the video track the zoom, then speed part, then cut; on a lane its cut.
@@ -269,7 +281,7 @@ internal sealed class TrimTimeline : FrameworkElement
         int current = under.FindIndex(IsFocused);
         return under[(current + 1) % under.Count];
     }
-    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd }
+    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd, FreezeMove }
     private SoundItem? soundOriginal, soundCurrent; private bool soundDragMoved;
     private Drag drag;
     private double grabOffset;
@@ -405,6 +417,7 @@ internal sealed class TrimTimeline : FrameworkElement
         foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi, focused: IsFocused(cut), cut: cut);
         DrawOverlayWash(dc);
         DrawSlowRegions(dc, dpi);
+        DrawFreezes(dc, dpi);
         DrawZoomRegions(dc, dpi);
         DrawOverlayRows(dc, dpi);
         DrawFocusGrips(dc);
@@ -712,7 +725,7 @@ internal sealed class TrimTimeline : FrameworkElement
             if (r.End < ViewStart || r.Start > ViewStart + Span) { slowTags.Add(Rect.Empty); continue; }
             double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
             dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow || IsFocused(r) ? Ink : SlowEdge, i == selectedSlow || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
-            var label = Text(r.Freeze ? "Freeze" : r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
+            var label = Text(r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
             var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), TrackTop + TrackHeight - 15, label.Width + 8, 13);
             dc.DrawRoundedRectangle(SlowEdge, null, tag, 3, 3);
             dc.DrawText(label, new Point(tag.X + 4, tag.Y + (tag.Height - label.Height) / 2));
@@ -720,6 +733,32 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
+    private int FreezeAt(Point p)
+    {
+        for (int i = freezes.Count - 1; i >= 0; i--)
+        {
+            if (i < freezeTags.Count && freezeTags[i].Contains(p)) return i;
+            if (p.Y >= TrackTop - 3 && p.Y <= TrackTop + TrackHeight + 3 && Math.Abs(p.X - XAt(freezes[i].At)) <= 4 && freezes[i].At >= ViewStart && freezes[i].At <= ViewStart + Span) return i;
+        }
+        return -1;
+    }
+    private void DrawFreezes(DrawingContext dc, double dpi)
+    {
+        freezeTags.Clear();
+        foreach (var f in freezes)
+        {
+            if (f.At < ViewStart || f.At > ViewStart + Span) { freezeTags.Add(Rect.Empty); continue; }
+            double x = XAt(f.At); bool focused = IsFocused(f);
+            dc.DrawRoundedRectangle(FreezeInk, focused ? new Pen(Ink, 1) : null, new Rect(x - 1.5, TrackTop - 3, 3, TrackHeight + 6), 1.5, 1.5);
+            var label = Text("❄ " + f.Seconds.ToString("0.#", CultureInfo.InvariantCulture) + " s", 10, FreezeText, dpi);
+            double w = label.Width + 8, left = x + 3 + w > Inset + ActualWidth - 2 * Inset ? x - 3 - w : x + 3;
+            var tag = new Rect(left, TrackTop + 2, w, 13);
+            dc.DrawRoundedRectangle(FreezeInk, focused ? new Pen(Ink, 1.2) : null, tag, 3, 3);
+            dc.DrawText(label, new Point(tag.X + 4, tag.Y + (tag.Height - label.Height) / 2));
+            freezeTags.Add(tag);
+        }
+    }
+    private static readonly Brush FreezeInk = Brush("#7DD3FC"), FreezeText = Brush("#0B2530");
     // The cutter: red (purple for speed, teal for zoom), or white while it is locked onto the playhead.
     private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), ZoomCutterPen = new(Brush("#5EEAD4"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
@@ -811,6 +850,7 @@ internal sealed class TrimTimeline : FrameworkElement
             CaptureMouse(); e.Handled = true; return;
         }
         if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
+        if (pendingCut == null && !Placing && FreezeAt(point) is int freeze and >= 0) { drag = Drag.FreezeMove; dragFreeze = freeze; freezeDragMoved = false; pressPoint = point; CaptureMouse(); e.Handled = true; return; }
         if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
         if (Placing && (pendingCut != null || BandAt(point) > -2))
         {
@@ -847,6 +887,12 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseMove(e);
         var p=e.GetPosition(this);
+        if (IsMouseCaptured && drag == Drag.FreezeMove && dragFreeze >= 0 && dragFreeze < freezes.Count)
+        {
+            if (!freezeDragMoved && Math.Abs(p.X - pressPoint.X) <= 3) return;
+            if (!freezeDragMoved) { freezeDragMoved = true; FreezeEditStarted?.Invoke(); }
+            FreezeMoved?.Invoke(dragFreeze, Math.Clamp(LockedTime(p.X), 0, Duration)); return;
+        }
         if (IsMouseCaptured && drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd && soundOriginal is { } original && soundCurrent is { } current)
         {
             if (!soundDragMoved && (p - pressPoint).Length <= 3) return;
@@ -933,6 +979,7 @@ internal sealed class TrimTimeline : FrameworkElement
             return;
         }
         if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom · also selects it, so you can drag its ends"; return; }
+        if (pendingCut == null && !Placing && FreezeAt(p) >= 0) { Cursor = Cursors.SizeWE; ToolTip = "Freeze frame · click for how long it holds, drag to move it"; return; }
         if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed · also selects it, so you can drag its ends"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
@@ -989,6 +1036,13 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        if (IsMouseCaptured && drag == Drag.FreezeMove)
+        {
+            int picked = dragFreeze; bool moved = freezeDragMoved;
+            ReleaseMouseCapture(); e.Handled = true;
+            if (!moved && picked >= 0) FreezeTagClicked?.Invoke(picked);
+            return;
+        }
         if (!IsMouseCaptured) return;
         if (drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd)
         {
@@ -1013,6 +1067,12 @@ internal sealed class TrimTimeline : FrameworkElement
     internal void EndDrag()
     {
         if (drag == Drag.None) return;
+        if (drag == Drag.FreezeMove)
+        {
+            drag = Drag.None; dragFreeze = -1;
+            if (freezeDragMoved) { freezeDragMoved = false; FreezeEditFinished?.Invoke(); }
+            return;
+        }
         if (drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd)
         {
             drag = Drag.None; soundOriginal = soundCurrent = null;

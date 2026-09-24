@@ -114,14 +114,15 @@ public static class ClipEditor
 {
     public static List<KeepSection> Validate(IEnumerable<KeepSection> sections, double duration)
     {
-        var list = sections.OrderBy(s => s.Start).ToList();
+        // Sections play in the order given; they may not overlap in the source.
+        var list = sections.ToList(); var sorted = list.OrderBy(s => s.Start).ToList();
         if (list.Count is < 1 or > 30) throw new ArgumentException("Keep between 1 and 30 sections.");
-        for (int i = 0; i < list.Count; i++)
+        for (int i = 0; i < sorted.Count; i++)
         {
-            var s = list[i];
+            var s = sorted[i];
             if (!double.IsFinite(s.Start) || !double.IsFinite(s.End) || s.Start < 0 || s.End > duration + .001 || s.Duration < .1)
                 throw new ArgumentException("Each section must be within the clip and at least 0.1 seconds long.");
-            if (i > 0 && s.Start < list[i - 1].End) throw new ArgumentException("Sections cannot overlap. Remove or adjust the overlapping section first.");
+            if (i > 0 && s.Start < sorted[i - 1].End) throw new ArgumentException("Sections cannot overlap. Remove or adjust the overlapping section first.");
         }
         return list;
     }

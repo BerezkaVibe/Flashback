@@ -103,12 +103,33 @@ internal static class MediaPartsDiagnostics
                 Check(Near(await Rgb(output, 2, x, 180), color.Item1, color.Item2, color.Item3), $"{(item.Kind == OverlayKind.Video ? "Videos" : "Shapes")} {(stuck ? "stuck to the video follow a zoom" : "fixed on screen ignore a zoom")}");
             }
         // ---- Freeze frame ----
+        // A freeze at 1 s holding 1.5 s: the export is 1.5 s longer, still during the hold, and after it
+        // the clip carries on from 1 s, so nothing is skipped.
         var frozen = Path.Combine(folder, "Freeze.mp4");
-        await ExportServices.PreciseAsync(source, frozen, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(1, 2.5, 0) } });
-        var a = await Gray(frozen, 1.3, 0, 0, 640, 360); var b = await Gray(frozen, 2.2, 0, 0, 640, 360); var c = await Gray(frozen, 3.2, 0, 0, 640, 360);
-        double still = a.Zip(b).Average(p => Math.Abs(p.First - p.Second)), moved = b.Zip(c).Average(p => Math.Abs(p.First - p.Second));
-        Check(Math.Abs(ClipMedia.Read(frozen).Duration - 4) < .2 && still < 2 && moved > 4, $"A freeze frame holds the picture for its part, then the clip plays on (still {still:0.0}, after {moved:0.0})");
-
+        await ExportServices.PreciseAsync(source, frozen, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { Freezes = new[] { new FreezeFrame(1, 1.5) }, Overlays = new[] { dot with { Keys = Array.Empty<OverlayKeyframe>(), X = .5 } } });
+        var a = await Gray(frozen, 1.2, 0, 0, 640, 360); var b = await Gray(frozen, 2.3, 0, 0, 640, 360);
+        var afterHold = await Gray(frozen, 3.5, 0, 0, 640, 360); var sourceAfter = await Gray(source, 2.0, 0, 0, 640, 360); var sourceHeld = await Gray(source, 1.0, 0, 0, 640, 360);
+        double Difference(byte[] x, byte[] y) => x.Zip(y).Average(p => Math.Abs(p.First - p.Second));
+        double still = Difference(a, b), resumed = Difference(afterHold, sourceAfter), held = Difference(a, sourceHeld);
+        Check(Math.Abs(ClipMedia.Read(frozen).Duration - 5.5) < .2 && still < 2, $"A freeze frame holds the picture and adds its time (length {ClipMedia.Read(frozen).Duration:0.00} s, still {still:0.0})");
+        Check(resumed < 6 && held < 20, $"After a freeze the clip plays on from the same moment, skipping nothing (resumed {resumed:0.0}, held {held:0.0})");
+        Check(Near(await Rgb(frozen, 1.8, 320, 180), 0, 255, 0), "Shapes and text show on the held frame");
+        var pcmHold = await Pcm(frozen, 1.3, .8);
+        Check(Loudness(pcmHold) < 300, "The hold is silent");
+        // Sections play in the order they're listed: 3-4 s, then 0-1 s.
+        var swapped = Path.Combine(folder, "Swapped.mp4");
+        await ExportServices.PreciseAsync(source, swapped, new[] { new KeepSection(3, 4), new KeepSection(0, 1) }, null, CancellationToken.None, true, new ShareExportOptions());
+        double first = Difference(await Gray(swapped, .5, 0, 0, 640, 360), await Gray(source, 3.5, 0, 0, 640, 360)), second = Difference(await Gray(swapped, 1.5, 0, 0, 640, 360), await Gray(source, .5, 0, 0, 640, 360));
+        Check(Math.Abs(ClipMedia.Read(swapped).Duration - 2) < .15 && first < 6 && second < 6, $"Sections play in the order they're listed ({first:0.0}, {second:0.0})");
+        Check(Math.Abs(ShareExportOptions.OutputTime(new ShareExportOptions().Pieces(new[] { new KeepSection(3, 4), new KeepSection(0, 1) }), .5) - 1.5) < 1e-9, "Music and sounds land where their moment plays in a reordered export");
+        // ---- More clips ----
+        var copy = Path.Combine(folder, "Second take.mp4"); File.Copy(source, copy, true);
+        var twice = await ClipJoin.JoinAsync(source, copy, Path.Combine(folder, "Joined same.mp4"), null, CancellationToken.None, syntheticEncoder: true);
+        Check(ClipJoin.Matches(ClipMedia.Read(source), ClipMedia.Read(copy)) && Math.Abs(ClipMedia.Read(twice).Duration - 12) < .3 && ClipMedia.Read(twice).HasAudio, "Matching clips join end to end by copying");
+        var mixed = await ClipJoin.JoinAsync(source, inset, Path.Combine(folder, "Joined mixed.mp4"), null, CancellationToken.None, syntheticEncoder: true);
+        var mixedMedia = ClipMedia.Read(mixed);
+        Check(mixedMedia.Width == 640 && mixedMedia.Height == 360 && Math.Abs(mixedMedia.Duration - 12) < .3 && Near(await Rgb(mixed, 9, 320, 180), 255, 0, 255) && !Near(await Rgb(mixed, 9, 10, 180), 255, 0, 255),
+            "A clip of another size is converted to match: fitted and letterboxed");
         // ---- Volume parts and music ----
         var quiet = Path.Combine(folder, "Volume part.mp4");
         await ExportServices.PreciseAsync(source, quiet, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { VolumeRegions = new[] { new VolumeRegion(0, 1, 2, 0) } });
@@ -246,7 +267,17 @@ internal static class MediaPartsDiagnostics
             var capped = OverlayRenderer.Content(start[joined], 0, 0, 16.0 / 9).Bounds; var plainEnds = OverlayRenderer.Content(start[joined] with { StartCap = OverlayCap.None, EndCap = OverlayCap.None }, 0, 0, 16.0 / 9).Bounds;
             Check(capped.Width > plainEnds.Width + 4 || capped.Height > plainEnds.Height + 4, $"Line ends draw arrows and dots ({plainEnds.Size} → {capped.Size})");            // Every drawn thing is drawn into the export the same way.
             foreach (var i in new[] { loop, arrow, joined })
-                Check(!OverlayRenderer.Content(start[i], 0, 0, 16.0 / 9).Bounds.IsEmpty, $"{start[i].Label} renders for the export");            // A zoomed-in timeline keeps its layers lined up with the video track.
+                Check(!OverlayRenderer.Content(start[i], 0, 0, 16.0 / 9).Bounds.IsEmpty, $"{start[i].Label} renders for the export");            // Sections move by their chips; adding a clip keeps every edit and continues the timeline.
+            live.StartBox.Text = "1"; live.EndBox.Text = "2"; typeof(TrimWindow).GetMethod("Add_Click", flags)!.Invoke(live, new object[] { live, new RoutedEventArgs() });
+            live.StartBox.Text = "4"; live.EndBox.Text = "5"; typeof(TrimWindow).GetMethod("Add_Click", flags)!.Invoke(live, new object[] { live, new RoutedEventArgs() });
+            live.MoveSection(1, 0);
+            var order = live.SectionsList.Items.Cast<KeepSection>().ToList();
+            Check(order.Count == 2 && order[0].Start == 4 && order[1].Start == 1, "Dragging a section's chip changes the order sections play in");
+            int overlaysBefore = live.Timeline.Overlays.Count; var firstOverlay = live.Timeline.Overlays[0];
+            Check(await live.AddClipAsync(inset), "A clip is added onto the end of the timeline");
+            Check(Math.Abs(live.Timeline.Duration - 12) < .3 && live.Timeline.Overlays.Count == overlaysBefore && live.Timeline.Overlays[0].Start == firstOverlay.Start
+                && live.SectionsList.Items.Count == 3 && live.SectionsList.Items.Cast<KeepSection>().Last().Start >= 5.9, "After adding a clip every edit keeps its place, and the new part joins as a section");
+            await Task.Delay(600); await Shot(live, "parts-added-clip.png");            // A zoomed-in timeline keeps its layers lined up with the video track.
             for (int i = 0; i < 3; i++) typeof(TrimWindow).GetMethod("ZoomIn_Click", flags)!.Invoke(live, new object[] { live, new RoutedEventArgs() });
             await Task.Delay(300); await Shot(live, "parts-timeline-zoomed.png");
         }

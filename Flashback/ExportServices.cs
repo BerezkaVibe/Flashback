@@ -11,9 +11,11 @@ namespace Flashback;
 
 internal enum ExportFormat { Mp4, Mp4Hd60, Mp4Sd30, Mov, Gif, Mp3 }
 // A stretch of the source that exports as one piece, at one speed (or frozen on its first frame).
-internal readonly record struct ExportPiece(double Start, double End, double Speed, bool Freeze = false, bool FreezeSound = true)
+// A stretch of the source at a speed, or a freeze: the frame at Start held for Hold seconds (at Speed).
+internal readonly record struct ExportPiece(double Start, double End, double Speed, double Hold = 0)
 {
-    internal double Seconds => (End - Start) / Speed;
+    internal bool Freeze => Hold > 0;
+    internal double Seconds => Freeze ? Hold / Speed : (End - Start) / Speed;
 }
 // Source-pixel rectangle; width and height are kept even for 4:2:0 video.
 internal sealed record CropRect(int X, int Y, int Width, int Height)
@@ -46,25 +48,37 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     // Louder or quieter stretches of the audio lanes, and music or sound files mixed over the export.
     internal IReadOnlyList<VolumeRegion> VolumeRegions { get; init; } = Array.Empty<VolumeRegion>();
     internal IReadOnlyList<SoundItem> Sounds { get; init; } = Array.Empty<SoundItem>();
-    // Kept ranges split at speed-part edges; each piece carries its combined speed. A freeze piece
-    // holds its first frame for as long as it lasts (at the export's overall speed).
+    // Freeze frames: holds inserted at a moment, adding time.
+    internal IReadOnlyList<FreezeFrame> Freezes { get; init; } = Array.Empty<FreezeFrame>();
+    // Kept ranges, in the order they play, split at speed-part edges; each piece carries its combined
+    // speed. A freeze inside a range splits it and holds that frame before the rest plays on.
     internal List<ExportPiece> Pieces(IEnumerable<KeepSection> ranges)
     {
         var pieces = new List<ExportPiece>();
-        void Add(double a, double b, SpeedRegion? r)
-        {
-            if (b - a > .005) pieces.Add(new ExportPiece(a, b, (r is { Freeze: false } ? r.Speed : 1) * Speed, r?.Freeze == true, r?.FreezeSound ?? true));
-        }
         foreach (var range in ranges)
         {
+            var part = new List<ExportPiece>();
+            void Add(double a, double b, double speed) { if (b - a > .005) part.Add(new ExportPiece(a, b, speed * Speed)); }
             double cursor = range.Start;
             foreach (var region in SlowRegions.Where(r => r.End > range.Start && r.Start < range.End).OrderBy(r => r.Start))
             {
-                Add(cursor, Math.Max(cursor, region.Start), null);
-                Add(Math.Max(cursor, region.Start), Math.Min(region.End, range.End), region);
+                Add(cursor, Math.Max(cursor, region.Start), 1);
+                Add(Math.Max(cursor, region.Start), Math.Min(region.End, range.End), region.Speed);
                 cursor = Math.Max(cursor, Math.Min(region.End, range.End));
             }
-            Add(cursor, range.End, null);
+            Add(cursor, range.End, 1);
+            foreach (var freeze in Freezes.Where(f => f.At >= range.Start - 1e-9 && f.At < range.End - .005).OrderBy(f => f.At))
+            {
+                int at = part.FindIndex(p => !p.Freeze && freeze.At >= p.Start - 1e-9 && freeze.At < p.End);
+                if (at < 0) continue;
+                var p = part[at]; var hold = new ExportPiece(freeze.At, freeze.At, Speed, freeze.Seconds);
+                var pieceParts = new List<ExportPiece>();
+                if (freeze.At - p.Start > .005) pieceParts.Add(p with { End = freeze.At });
+                pieceParts.Add(hold);
+                pieceParts.Add(p with { Start = freeze.At });
+                part.RemoveAt(at); part.InsertRange(at, pieceParts);
+            }
+            pieces.AddRange(part);
         }
         return pieces;
     }
@@ -73,14 +87,16 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     // when it falls in a removed stretch).
     internal static double OutputTime(IReadOnlyList<ExportPiece> pieces, double time)
     {
-        double at = 0;
+        // Sections can play in any order, so look for the piece holding this moment; failing that, the
+        // kept piece that starts soonest after it.
+        double at = 0, soonestAt = -1, soonest = double.MaxValue;
         foreach (var p in pieces)
         {
-            if (time <= p.Start) return at;
-            if (time < p.End) return at + (time - p.Start) / p.Speed;
+            if (!p.Freeze && time >= p.Start && time < p.End) return at + (time - p.Start) / p.Speed;
+            if (!p.Freeze && p.Start >= time && p.Start < soonest) { soonest = p.Start; soonestAt = at; }
             at += p.Seconds;
         }
-        return at;
+        return soonestAt >= 0 ? soonestAt : at;
     }
     // atempo takes 0.5 to 2 per stage, so very slow or fast speeds chain stages.
     internal static string AudioTempo(double speed)
@@ -111,7 +127,8 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         if (Crop is { } c && (c.X < 0 || c.Y < 0 || c.Width < 32 || c.Height < 32)) throw new ArgumentException("The crop area is too small.");
         if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
         if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
-        if (SlowRegions.Any(r => !r.Freeze && (r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9) || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
+        if (SlowRegions.Any(r => r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9 || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
+        if (Freezes.Any(f => !double.IsFinite(f.At) || f.At < 0 || !(f.Seconds >= FreezeFrame.MinSeconds - 1e-9 && f.Seconds <= FreezeFrame.MaxSeconds + 1e-9))) throw new ArgumentException("A freeze frame holds for 0.2 to 10 seconds.");
         if (VolumeRegions.Any(v => v.Gain is < 0 or > 2 || v.End <= v.Start)) throw new ArgumentException("A volume part is outside 0% to 200%.");
         if (Sounds.FirstOrDefault(s => !File.Exists(s.Path)) is { } lost) throw new ArgumentException($"The sound {Path.GetFileName(lost.Path)} can't be found. Remove it or add it again.");
         if (Overlays.FirstOrDefault(o => o.Kind == OverlayKind.Video && !File.Exists(o.VideoPath)) is { } lostVideo) throw new ArgumentException($"The video {Path.GetFileName(lostVideo.VideoPath)} can't be found. Remove it or add it again.");
@@ -196,9 +213,12 @@ internal static class ExportServices
             int frameW = media.Width > 0 ? media.Width : 1920, frameH = media.Height > 0 ? media.Height : 1080;
             bool mixTracks = audio && media.HasSeparateTracks && (options.CustomMix || options.Cuts.Any(c => c.Lane >= 0) || options.VolumeRegions.Any(v => v.Lane >= 0));
             int step = 0;
+            // A freeze piece reads one frame; every piece's sound is made alike so silent holds join cleanly.
+            double frame = 1 / (media.FrameRate > 0 ? media.FrameRate : 30);
+            string audioShape = pieces.Any(p => p.Freeze) ? ",aformat=sample_rates=48000:channel_layouts=stereo" : "";
             for (int i = 0; i < pieces.Count; i++)
             {
-                var piece = pieces[i]; double start = piece.Start, end = piece.End, speed = piece.Speed, length = end - start;
+                var piece = pieces[i]; double start = piece.Start, end = piece.Freeze ? piece.Start + frame : piece.End, speed = piece.Speed, length = end - start;
                 string trim = $"atrim=duration={Number(length)},asetpts=PTS-STARTPTS";
                 // Speed changes stretch or squeeze this piece after its cuts are applied in source time.
                 string slowVideo = speed != 1 ? $",setpts=PTS/{Number(speed)}" : "", slowAudio = speed != 1 ? "," + ShareExportOptions.AudioTempo(speed) : "";
@@ -212,9 +232,9 @@ internal static class ExportServices
                 // Volume parts on a lane, then its cut-outs (a cut-out wins where they overlap).
                 string Gain(int lane) => string.Concat(options.VolumeRegions.Where(v => v.Lane == lane && v.End > start && v.Start < end)
                     .Select(v => $",volume={Number(v.Gain)}:enable='between(t,{Number(Math.Max(0, v.Start - start))},{Number(Math.Min(length, v.End - start))})'"));
-                string Mute(int lane) => Gain(lane) + (Window(lane) is { } w ? $",volume=0:enable='{w}'" : "") + (piece.Freeze && !piece.FreezeSound ? ",volume=0" : "");
+                string Mute(int lane) => Gain(lane) + (Window(lane) is { } w ? $",volume=0:enable='{w}'" : "");
                 if (video && decode is { } hw) inputs.AddRange(new[] { "-hwaccel", hw });
-                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(length), "-i", source });
+                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(piece.Freeze ? length + frame * 2 : length), "-i", source });
                 var pipSounds = new List<string>();
                 if (video)
                 {
@@ -227,8 +247,8 @@ internal static class ExportServices
                         var (z, x, y) = ZoomRegion.Expressions(zooms, start, media.FrameRate);
                         zoom = $",zoompan=z='{z}':x='{x}':y='{y}':d=1:s={media.Width}x{media.Height}:fps={Number(media.FrameRate)}";
                     }
-                    // A freeze holds the piece's first frame for its whole length.
-                    string source0 = piece.Freeze ? $"trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={Number(length)}" : $"trim=duration={Number(length)},setpts=PTS-STARTPTS";
+                    // A freeze takes one frame; it is held after everything is drawn on it.
+                    string source0 = piece.Freeze ? "trim=end_frame=1,setpts=PTS-STARTPTS" : $"trim=duration={Number(length)},setpts=PTS-STARTPTS";
                     // Blackout, then things stuck to the video, then zoom, then things fixed on screen, then speed.
                     string label = $"b{i}";
                     filters.Add($"[{i}:v:0]{source0}{blackout}[{label}]");
@@ -289,17 +309,25 @@ internal static class ExportServices
                     Overlay(true);
                     if (zoom.Length > 0) { filters.Add($"[{label}]{zoom[1..]}[z{i}]"); label = $"z{i}"; }
                     Overlay(false);
-                    filters.Add($"[{label}]{(slowVideo.Length > 0 ? slowVideo[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
+                    string hold = piece.Freeze ? $",tpad=stop_mode=clone:stop_duration={Number(Math.Max(0, piece.Hold - frame))}" : "";
+                    string tail = hold + slowVideo;
+                    filters.Add($"[{label}]{(tail.Length > 0 ? tail[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
                 }
                 // A picture-in-picture video's own sound joins this piece's sound before any speed change.
                 string WithPip(string piece) => pipSounds.Count == 0 ? piece : $"{piece}[{i}pa];[{i}pa]{string.Concat(pipSounds)}amix=inputs={pipSounds.Count + 1}:duration=first:normalize=0";
-                if (mixTracks)
+                if (audio && piece.Freeze)
                 {
-                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
-                    filters.Add(WithPip($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0") + $"{slowAudio}[a{i}]");
+                    // The hold is silent; music and sound files carry on over it.
+                    filters.Add($"anullsrc=r=48000:cl=stereo,atrim=duration={Number(piece.Hold)},asetpts=PTS-STARTPTS{slowAudio}{audioShape}[a{i}]");
                     labels += $"[a{i}]";
                 }
-                else if (audio) { filters.Add(WithPip($"[{i}:a:0]{trim}{Mute(0)}") + $"{slowAudio}[a{i}]"); labels += $"[a{i}]"; }
+                else if (mixTracks)
+                {
+                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
+                    filters.Add(WithPip($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0") + $"{slowAudio}{audioShape}[a{i}]");
+                    labels += $"[a{i}]";
+                }
+                else if (audio) { filters.Add(WithPip($"[{i}:a:0]{trim}{Mute(0)}") + $"{slowAudio}{audioShape}[a{i}]"); labels += $"[a{i}]"; }
             }
             filters.Add(labels + $"concat=n={pieces.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
             // Music and sound files are mixed over the finished timeline, so speed parts leave them alone.

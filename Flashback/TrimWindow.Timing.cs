@@ -35,7 +35,7 @@ public partial class TrimWindow
     }
     private static (double Start, double End) SpanOf(object part) => part switch
     {
-        CutRegion c => (c.Start, c.End), SpeedRegion s => (s.Start, s.End), ZoomRegion z => (z.Start, z.End), OverlayItem o => (o.Start, o.End), VolumeRegion v => (v.Start, v.End), SoundItem d => (d.Start, d.End), _ => (0, 0)
+        CutRegion c => (c.Start, c.End), SpeedRegion s => (s.Start, s.End), ZoomRegion z => (z.Start, z.End), OverlayItem o => (o.Start, o.End), VolumeRegion v => (v.Start, v.End), SoundItem d => (d.Start, d.End), FreezeFrame f => (f.At, f.At + .001), _ => (0, 0)
     };
     // The part as it is in the lists now (records are replaced on every edit).
     private object? CurrentVersion(object part) => part switch

@@ -39,7 +39,7 @@ internal static class EditorDiagnostics
             bool rejected = false; try { ClipEditor.Validate(invalid, 12); } catch (ArgumentException) { rejected = true; }
             Check(rejected, "Reject invalid or overlapping ranges: " + JsonSerializer.Serialize(invalid.Select(s => s.Start + " to " + s.End)));
         }
-        var ranges = new[] { new KeepSection(8.5, 10.5), new KeepSection(.5, 2.5) };
+        var ranges = new[] { new KeepSection(.5, 2.5), new KeepSection(8.5, 10.5) };
         var joined = Path.Combine(folder, "Red and blue — combined.mp4");
         var result = await ClipEditor.ExportAsync(source, joined, ranges, null, CancellationToken.None);
         Check(Math.Abs(result.Duration - 4) < .1 && ClipMedia.Read(joined).HasAudio, "Hardware export joins two sections in chronological order with audio");
