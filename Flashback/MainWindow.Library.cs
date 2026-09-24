@@ -120,7 +120,7 @@ public partial class MainWindow
         try
         {
             if (trimWindow != null && string.Equals(trimWindow.SourcePath, clip.Path, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("Close this clip in the trimmer before renaming it.");
+                throw new IOException("Close this clip in the editor before renaming it.");
             string renamed = await Task.Run(() => ClipLibrary.Rename(clip.Path, box.Text));
             if (lastClip == clip.Path) lastClip = renamed;
             await ReloadLibraryAsync();
@@ -166,7 +166,7 @@ public partial class MainWindow
     private async void LibraryDelete_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedClip is not { } clip) return;
-        if (trimWindow != null) { Tell("Close the trimmer before deleting a clip."); return; }
+        if (trimWindow != null) { Tell("Close the editor before deleting a clip."); return; }
         if (!ThemedDialog.Confirm(this, "Delete this clip?", Path.GetFileName(clip.Path) + " goes to the Recycle Bin.", "Move to Recycle Bin", "Keep")) return;
         try
         {

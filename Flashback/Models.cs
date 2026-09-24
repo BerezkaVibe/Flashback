@@ -107,7 +107,7 @@ public static class Storage
             catch (ArgumentException)
             {
                 s.TrimAddHotkey="+"; s.TrimKeys.Clear();
-                warning="Trimmer shortcuts were reset to their defaults because two of them shared a key. Other preferences were preserved.";
+                warning="Editor shortcuts were reset to their defaults because two of them shared a key. Other preferences were preserved.";
             }
             s.Validate();
             return s;

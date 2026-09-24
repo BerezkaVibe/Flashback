@@ -181,6 +181,19 @@ public partial class TrimWindow
             choice.Click += (_, _) => { SetSlowSpeed(speed); SlowPopup.IsOpen = false; };
             SlowChoices.Children.Add(choice);
         }
+        // A freeze frame holds the picture for the part; it plays on afterwards.
+        var freeze = new Button { Content = "Freeze", Tag = 0.0, Style = (Style)FindResource("TrimButton"), MinHeight = 28, Height = 28, MinWidth = 56, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), FontSize = 12, Background = System.Windows.Media.Brushes.Transparent, ToolTip = "Hold the picture still for this part" };
+        freeze.Click += (_, _) => SetSlowSpeed(0);
+        SlowChoices.Children.Add(freeze);
+    }
+    private void FreezeSound_Click(object sender, RoutedEventArgs e)
+    {
+        int i = Timeline.SelectedSlow;
+        if (i < 0 || i >= Timeline.SlowRegions.Count) return;
+        Snapshot();
+        bool keep = FreezeSoundBox.IsChecked == true;
+        Timeline.SlowRegions = Timeline.SlowRegions.Select((r, n) => n == i ? r with { FreezeSound = keep } : r).ToArray();
+        StatusLabel.Text = keep ? "The sound keeps playing during the freeze." : "The freeze is silent."; UpdateExportHint();
     }
     private bool syncingRegionSpeed, regionSpeedSnapshotted;
     private void SlowTagClicked(int index)
@@ -190,12 +203,17 @@ public partial class TrimWindow
         slowTiming?.Invoke();
         StatusLabel.Text = "Speed part selected: change its speed here, or drag its ends on the timeline.";
         ShowRegionSpeed(Timeline.SlowRegions[index].Speed);
+        FreezeSoundBox.IsChecked = Timeline.SlowRegions[index].FreezeSound;
         SlowPopup.IsOpen = true;
     }
     private void ShowRegionSpeed(double speed, bool moveSlider = true)
     {
-        RegionSpeedLabel.Text = speed.ToString("0.##", CultureInfo.InvariantCulture) + "×" + (speed < 1 ? " · slower" : speed > 1 ? " · faster" : "");
-        if (moveSlider) { syncingRegionSpeed = true; RegionSpeedSlider.Value = Math.Log(speed); syncingRegionSpeed = false; }
+        bool freeze = speed == 0;
+        RegionSpeedLabel.Text = freeze ? "Freeze frame" : speed.ToString("0.##", CultureInfo.InvariantCulture) + "×" + (speed < 1 ? " · slower" : speed > 1 ? " · faster" : "");
+        FreezeSoundBox.Visibility = freeze ? Visibility.Visible : Visibility.Collapsed;
+        // A freeze leaves the slider where it was; moving it turns the part back into a speed change.
+        if (moveSlider && !freeze) { syncingRegionSpeed = true; RegionSpeedSlider.Value = Math.Log(speed); syncingRegionSpeed = false; }
+        RegionSpeedSlider.Opacity = freeze ? .45 : 1;
         foreach (Button choice in SlowChoices.Children)
             choice.SetResourceReference(Control.BorderBrushProperty, Math.Abs((double)choice.Tag - speed) < 1e-9 ? "Accent" : "Outline");
     }
@@ -217,7 +235,7 @@ public partial class TrimWindow
         if (!fromSlider || !regionSpeedSnapshotted) { Snapshot(); regionSpeedSnapshotted = fromSlider; }
         Timeline.SlowRegions = Timeline.SlowRegions.Select((r, n) => n == i ? r with { Speed = speed } : r).ToArray();
         ShowRegionSpeed(speed, moveSlider: !fromSlider);
-        StatusLabel.Text = $"Speed set to {speed:0.##}×."; UpdateExportHint(); UpdateSummary();
+        StatusLabel.Text = speed == 0 ? "Freeze frame: the picture holds for this part, then plays on." : $"Speed set to {speed:0.##}×."; UpdateExportHint(); UpdateSummary();
     }
     private void SlowRemove_Click(object sender, RoutedEventArgs e) { int i = Timeline.SelectedSlow; SlowPopup.IsOpen = false; SlowRemoved(i); }
     private void SlowRemoved(int index)

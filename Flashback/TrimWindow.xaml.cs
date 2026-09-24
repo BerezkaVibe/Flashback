@@ -83,7 +83,7 @@ public partial class TrimWindow : Window
         var imported=TrimImport.Read(new[] { path });
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
         bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
-        if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current trim selection. Your original video is unchanged.","Open video")) return false;
+        if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current edits. Your original video is unchanged.","Open video")) return false;
         if(!FlushProject()) return false; if (projectSaveTimer?.IsEnabled==true) KeepRecovery(); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
@@ -101,7 +101,7 @@ public partial class TrimWindow : Window
     private void OpenVideo_Click(object sender,RoutedEventArgs e)
     {
         if (exportCancellation != null) { ImportError("Finish or cancel the export before opening another video."); return; }
-        var dialog=new Microsoft.Win32.OpenFileDialog { Title="Open video to trim",Filter="Videos|*.mp4;*.m4v;*.mov",CheckFileExists=true,Multiselect=false };
+        var dialog=new Microsoft.Win32.OpenFileDialog { Title="Open video to edit",Filter="Videos|*.mp4;*.m4v;*.mov",CheckFileExists=true,Multiselect=false };
         if (dialog.ShowDialog(this)!=true) return;
         try { LoadClip(dialog.FileName); } catch(Exception ex) { ImportError(ex.Message); }
     }

@@ -90,7 +90,7 @@ public partial class TrimWindow
         if (exportCancellation!=null) return false;
         var project=TrimProject.Read(path); // Validate everything before replacing the current edit.
         if (source.Equals(project.Source,StringComparison.OrdinalIgnoreCase) && confirm && CurrentProject().HasEdits(media.Duration)
-            && !ThemedDialog.Confirm(this,"Open project?","This replaces your current trim selection.","Open project")) return false;
+            && !ThemedDialog.Confirm(this,"Open project?","This replaces your current edits.","Open project")) return false;
         if (!LoadClip(project.Source,confirm,offerRecovery:false)) return false;
         if(!string.Equals(projectPath,path,StringComparison.OrdinalIgnoreCase) && !FlushProject()) return false;
         projectSaveTimer?.Stop(); undo.Clear(); redo.Clear();
@@ -106,13 +106,13 @@ public partial class TrimWindow
     private void SaveProjectAs_Click(object sender,RoutedEventArgs e)
     {
         if(source.Length==0 || exportCancellation!=null) return;
-        var dialog=new Microsoft.Win32.SaveFileDialog { Filter="Flashback trim project|*.flashtrim",DefaultExt=".flashtrim",AddExtension=true,OverwritePrompt=true,FileName=Path.GetFileNameWithoutExtension(source)+".flashtrim",InitialDirectory=Path.GetDirectoryName(source) };
+        var dialog=new Microsoft.Win32.SaveFileDialog { Filter="Flashback project|*.flashtrim",DefaultExt=".flashtrim",AddExtension=true,OverwritePrompt=true,FileName=Path.GetFileNameWithoutExtension(source)+".flashtrim",InitialDirectory=Path.GetDirectoryName(source) };
         if(dialog.ShowDialog(this)==true) try { SaveProject(dialog.FileName); } catch(Exception ex) { ImportError(ex.Message); }
     }
     private void OpenProject_Click(object sender,RoutedEventArgs e)
     {
         if(exportCancellation!=null) return;
-        var dialog=new Microsoft.Win32.OpenFileDialog { Filter="Flashback trim project|*.flashtrim",CheckFileExists=true };
+        var dialog=new Microsoft.Win32.OpenFileDialog { Filter="Flashback project|*.flashtrim",CheckFileExists=true };
         if(dialog.ShowDialog(this)==true) try { OpenProject(dialog.FileName); } catch(Exception ex) { ImportError(ex.Message); }
     }
     private void RecentMenu_Opened(object sender,RoutedEventArgs e)

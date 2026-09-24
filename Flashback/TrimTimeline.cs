@@ -63,12 +63,12 @@ internal sealed class TrimTimeline : FrameworkElement
     // and snaps to speed-part edges as well as the playhead.
     internal bool ZoomMode { get => zoomMode; set { ClearTools(); zoomMode = value; } }
     // Text, picture/video and shape tools: the same two clicks add an item on the lowest free layer above the video.
-    internal OverlayKind? OverlayMode { get => overlayMode; set { ClearTools(); overlayMode = value; } }
+    internal OverlayKind? OverlayMode { get => overlayMode; set { ClearTools(); overlayMode = value; overlayVersion++; Height = PreferredHeight; } }
     // Volume tool: two clicks on an audio lane make that stretch louder or quieter.
     internal bool VolumeMode { get => volumeMode; set { ClearTools(); volumeMode = value; } }
     // Sound tool: two clicks mark where a music or sound file plays.
     internal bool SoundMode { get => soundMode; set { ClearTools(); soundMode = value; } }
-    private void ClearTools() { cutMode = slowMode = zoomMode = volumeMode = soundMode = false; overlayMode = null; pendingCut = null; cutHover = null; InvalidateVisual(); }
+    private void ClearTools() { cutMode = slowMode = zoomMode = volumeMode = soundMode = false; bool wasOverlay = overlayMode != null; overlayMode = null; pendingCut = null; cutHover = null; if (wasOverlay) { overlayVersion++; Height = PreferredHeight; } InvalidateVisual(); }
     private OverlayKind? overlayMode;
     private bool cutMode, slowMode, zoomMode, volumeMode, soundMode, cutPress;
     private bool Placing => cutMode || slowMode || zoomMode || volumeMode || soundMode || overlayMode != null;
@@ -157,20 +157,33 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int overlayVersion;
-    internal int SelectedOverlay { get => selectedOverlay; set { selectedOverlay = value; overlayVersion++; InvalidateVisual(); } }
+    internal int SelectedOverlay { get => selectedOverlay; set { selectedOverlay = value; overlayVersion++; if (value >= 0) OverlaysOpen = true; InvalidateVisual(); } }
     private int selectedOverlay = -1;
     internal event Action<double, double, OverlayKind>? OverlayAdded;
     internal event Action<int>? OverlayPicked, OverlayRemoved;
     // Dragging an item: started (for undo), each change, and done.
     internal event Action? OverlayEditStarted, OverlayEditFinished;
     internal event Action<int, OverlayItem>? OverlayMoved;
-    private const double RowHeight = 14, RowGap = 2;
-    private int Rows => overlays.Count == 0 ? 0 : overlays.Max(o => o.Layer) + 1 + (extraRow ? 1 : 0);
+    private const double RowHeight = 14, RowGap = 2, FoldHeight = 10;
+    private int LayerRows => overlays.Count == 0 ? 0 : overlays.Max(o => o.Layer) + 1 + (extraRow ? 1 : 0);
     private bool extraRow;
-    private double RowsSpan => Rows == 0 ? 0 : Rows * (RowHeight + RowGap) + 1;
+    // With more than one layer, the rows fold into one slim strip of ticks until they're being edited:
+    // the chevron, a tick, selecting an item or an overlay tool opens them; clicking the video track
+    // folds them again.
+    private bool overlaysOpen;
+    internal bool OverlaysOpen
+    {
+        get => overlaysOpen;
+        set { if (overlaysOpen == value) return; overlaysOpen = value; overlayVersion++; Height = PreferredHeight; InvalidateVisual(); }
+    }
+    internal bool OverlaysFolded => Folded;
+    private bool Folded => !overlaysOpen && overlayMode == null && LayerRows > 1;
+    private int Rows => Folded ? 1 : LayerRows;
+    private double RowsSpan => Rows == 0 ? 0 : Folded ? FoldHeight + RowGap + 1 : Rows * (RowHeight + RowGap) + 1;
     private double TrackTop => 8 + RowsSpan;
-    private double RowTop(int layer) => 8 + (Rows - 1 - layer) * (RowHeight + RowGap);
-    private Rect OverlayRect(OverlayItem o) { double x = XAt(o.Start); return new Rect(x, RowTop(o.Layer), Math.Max(3, XAt(o.End) - x), RowHeight); }
+    private double RowTop(int layer) => Folded ? 8 : 8 + (Rows - 1 - layer) * (RowHeight + RowGap);
+    private Rect OverlayRect(OverlayItem o) { double x = XAt(o.Start); return new Rect(x, RowTop(o.Layer), Math.Max(3, XAt(o.End) - x), Folded ? FoldHeight : RowHeight); }
+    private Rect FoldToggleArea => new(0, 6, Inset - 5, Math.Max(12, RowsSpan));
     private int OverlayAt(Point p)
     {
         // Front-most first, so the item on top wins when rows are tight.
@@ -638,6 +651,28 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         if (Rows == 0) return;
         double width = ActualWidth - 2 * Inset;
+        if (LayerRows > 1)
+        {
+            // The chevron beside the layers folds or opens them.
+            var chevron = new FormattedText(Folded ? "" : "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, Muted, dpi);
+            dc.DrawText(chevron, new Point((Inset - 5 - chevron.Width) / 2, Folded ? 8 + (FoldHeight - chevron.Height) / 2 : 9));
+        }
+        if (Folded)
+        {
+            // Folded: every item is a tick on one slim strip, in its kind's colour.
+            dc.DrawRoundedRectangle(RowFill, null, new Rect(Inset, 8, width, FoldHeight), 3, 3);
+            dc.PushClip(new RectangleGeometry(new Rect(Inset, 0, width, TrackTop)));
+            foreach (var o in OverlayOrder.BackToFront(overlays))
+            {
+                if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
+                var rect = OverlayRect(o);
+                var (fill, dim) = o.Kind switch { OverlayKind.Image or OverlayKind.Video => (MediaFill, MediaDim), OverlayKind.Shape => (ShapeFillBrush, ShapeDim), _ => (OverlayFill, OverlayDim) };
+                dc.DrawRoundedRectangle(dim, null, new Rect(rect.X, rect.Y + 3, rect.Width, rect.Height - 6), 2, 2);
+                dc.DrawRoundedRectangle(fill, null, new Rect(rect.X, rect.Y + 1, Math.Min(3, rect.Width), rect.Height - 2), 1, 1);
+            }
+            dc.Pop();
+            return;
+        }
         for (int r = 0; r < Rows; r++) dc.DrawRoundedRectangle(RowFill, null, new Rect(Inset, RowTop(r), width, RowHeight), 3, 3);
         dc.PushClip(new RectangleGeometry(new Rect(Inset, 0, width, TrackTop)));
         for (int i = 0; i < overlays.Count; i++)
@@ -759,6 +794,14 @@ internal sealed class TrimTimeline : FrameworkElement
             soundOriginal = soundCurrent = sound; soundDragMoved = false; pressPoint = point;
             CaptureMouse(); e.Handled = true; return;
         }
+        if (pendingCut == null && LayerRows > 1 && FoldToggleArea.Contains(point)) { OverlaysOpen = Folded; e.Handled = true; return; }
+        if (pendingCut == null && Folded && point.Y < TrackTop)
+        {
+            // A tick opens the layers and that item.
+            OverlaysOpen = true;
+            if (OverlayAt(point) is int tick and >= 0) OverlayPicked?.Invoke(tick);
+            e.Handled = true; return;
+        }
         if (pendingCut == null && OverlayAt(point) is int item and >= 0)
         {
             // Press on an item: a click opens it, a drag moves it (or its edges) and changes its layer.
@@ -787,6 +830,8 @@ internal sealed class TrimTimeline : FrameworkElement
             // Dragging the scrollbar pans; clicking beside the thumb centers it there.
             drag = Drag.Pan; CaptureMouse(); PanToPointer(point.X); e.Handled = true; return;
         }
+        // Back on the video track, open layers fold away again.
+        if (overlaysOpen && !Placing && point.Y >= TrackTop && point.Y <= TrackTop + TrackHeight) OverlaysOpen = false;
         PartClicked?.Invoke(PartAt(point));
         BeginDrag(point); CaptureMouse(); DragStarted?.Invoke(); MoveTo(point.X); e.Handled=true;
     }

@@ -30,22 +30,22 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     }
     internal static TrimProject Read(string path)
     {
-        if (new FileInfo(path).Length > 8_000_000) throw new IOException("This trim project is too large.");
-        var project = JsonSerializer.Deserialize<TrimProject>(File.ReadAllText(path), Json) ?? throw new IOException("Invalid trim project.");
+        if (new FileInfo(path).Length > 8_000_000) throw new IOException("This project is too large.");
+        var project = JsonSerializer.Deserialize<TrimProject>(File.ReadAllText(path), Json) ?? throw new IOException("Invalid project.");
         project.Validate(); return project.Cleaned();
     }
     // True when there is anything to keep beyond the untouched clip.
     internal bool HasEdits(double duration) => Sections.Length > 0 || Start > .001 || End < duration - .001 || Cuts?.Length > 0 || Speed?.Length > 0 || Zoom?.Length > 0 || Overlays?.Length > 0 || Volumes?.Length > 0 || Sounds?.Length > 0 || Crop != null;
     internal void Validate()
     {
-        if (Version is < 1 or > CurrentVersion || string.IsNullOrWhiteSpace(Source) || !Path.IsPathFullyQualified(Source) || Sections == null) throw new IOException("Unsupported trim project.");
+        if (Version is < 1 or > CurrentVersion || string.IsNullOrWhiteSpace(Source) || !Path.IsPathFullyQualified(Source) || Sections == null) throw new IOException("Unsupported project.");
         var file = new FileInfo(Source);
         if (!file.Exists || file.Length != SourceBytes || file.LastWriteTimeUtc.Ticks != SourceWriteTicks)
             throw new IOException("The project's original video is missing or has changed. Open the video separately to start a new edit.");
         var media = ClipMedia.Read(Source);
         if (Sections.Length > 0) ClipEditor.Validate(Sections,media.Duration);
         if (!double.IsFinite(Start) || !double.IsFinite(End) || !double.IsFinite(Position) || Start < 0 || End < Start || End > media.Duration || Position < 0 || Position > media.Duration)
-            throw new IOException("The project contains invalid trim times.");
+            throw new IOException("The project contains invalid times.");
     }
     // Drops any part with impossible times and puts every value back in range.
     private TrimProject Cleaned()
@@ -65,7 +65,7 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     internal string Serialize() => JsonSerializer.Serialize(this with { Saved = null }, Json);
     internal void Save(string path, bool checkExtension = true)
     {
-        if (checkExtension && !Path.GetExtension(path).Equals(".flashtrim",StringComparison.OrdinalIgnoreCase)) throw new IOException("Use the .flashtrim extension for trim projects.");
+        if (checkExtension && !Path.GetExtension(path).Equals(".flashtrim",StringComparison.OrdinalIgnoreCase)) throw new IOException("Use the .flashtrim extension for Flashback projects.");
         Validate();
         string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try { File.WriteAllText(temp,JsonSerializer.Serialize(this with { Saved = DateTime.Now },Json)); File.Move(temp,path,true); }

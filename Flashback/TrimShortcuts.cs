@@ -71,7 +71,7 @@ internal static class TrimShortcuts
         new(TrimAction.Snapshot,"View and file","Save snapshot","C"),
         new(TrimAction.Export,"View and file","Export sections","E"),
         new(TrimAction.OpenVideo,"View and file","Open video","Ctrl+O"),
-        new(TrimAction.SaveProject,"View and file","Save trim project","Ctrl+S"),
+        new(TrimAction.SaveProject,"View and file","Save project","Ctrl+S"),
         new(TrimAction.ShortcutGuide,"View and file","Shortcut guide","Shift+OemQuestion"),
     };
     internal static TrimShortcut Info(TrimAction action) => All.First(s => s.Action == action);

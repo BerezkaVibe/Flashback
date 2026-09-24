@@ -15,7 +15,7 @@ public partial class MainWindow
         if (PageTitle == null || MainTabs == null) return;
         int selected = MainTabs.SelectedIndex;
         PageTitle.Text = selected switch { 1 => "Settings", 2 => "Clips", _ => "Clips" };
-        PageSubtitle.Text = selected switch { 1 => "Make it yours.", 2 => "Find it. Trim it. Keep it.", _ => "" };
+        PageSubtitle.Text = selected switch { 1 => "Make it yours.", 2 => "Find it. Edit it. Keep it.", _ => "" };
         foreach (var button in new[] { CaptureNav, ClipsNav, SettingsNav })
         {
             bool current = (string)button.Tag == selected.ToString();

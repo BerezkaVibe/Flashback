@@ -44,7 +44,7 @@ public partial class MainWindow
     private void ResetTrimKeys_Click(object sender, RoutedEventArgs e)
     {
         LoadTrimShortcuts(new Settings { Hotkey = settings.Hotkey, PauseHotkey = settings.PauseHotkey });
-        Tell("Trimmer keys reset to their defaults. Click Apply settings to keep them.");
+        Tell("Editor keys reset to their defaults. Click Apply settings to keep them.");
     }
     private bool IsShortcutBox(TextBox box) => ReferenceEquals(box, HotkeyBox) || ReferenceEquals(box, PauseHotkeyBox) || trimBoxes.ContainsKey(box);
     private void SetShortcut(TextBox box, Key key, ModifierKeys mods, bool finished)

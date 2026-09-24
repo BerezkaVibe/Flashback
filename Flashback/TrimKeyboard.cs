@@ -162,7 +162,7 @@ internal static class ShortcutGuide
     internal static StackPanel Content(IReadOnlyDictionary<TrimAction,string> keys)
     {
         var panel=new StackPanel {Margin=new Thickness(22)};
-        panel.Children.Add(new TextBlock {Text="Trimmer shortcuts",FontSize=22,Margin=new Thickness(0,0,0,12)});
+        panel.Children.Add(new TextBlock {Text="Editor shortcuts",FontSize=22,Margin=new Thickness(0,0,0,12)});
         foreach (var group in TrimShortcuts.All.GroupBy(s => s.Group))
         {
             var heading=new TextBlock {Text=group.Key,FontSize=12,Margin=new Thickness(0,12,0,4)}; heading.SetResourceReference(TextBlock.ForegroundProperty,"Muted"); panel.Children.Add(heading);

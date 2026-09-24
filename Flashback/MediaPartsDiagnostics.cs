@@ -166,7 +166,13 @@ internal static class MediaPartsDiagnostics
                 OverlayItem.NewShape(0, 6, null) with { Shape = OverlayShape.Heart, ShapeColor = "#E6FF2D55", ShapeWidth = 200, ShapeHeight = 180, X = .5, Y = .3, Layer = 4 },
             };
             typeof(TrimWindow).GetMethod("SetOverlays", flags)!.Invoke(live, new object[] { items });
-            live.SeekTo(1); await Task.Delay(900);
+            Check(live.Timeline.OverlaysFolded, "With several layers, the timeline folds them into one slim strip");
+            double foldedHeight = live.Timeline.Height;
+            live.SeekTo(2); await Task.Delay(500); await Shot(live, "parts-timeline-folded.png");
+            typeof(TrimWindow).GetMethod("OpenOverlay", flags)!.Invoke(live, new object[] { 1 });
+            Check(!live.Timeline.OverlaysFolded && live.Timeline.Height > foldedHeight + 30, "Opening an item unfolds the layers");
+            await Shot(live, "parts-timeline-open.png");
+            live.Timeline.OverlaysOpen = false; typeof(TrimWindow).GetMethod("CloseOverlay", flags)!.Invoke(live, null);            live.SeekTo(1); await Task.Delay(900);
             var view = live.OverlayView;
             var textAt1 = view.ScreenBounds(3);
             live.SeekTo(3); await Task.Delay(900);
