@@ -1,4 +1,4 @@
-# Flashback 0.8.1 for Windows
+# Flashback 0.8.2 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
@@ -6,6 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
+- **0.8.2**: Draw tool (W) beside Shapes: draw freehand, drag a straight line, or click corners to join lines, picked from the arrow inside the button. Lines have a thickness, can be solid, dashed or dotted, and each end can finish in an arrow or a dot. Corners and line ends stay draggable. Shapes can be Outline only, for circling things, with dashed or dotted outlines. Freeze frames (F) are now a slit on the timeline: the picture holds for the time you set, then the clip carries on from the same frame, so nothing is skipped. Sections play in the order of their chips; drag a chip to rearrange them. Add a clip to the end (File menu, or drop a video on the timeline) to cut several videos together.
 - **0.8.1**: The trimmer is now the editor. Shapes tool (D) with stickers and shapes that can blur or pixelate what's under them. The picture tool also adds videos that play over the clip, cut to a shape. Keyframes move, scale, turn and fade anything over time. Double-click text to type on the video. Freeze frames in the speed pop-up. Volume parts and music or sound files (V and N) on the audio timeline, with fades and ducking. Layers fold into one slim strip. Drag a part's ends, type its times or pick them on the timeline; copy and paste parts; nudge with the arrows. Faster GPU-accelerated export, a Performance settings tab with Lighter mode, and projects that keep every part with edit recovery.
 - **0.8.0**: Text and picture tools (T and P): captions with fonts, outlines, gradients, shadows and shapes you can reshape by their corners; pictures and GIFs with crop, flip, borders and background removal; animations in and out; layers you drag to reorder; scroll to scale, rotate or fade on the video. Delete removes the clicked timeline part. Tools in a compact block.
 - **0.7.5**: Zoom parts on the timeline (Q): aim with a box on the video, shape the zoom-in with an editable curve or a preset, save your own presets, optional zoom out; zoom parts can overlap speed parts.
@@ -24,7 +25,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.8.1-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.8.2-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.
