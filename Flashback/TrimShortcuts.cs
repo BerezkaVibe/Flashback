@@ -10,7 +10,7 @@ internal enum TrimAction
     PreviousFrame, NextFrame, FrameBack, FrameForward, HalfSecondBack, HalfSecondForward, SecondBack, SecondForward, TenSecondsBack, TenSecondsForward,
     VideoStart, VideoEnd, MarkedStart, MarkedEnd, GoToTime,
     MarkStart, MarkEnd, AddSection, Split, RemoveSection, PreviousSection, NextSection, FirstSection, LastSection, Undo, Redo,
-    ZoomIn, ZoomOut, ZoomToggle, Snapshot, Export, OpenVideo, SaveProject, ShortcutGuide
+    ZoomIn, ZoomOut, ZoomToggle, Snapshot, Export, OpenVideo, SaveProject, ShortcutGuide, CutTool, SpeedTool
 }
 
 // Default is a comma-separated list; a user binding replaces it with a single shortcut.
@@ -55,6 +55,8 @@ internal static class TrimShortcuts
         new(TrimAction.LastSection,"Editing","Last section","PageDown"),
         new(TrimAction.Undo,"Editing","Undo","Ctrl+Z"),
         new(TrimAction.Redo,"Editing","Redo","Ctrl+Y, Ctrl+Shift+Z"),
+        new(TrimAction.CutTool,"Editing","Cut out tool (Esc leaves)","X"),
+        new(TrimAction.SpeedTool,"Editing","Speed tool (Esc leaves)","R"),
         new(TrimAction.ZoomIn,"View and file","Zoom in","Ctrl+Up"),
         new(TrimAction.ZoomOut,"View and file","Zoom out","Ctrl+Down"),
         new(TrimAction.ZoomToggle,"View and file","Toggle zoom / fit","Z"),

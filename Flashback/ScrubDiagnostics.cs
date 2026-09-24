@@ -69,6 +69,17 @@ internal static class ScrubDiagnostics
             typeof(TrimWindow).GetMethod("CutAdded", flags)!.Invoke(trim, new object[] { new CutRegion(-1, 8, 10) });
             typeof(TrimWindow).GetMethod("SlowAdded", flags)!.Invoke(trim, new object[] { 11.0, 14.0 });
             trim.SeekTo(12); await Task.Delay(500); Shot(trim, "trim-sections.png");
+            // The speed pop-up opens where the pointer is (it normally sits on the part's tag).
+            trim.Topmost = true; trim.Activate();
+            typeof(TrimWindow).GetMethod("SlowTagClicked", flags)!.Invoke(trim, new object[] { 0 });
+            trim.RegionSpeedSlider.Value = Math.Log(1.5); await Task.Delay(700);
+            var mouse = System.Windows.Forms.Cursor.Position;
+            using (var bmp = new System.Drawing.Bitmap(420, 200))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(mouse.X - 20, mouse.Y - 10, 0, 0, bmp.Size);
+                bmp.Save(Path.Combine(Storage.Root, "trim-speed-part.png"), System.Drawing.Imaging.ImageFormat.Png);
+            }
+            trim.SlowPopup.IsOpen = false; trim.Topmost = false;
             typeof(TrimWindow).GetMethod("Clear_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() });
             await Sweep("audio folded");
             typeof(TrimWindow).GetMethod("LanesToggleRequested", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(trim, null);

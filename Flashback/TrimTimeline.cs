@@ -53,7 +53,7 @@ internal sealed class TrimTimeline : FrameworkElement
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
     internal bool CutMode { get => cutMode; set { cutMode = value; if (value) slowMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    // Slow-motion tool: the same two clicks mark a stretch that plays slower (video and audio together).
+    // Speed tool: the same two clicks mark a stretch that plays slower or faster (video and audio together).
     internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) cutMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
     private bool cutMode, slowMode, cutPress;
     private bool Placing => cutMode || slowMode;
@@ -332,7 +332,7 @@ internal sealed class TrimTimeline : FrameworkElement
         var area = new Rect(x, band.Top, w, band.Height);
         dc.DrawRoundedRectangle(slow ? SlowFill : CutFill, new Pen(slow ? SlowEdge : CutEdge, 1), area, 3, 3);
     }
-    // Slow-motion regions: a purple box on the video track with a small speed tag (bottom-right) that opens
+    // Speed parts: a purple box on the video track with a small speed tag (bottom-right) that opens
     // the speed choices when clicked. Tag rectangles are kept for hit-testing.
     private void DrawSlowRegions(DrawingContext dc, double dpi)
     {
@@ -351,7 +351,7 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
-    // The cutter: red (purple for slow motion), or white while it is locked onto the playhead.
+    // The cutter: red (purple for speed), or white while it is locked onto the playhead.
     private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
     {
@@ -363,7 +363,7 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         int band = pendingCut?.Lane ?? BandAt(p);
         if (band < -1) return;
-        if (slowMode) band = -1; // slow motion always covers video and audio together
+        if (slowMode) band = -1; // speed parts always cover video and audio together
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
         else
@@ -447,12 +447,12 @@ internal sealed class TrimTimeline : FrameworkElement
         bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
-        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change the slow-motion speed"; return; }
+        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
             ToolTip = slowMode
-                ? pendingCut == null ? "Click to start slow motion; drag to move the playhead. Right-click a slow part to remove it" : "Click to finish the slow-motion part · Esc cancels"
+                ? pendingCut == null ? "Click to start a speed part; drag to move the playhead. Right-click a speed part to remove it" : "Click to finish the speed part · Esc cancels"
                 : pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
             return;
         }

@@ -29,10 +29,12 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     // Slow motion: 1 is normal speed, 0.5 plays at half speed. Audio keeps its pitch.
     internal double Speed { get; init; } = 1;
     internal static readonly double[] Speeds = { 1, .75, .5, .25 };
-    // Slow-motion regions from the timeline, in source time. They never overlap cuts.
+    // Speed parts from the timeline (slower or faster), in source time. They never overlap cuts.
     internal IReadOnlyList<SpeedRegion> SlowRegions { get; init; } = Array.Empty<SpeedRegion>();
-    internal static readonly double[] RegionSpeeds = { .75, .5, .25 };
-    // Kept ranges split at slow-motion edges; each piece carries its combined speed.
+    internal const double MinRegionSpeed = .1, MaxRegionSpeed = 4;
+    // Quick picks in the speed pop-up; the slider covers everything from 0.1x to 4x.
+    internal static readonly double[] RegionSpeeds = { .25, .5, .75, 1.5, 2 };
+    // Kept ranges split at speed-part edges; each piece carries its combined speed.
     internal List<(double Start, double End, double Speed)> Pieces(IEnumerable<KeepSection> ranges)
     {
         var pieces = new List<(double Start, double End, double Speed)>();
@@ -51,11 +53,12 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         return pieces;
     }
     internal double OutputSeconds(IEnumerable<KeepSection> ranges) => Pieces(ranges).Sum(p => (p.End - p.Start) / p.Speed);
-    // atempo takes 0.5 to 2 per stage, so slower speeds chain halvings.
+    // atempo takes 0.5 to 2 per stage, so very slow or fast speeds chain stages.
     internal static string AudioTempo(double speed)
     {
         var stages = new List<string>(); double left = speed;
         while (left < .5 - 1e-9) { stages.Add("atempo=0.5"); left /= .5; }
+        while (left > 2 + 1e-9) { stages.Add("atempo=2"); left /= 2; }
         if (Math.Abs(left - 1) > 1e-9) stages.Add("atempo=" + ExportServices.Number(left));
         return string.Join(",", stages);
     }
@@ -79,7 +82,7 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         if (Crop is { } c && (c.X < 0 || c.Y < 0 || c.Width < 32 || c.Height < 32)) throw new ArgumentException("The crop area is too small.");
         if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
         if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
-        if (SlowRegions.Any(r => !RegionSpeeds.Contains(r.Speed) || r.End <= r.Start)) throw new ArgumentException("A slow-motion area has an unsupported speed.");
+        if (SlowRegions.Any(r => r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9 || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
     }
     internal int VideoBitrate(double seconds, bool audio)
     {
@@ -145,7 +148,7 @@ internal static class ExportServices
             {
                 var (start, end, speed) = pieces[i]; double length = end - start;
                 string trim = $"atrim=duration={Number(length)},asetpts=PTS-STARTPTS";
-                // Slow motion stretches this piece after its cuts are applied in source time.
+                // Speed changes stretch or squeeze this piece after its cuts are applied in source time.
                 string slowVideo = speed != 1 ? $",setpts=PTS/{Number(speed)}" : "", slowAudio = speed != 1 ? "," + ShareExportOptions.AudioTempo(speed) : "";
                 // Cuts inside this piece, as times relative to its start: black video or silence.
                 string? Window(int lane)

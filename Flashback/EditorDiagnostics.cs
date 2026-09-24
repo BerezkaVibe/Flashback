@@ -80,6 +80,11 @@ internal static class EditorDiagnostics
         await ExportServices.PreciseAsync(source, splitSlow, new[] { new KeepSection(1, 2), new KeepSection(3, 4) }, null, CancellationToken.None, true,
             new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(1.5, 3.5, .25) } });
         Check(Math.Abs(ClipMedia.Read(splitSlow).Duration - (1 + 1 * 4)) < .4, "Slow motion applies only where it overlaps the kept sections");
+        // Faster parts: 4 s kept with 2-4 s at 2x becomes 3 s; very slow and fast audio chain tempo stages.
+        var fastPart = Path.Combine(folder, "Fast part.mp4");
+        await ExportServices.PreciseAsync(source, fastPart, new[] { new KeepSection(1, 5) }, null, CancellationToken.None, true, new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(2, 4, 2) } });
+        Check(Math.Abs(ClipMedia.Read(fastPart).Duration - 3) < .3 && ClipMedia.Read(fastPart).HasAudio, "A 2x speed part shortens only that stretch");
+        Check(ShareExportOptions.AudioTempo(4) == "atempo=2,atempo=2" && ShareExportOptions.AudioTempo(.1).StartsWith("atempo=0.5,atempo=0.5,atempo=0.5"), "Audio tempo chains stages below 0.5x and above 2x");
         var slowGif = Path.Combine(folder, "Slow.gif");
         await ExportServices.PreciseAsync(source, slowGif, new[] { new KeepSection(1, 2) }, null, CancellationToken.None, true, ShareExportOptions.For(ExportFormat.Gif) with { Speed = .5, Crop = new CropRect(0, 0, 320, 180) });
         Check(new FileInfo(slowGif).Length > 1000, "Slow motion also works for cropped GIFs");

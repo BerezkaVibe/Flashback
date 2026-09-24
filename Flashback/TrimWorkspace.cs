@@ -115,7 +115,7 @@ public partial class TrimWindow
     }
     // What the export keeps, before validation: the sections, or the marked range.
     private IEnumerable<KeepSection> SelectedRanges() => sections.Count>0 ? sections : new[] { new KeepSection(Timeline.Start, Math.Max(Timeline.Start+.1, Timeline.End)) };
-    // Length of the finished export after any slow motion.
+    // Length of the finished export after any speed changes.
     private double OutputLength(IEnumerable<KeepSection> ranges) => new ShareExportOptions { Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions }.OutputSeconds(ranges);
     private double ExportSpeedValue => ShareExportOptions.Speeds[Math.Clamp(ExportSpeed?.SelectedIndex ?? 0, 0, ShareExportOptions.Speeds.Length-1)];
     private void ExportSpeed_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
@@ -138,7 +138,7 @@ public partial class TrimWindow
             }
             ExportMode.IsEnabled=exportCancellation==null && !convert;
             double duration=Math.Max(.1,options.OutputSeconds(SelectedRanges()));
-            string crop=(options.Speed!=1 || options.SlowRegions.Count>0 ? $" · slow motion, {duration:0.#} s long" : "")+(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "");
+            string crop=(options.Speed!=1 || options.SlowRegions.Count>0 ? $" · speed changes, {duration:0.#} s long" : "")+(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "");
             ModeHint.Text=options.Format switch
             {
                 ExportFormat.Gif => "Animated GIF · 480p, 15 fps, no sound. Best for short moments"+crop+".",
