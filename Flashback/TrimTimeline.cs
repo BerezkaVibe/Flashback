@@ -736,8 +736,8 @@ internal sealed class TrimTimeline : FrameworkElement
             ToolTip = $"{overlays[hoverItem].Label} · click to edit, drag to move, drag up or down to change layer, drag an edge to change its length · right-click removes";
             return;
         }
-        if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom"; return; }
-        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed"; return; }
+        if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom · also selects it, so you can drag its ends"; return; }
+        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed · also selects it, so you can drag its ends"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;

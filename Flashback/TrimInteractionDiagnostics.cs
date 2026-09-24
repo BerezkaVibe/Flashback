@@ -275,6 +275,17 @@ internal static class TrimInteractionDiagnostics
             var secondPick=partAt.Invoke(tl,new object[]{spot}); tl.FocusedPart=secondPick;
             var thirdPick=partAt.Invoke(tl,new object[]{spot});
             Check(firstPick is ZoomRegion && secondPick is SpeedRegion && thirdPick is ZoomRegion && tl.StackedAtLastClick==2,"Clicking stacked parts again steps from the zoom to the speed part and back");
+            // A tag opens its part's menu and selects that part too, even under another one.
+            tl.FocusedPart=null;
+            typeof(TrimWindow).GetMethod("SlowTagClicked",flags)!.Invoke(trim,new object[]{tl.SlowRegions.ToList().FindIndex(r=>Math.Abs(r.Start-10.5)<1e-9)});
+            bool speedSelected=tl.FocusedPart is SpeedRegion { Start: 10.5 };
+            var edgeAt=typeof(TrimTimeline).GetMethod("FocusedEdgeAt",flags)!;
+            bool speedEndDraggable=edgeAt.Invoke(tl,new object[]{new Point(tl.XAt(11.8),30)}) is false;
+            trim.SlowPopup.IsOpen=false;
+            Check(speedSelected && speedEndDraggable,"Clicking a speed tag selects that part so its ends drag straight away");
+            typeof(TrimWindow).GetMethod("OpenZoom",flags)!.Invoke(trim,new object[]{tl.ZoomRegions.ToList().FindIndex(r=>Math.Abs(r.Start-10.5)<1e-9)});
+            Check(tl.FocusedPart is ZoomRegion,"Clicking a zoom tag selects the zoom");
+            typeof(TrimWindow).GetMethod("CloseZoom",flags)!.Invoke(trim,null);
             cutAdded.Invoke(trim,new object[]{new CutRegion(-1,9.4,10.2)});
             typeof(TrimWindow).GetMethod("OpenZoom",flags)!.Invoke(trim,new object[]{tl.ZoomRegions.ToList().FindIndex(r=>Math.Abs(r.Start-10.5)<1e-9)});
             EditorDiagnostics.Render(content,1120,900,"trim-timing.png");
