@@ -80,6 +80,7 @@ public partial class TrimWindow
         ZoomInTab.SetResourceReference(Control.BorderBrushProperty, editingZoomOut ? "Outline" : "Accent");
         ZoomOutTab.SetResourceReference(Control.BorderBrushProperty, editingZoomOut ? "Accent" : "Outline");
         ZoomTitle.Text = $"{KeepSection.TimeText(r.Start)} – {KeepSection.TimeText(r.End)}";
+        zoomTiming?.Invoke();
         ShowZoomReadout(r);
         // Show which preset this matches, or Custom after hand edits.
         var match = ZoomPresetBox.Items.OfType<ComboBoxItem>().FirstOrDefault(i => i.Tag is ZoomPreset p && Matches(p, r));

@@ -18,6 +18,7 @@
       <TextBlock Text="Zoom" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
       <TextBlock x:Name="ZoomTitle" Foreground="{DynamicResource Muted}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
      </DockPanel>
+     <StackPanel x:Name="ZoomTimingHost" DockPanel.Dock="Top" Margin="0,8,0,0"/>
      <DockPanel DockPanel.Dock="Top" Margin="0,10,0,0">
       <Button x:Name="ZoomDeletePreset" DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" MinHeight="28" FontSize="11" Content="&#xE74D;" Click="ZoomDeletePreset_Click" ToolTip="Delete this saved preset" Margin="4,0,0,0" AutomationProperties.Name="Delete preset"/>
       <Button DockPanel.Dock="Right" Style="{StaticResource TrimButton}" Content="Save…" Click="ZoomSavePreset_Click" Margin="6,0,0,0" MinHeight="28" Height="28" ToolTip="Save this curve and max zoom as a preset"/>
@@ -91,14 +92,24 @@
       <Popup x:Name="SlowPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True" Closed="SlowPopup_Closed">
        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
         <StackPanel>
-         <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+         <StackPanel x:Name="SlowTimingHost" Margin="2,0,2,8"/>
+        <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
          <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.302585" Maximum="1.386294" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
          <UniformGrid x:Name="SlowChoices" Rows="1"/>
          <Button Style="{StaticResource TrimButton}" Content="Remove speed change" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
         </StackPanel>
        </Border>
       </Popup>
-      <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
+      <Popup x:Name="CutPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
+      <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10" Width="290">
+       <StackPanel>
+        <TextBlock x:Name="CutPopupTitle" Text="Cut-out" FontSize="12" FontWeight="SemiBold" Margin="2,0,2,8"/>
+        <StackPanel x:Name="CutTimingHost" Margin="2,0,2,4"/>
+        <Button Style="{StaticResource TrimButton}" Content="Restore (remove this cut-out)" Click="CutRestore_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
+       </StackPanel>
+      </Border>
+     </Popup>
+     <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
       <Button x:Name="TextToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D2;" Click="TextTool_Click" ToolTip="Text: click two spots to add a caption for that part" AutomationProperties.Name="Text tool"/>
       <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture: click two spots to add a picture or GIF for that part" AutomationProperties.Name="Picture tool"/>
       <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>

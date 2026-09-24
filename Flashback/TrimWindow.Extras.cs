@@ -187,6 +187,7 @@ public partial class TrimWindow
     {
         if (index < 0 || index >= Timeline.SlowRegions.Count || exportCancellation != null) return;
         Timeline.SelectedSlow = index; regionSpeedSnapshotted = false; FocusPart(Timeline.SlowRegions[index]);
+        slowTiming?.Invoke();
         ShowRegionSpeed(Timeline.SlowRegions[index].Speed);
         SlowPopup.IsOpen = true;
     }

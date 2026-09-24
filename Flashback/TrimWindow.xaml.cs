@@ -48,6 +48,7 @@ public partial class TrimWindow : Window
         InitZoom();
         InitOverlays();
         InitParts();
+        InitTiming();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -291,6 +292,8 @@ public partial class TrimWindow : Window
         // Open and save work anywhere, including while typing a timestamp.
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
+        // Esc cancels picking a start or end on the timeline.
+        if (key==Key.Escape && modifiers==ModifierKeys.None && Timeline.PickTime!=null) { Timeline.PickTime=null; StatusLabel.Text="Pick cancelled."; return true; }
         if (source.Length>0 && Nudge(key,modifiers)) return true;
         // Esc or Enter finishes cropping a picture.
         if (key is Key.Escape or Key.Enter && modifiers==ModifierKeys.None && (OverlayView.Cropping || OverlayView.ShapeEditing)) { OverlayView.SetCropping(false); OverlayView.SetShapeEditing(false); return true; }

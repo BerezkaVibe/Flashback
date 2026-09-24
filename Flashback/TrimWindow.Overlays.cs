@@ -196,6 +196,10 @@ public partial class TrimWindow
     {
         panelKind = kind; overlayRows.Clear(); overlayRefresh.Clear(); OverlayControls.Children.Clear(); overlayTextBox = null;
         bool text = kind == OverlayKind.Text;
+        // When it shows: typed, picked on the timeline, or dragged there.
+        var timing = TimingEditor(() => SelectedOverlayItem, out var refreshTiming);
+        ((FrameworkElement)timing).Margin = new Thickness(0, 0, 0, 10);
+        OverlayControls.Children.Add(timing); overlayRefresh.Add(_ => refreshTiming());
         if (text)
         {
             var box = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 56, MaxHeight = 140, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontSize = 13, Padding = new Thickness(6, 4, 6, 4) };

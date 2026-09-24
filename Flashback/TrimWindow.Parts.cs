@@ -14,7 +14,11 @@ public partial class TrimWindow
     private PartKind focusedKind;
     private void InitParts()
     {
-        Timeline.PartClicked += part => FocusPart(part);
+        Timeline.PartClicked += part =>
+        {
+            FocusPart(part);
+            if (part != null) StatusLabel.Text = $"Selected the {PartName(part)}: drag its ends to change its length, Delete removes it" + (Timeline.StackedAtLastClick > 1 ? ". Click again for what's stacked under it." : ".");
+        };
         // A click on text or a picture in the preview focuses it; keyboard focus moves to the
         // timeline so Delete removes the item rather than editing the panel's text.
         OverlayView.AddHandler(UIElement.MouseLeftButtonDownEvent, new MouseButtonEventHandler((_, _) =>
