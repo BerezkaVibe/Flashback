@@ -63,7 +63,73 @@ public partial class MainWindow
     }
     private void LibraryPlay_Click(object sender, RoutedEventArgs e) => WithSelected(c => Process.Start(new ProcessStartInfo(c.Path) { UseShellExecute = true }));
     private void Library_DoubleClick(object sender, MouseButtonEventArgs e)
-    { if (e.OriginalSource is DependencyObject target && ItemsControl.ContainerFromElement(LibraryList, target) is ListBoxItem) LibraryTrim_Click(sender, e); }
+    {
+        if (e.OriginalSource is not DependencyObject target || InRename(target)) return;
+        if (ItemsControl.ContainerFromElement(LibraryList, target) is ListBoxItem) LibraryTrim_Click(sender, e);
+    }
+
+    // Rename: clicking the file name (or F2) turns it into a text box in place.
+    // Enter or clicking away saves; Esc cancels.
+    private static bool InRename(DependencyObject? element)
+    {
+        for (; element != null; element = element is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(element) : LogicalTreeHelper.GetParent(element))
+            if (element is TextBox || element is FrameworkElement { Tag: "rename" }) return true;
+        return false;
+    }
+    private void ClipName_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is TextBlock label) { e.Handled = true; BeginRename(label); }
+    }
+    private void Library_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.F2 || SelectedClip is not { } clip || LibraryList.ItemContainerGenerator.ContainerFromItem(clip) is not ListBoxItem item) return;
+        if (FindRenameLabel(item) is { } label) { e.Handled = true; BeginRename(label); }
+    }
+    private static TextBlock? FindRenameLabel(DependencyObject parent)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is TextBlock { Tag: "rename" } found) return found;
+            if (FindRenameLabel(child) is { } deeper) return deeper;
+        }
+        return null;
+    }
+    private void BeginRename(TextBlock label)
+    {
+        if (label.DataContext is not LibraryClip clip || label.Parent is not Grid holder || holder.Children[1] is not TextBox box) return;
+        LibraryList.SelectedItem = clip;
+        box.Text = clip.Name; box.Tag = clip;
+        label.Visibility = Visibility.Collapsed; box.Visibility = Visibility.Visible;
+        box.Focus(); box.SelectAll();
+    }
+    private async void ClipRename_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Up/Down would move the list selection underneath the box.
+        if (e.Key is Key.Up or Key.Down) { e.Handled = true; return; }
+        if (e.Key is not (Key.Enter or Key.Escape)) return;
+        e.Handled = true; await FinishRenameAsync((TextBox)sender, e.Key == Key.Enter);
+    }
+    private async void ClipRename_LostFocus(object sender, KeyboardFocusChangedEventArgs e) => await FinishRenameAsync((TextBox)sender, true);
+    private async Task FinishRenameAsync(TextBox box, bool save)
+    {
+        if (box.Visibility != Visibility.Visible) return;
+        box.Visibility = Visibility.Collapsed;
+        if (box.Parent is Grid holder) holder.Children[0].Visibility = Visibility.Visible;
+        if (!save || box.Tag is not LibraryClip clip || box.Text.Trim() == clip.Name) return;
+        try
+        {
+            if (trimWindow != null && string.Equals(trimWindow.SourcePath, clip.Path, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Close this clip in the trimmer before renaming it.");
+            string renamed = await Task.Run(() => ClipLibrary.Rename(clip.Path, box.Text));
+            if (lastClip == clip.Path) lastClip = renamed;
+            await ReloadLibraryAsync();
+            LibraryList.SelectedItem = library.FirstOrDefault(c => c.Path == renamed);
+            Tell("Renamed to " + Path.GetFileName(renamed) + ".");
+        }
+        catch (IOException ex) when (ex is not FileNotFoundException && ex.HResult == unchecked((int)0x80070020)) { Tell("The clip is open in another app. Close it and try again.", true); }
+        catch (Exception ex) { Tell("Could not rename the clip: " + ex.Message, true); }
+    }
     private void LibraryReveal_Click(object sender, RoutedEventArgs e) => WithSelected(c =>
     { var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true }; start.ArgumentList.Add("/select,"); start.ArgumentList.Add(c.Path); Process.Start(start); });
     private void LibraryTrim_Click(object sender, RoutedEventArgs e) => WithSelected(c => OpenTrimmer(c.Path));

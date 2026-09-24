@@ -15,6 +15,7 @@ public partial class MainWindow
         AudioBitrateBox.DisplayMemberPath = "Label"; AudioBitrateBox.SelectedValuePath = "Value";
         AudioBitrateBox.ItemsSource = Settings.AudioBitrates.Select(b => new BitrateChoice(b, $"{b} kbps{(b == 160 ? " · default" : b >= 256 ? " · high" : "")}")).ToList();
         AudioBitrateBox.SelectedValue = settings.AudioBitrate;
+        MicNoiseBox.SelectedIndex = Math.Max(0, Array.IndexOf(Settings.NoiseLevels, settings.MicNoiseReduction));
         DesktopVolumeSlider.Value = settings.DesktopVolume; MicrophoneVolumeSlider.Value = settings.MicrophoneVolume;
         LoadAppMix();
     }

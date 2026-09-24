@@ -12,6 +12,8 @@ namespace Flashback;
 internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool Toggleable);
 // A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
 internal sealed record CutRegion(int Lane, double Start, double End);
+// A stretch played back slower (video and audio together), in source time.
+internal sealed record SpeedRegion(double Start, double End, double Speed);
 
 internal sealed class TrimTimeline : FrameworkElement
 {
@@ -50,8 +52,20 @@ internal sealed class TrimTimeline : FrameworkElement
     // Cut tool: a thin cutter line follows the pointer over the video track or an audio lane.
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
-    internal bool CutMode { get => cutMode; set { cutMode = value; pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    private bool cutMode, cutPress;
+    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) slowMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    // Slow-motion tool: the same two clicks mark a stretch that plays slower (video and audio together).
+    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) cutMode = false; pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    private bool cutMode, slowMode, cutPress;
+    private bool Placing => cutMode || slowMode;
+    private IReadOnlyList<SpeedRegion> slowRegions = Array.Empty<SpeedRegion>();
+    internal IReadOnlyList<SpeedRegion> SlowRegions { get => slowRegions; set { slowRegions = value; slowVersion++; InvalidateVisual(); } }
+    private int slowVersion;
+    internal int SelectedSlow { get => selectedSlow; set { selectedSlow = value; slowVersion++; InvalidateVisual(); } }
+    private int selectedSlow = -1;
+    // Clicking a region's speed tag asks to change it; right-click in slow mode removes a region.
+    internal event Action<double, double>? SlowAdded;
+    internal event Action<int>? SlowTagClicked, SlowRemoved;
+    private readonly List<Rect> slowTags = new();
     private (int Lane, double Time)? pendingCut, cutHover;
     private Point pressPoint;
     private const double PlayheadLock = 3;
@@ -121,19 +135,19 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         if (Duration <= 0 || ActualWidth <= 2*Inset)
         { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover);
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion);
         if (!Equals(cacheKey, key))
         {
             using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
             cacheKey = key;
         }
         using var live = liveLayer.RenderOpen();
-        if (cutMode)
+        if (Placing)
         {
             if (pendingCut is { } from)
             {
                 double to = cutHover?.Time ?? from.Time;
-                if (Math.Abs(to - from.Time) > 1e-6) DrawCut(live, from.Lane, Math.Min(from.Time, to), Math.Max(from.Time, to), 0);
+                if (Math.Abs(to - from.Time) > 1e-6) DrawCut(live, from.Lane, Math.Min(from.Time, to), Math.Max(from.Time, to), 0, slowMode);
                 DrawCutter(live, from.Lane, from.Time);
             }
             if (cutHover is { } hover) DrawCutter(live, pendingCut?.Lane ?? hover.Lane, hover.Time);
@@ -184,11 +198,12 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             if (edge.Time<ViewStart || edge.Time>ViewStart+Span) continue;
             double x = XAt(edge.Time);
-            dc.DrawRoundedRectangle(edge.Color, null, new Rect(x-6, TrackTop-5, 12, TrackHeight+10), 3, 3);
-            dc.DrawLine(new Pen(Track, 1), new Point(x, TrackTop+8), new Point(x, TrackTop+TrackHeight-8));
+            // A slim bar; the grab area stays wide (see BeginDrag).
+            dc.DrawRoundedRectangle(edge.Color, null, new Rect(x-3, TrackTop-3, 6, TrackHeight+6), 3, 3);
         }
         DrawLaneToggle(dc, dpi);
         foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+        DrawSlowRegions(dc, dpi);
         if (LaneReveal > 0 && lanes.Count > 0)
         {
             // Lanes slide out from under the video track and fade in as they open.
@@ -309,39 +324,63 @@ internal sealed class TrimTimeline : FrameworkElement
         dc.Pop();
         if (!lanesExpanded && cuts.Any(c => c.Lane >= 0)) dc.DrawEllipse(CutEdge, null, new Point(center.X, TrackTop + TrackHeight - 5), 2, 2);
     }
-    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi)
+    private static readonly Brush SlowFill = Brush("#558B7CF6"), SlowEdge = Brush("#A99BFA"), SlowInk = Brush("#15121F");
+    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false)
     {
         if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
-        dc.DrawRoundedRectangle(CutFill, new Pen(CutEdge, 1), area, 3, 3);
+        dc.DrawRoundedRectangle(slow ? SlowFill : CutFill, new Pen(slow ? SlowEdge : CutEdge, 1), area, 3, 3);
     }
-    // The cutter: red, or white while it is locked onto the playhead.
-    private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
+    // Slow-motion regions: a purple box on the video track with a small speed tag (bottom-right) that opens
+    // the speed choices when clicked. Tag rectangles are kept for hit-testing.
+    private void DrawSlowRegions(DrawingContext dc, double dpi)
+    {
+        slowTags.Clear();
+        for (int i = 0; i < slowRegions.Count; i++)
+        {
+            var r = slowRegions[i];
+            if (r.End < ViewStart || r.Start > ViewStart + Span) { slowTags.Add(Rect.Empty); continue; }
+            double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
+            dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow ? Ink : SlowEdge, i == selectedSlow ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            var label = Text(r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
+            var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), TrackTop + TrackHeight - 15, label.Width + 8, 13);
+            dc.DrawRoundedRectangle(SlowEdge, null, tag, 3, 3);
+            dc.DrawText(label, new Point(tag.X + 4, tag.Y + (tag.Height - label.Height) / 2));
+            slowTags.Add(tag);
+        }
+    }
+    private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
+    // The cutter: red (purple for slow motion), or white while it is locked onto the playhead.
+    private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
     {
         if (t < ViewStart || t > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(t);
-        dc.DrawLine(Math.Abs(t - Position) < 1e-9 ? LockedCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
+        dc.DrawLine(Math.Abs(t - Position) < 1e-9 ? LockedCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
     }
     private void PlaceCutPoint(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
         if (band < -1) return;
+        if (slowMode) band = -1; // slow motion always covers video and audio together
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
         else
         {
             pendingCut = null;
             double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
-            if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9) CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
+            if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9)
+            {
+                if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
+            }
         }
         InvalidateVisual();
     }
     private void UpdateCutHover(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
-        (int, double)? next = cutMode && band > -2 ? (band, CutTimeAt(p.X)) : null;
+        (int, double)? next = Placing && band > -2 ? (slowMode ? -1 : band, CutTimeAt(p.X)) : null;
         if (!Equals(next, cutHover)) { cutHover = next; InvalidateVisual(); }
     }
     private int LaneAt(Point p)
@@ -360,7 +399,8 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
-        if (cutMode && (pendingCut != null || BandAt(point) > -2))
+        if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
+        if (Placing && (pendingCut != null || BandAt(point) > -2))
         {
             // Wait to see whether this is a click (place a cut point) or a drag (move the playhead).
             cutPress = true; pressPoint = point; CaptureMouse(); e.Handled = true; return;
@@ -407,10 +447,13 @@ internal sealed class TrimTimeline : FrameworkElement
         bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
-        if (cutMode && (pendingCut != null || BandAt(p) > -2))
+        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change the slow-motion speed"; return; }
+        if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
-            ToolTip = pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
+            ToolTip = slowMode
+                ? pendingCut == null ? "Click to start slow motion; drag to move the playhead. Right-click a slow part to remove it" : "Click to finish the slow-motion part · Esc cancels"
+                : pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
             return;
         }
         int lane = LaneAt(p);
@@ -427,10 +470,16 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
-        if (!cutMode) return;
-        // Right-click cancels a half-placed cut, or restores the cut under the pointer.
+        if (!Placing) return;
+        // Right-click cancels a half-placed cut, or restores the cut (or slow part) under the pointer.
         if (pendingCut != null) { CancelPendingCut(); e.Handled = true; return; }
         var p = e.GetPosition(this); int band = BandAt(p); double t = TimeAt(p.X);
+        if (slowMode)
+        {
+            int slow = slowRegions.ToList().FindIndex(r => t >= r.Start && t <= r.End);
+            if (slow >= 0 && band > -2) { SlowRemoved?.Invoke(slow); e.Handled = true; }
+            return;
+        }
         var hit = cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t <= c.End);
         if (hit != null) { CutRemoved?.Invoke(hit); e.Handled = true; }
     }

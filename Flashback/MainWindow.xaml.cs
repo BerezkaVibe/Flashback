@@ -141,7 +141,7 @@ public partial class MainWindow : Window
         Encoder = (string)EncoderBox.SelectedItem, Palette=settings.Palette, AccentColor=settings.AccentColor,
         DesktopAudio = AudioCheck.IsChecked == true, ShowCursor = CursorCheck.IsChecked == true,
         AudioDeviceId = AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId,
-        MicrophoneAudio = MicrophoneCheck.IsChecked == true, AudioBitrate = AudioBitrateBox.SelectedValue as int? ?? settings.AudioBitrate,
+        MicrophoneAudio = MicrophoneCheck.IsChecked == true, AudioBitrate = AudioBitrateBox.SelectedValue as int? ?? settings.AudioBitrate, MicNoiseReduction = (MicNoiseBox.SelectedItem as ComboBoxItem)?.Tag as string ?? settings.MicNoiseReduction,
         DesktopVolume = (int)Math.Round(DesktopVolumeSlider.Value), MicrophoneVolume = (int)Math.Round(MicrophoneVolumeSlider.Value),
         DesktopLocked = settings.DesktopLocked && !string.IsNullOrEmpty(AudioDeviceBox.SelectedValue as string), MicrophoneLocked = settings.MicrophoneLocked && !string.IsNullOrEmpty(MicrophoneDeviceBox.SelectedValue as string),
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,

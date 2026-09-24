@@ -48,7 +48,16 @@
     <StackPanel x:Name="ListControls" Orientation="Horizontal">
      <Button x:Name="AddSectionButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE710;" Click="Add_Click" Foreground="{DynamicResource Accent}" AutomationProperties.Name="Add section"/>
      <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time" AutomationProperties.Name="Cut out tool"/>
-     <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
+     <Button x:Name="SlowToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE916;" Click="SlowTool_Click" ToolTip="Slow motion: click two spots to slow that part down" AutomationProperties.Name="Slow motion tool"/>
+     <Popup x:Name="SlowPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True" Closed="SlowPopup_Closed">
+      <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
+       <StackPanel>
+        <TextBlock Text="Slow motion" FontSize="12" FontWeight="SemiBold" Margin="2,0,0,8"/>
+        <UniformGrid x:Name="SlowChoices" Rows="1"/>
+        <Button Style="{StaticResource TrimButton}" Content="Remove slow motion" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
+       </StackPanel>
+      </Border>
+     </Popup>     <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE8C6;" Click="Split_Click" ToolTip="Split the section under the playhead into two" AutomationProperties.Name="Split section"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
      <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE894;" Click="Clear_Click" ToolTip="Remove all sections" AutomationProperties.Name="Clear sections"/>
@@ -110,11 +119,13 @@
       <TextBlock Text="Export options" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
       <Grid>
        <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition/></Grid.ColumnDefinitions>
-       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
        <TextBlock Text="Format" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
        <ComboBox x:Name="SharePreset" Grid.Column="1" MinHeight="32" SelectedIndex="0" SelectionChanged="Share_Changed" AutomationProperties.Name="Export format"><ComboBoxItem Content="MP4 · original quality"/><ComboBoxItem Content="MP4 · 1080p 60fps"/><ComboBoxItem Content="MP4 · 720p 30fps"/><ComboBoxItem Content="MOV · original quality"/><ComboBoxItem Content="GIF · 480p 15fps"/><ComboBoxItem Content="MP3 · audio only"/></ComboBox>
        <TextBlock Grid.Row="1" Text="Cut" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,6,0,0"/>
        <ComboBox x:Name="ExportMode" Grid.Row="1" Grid.Column="1" MinHeight="32" Margin="0,6,0,0" SelectedIndex="1" SelectionChanged="ExportMode_Changed" AutomationProperties.Name="Cut precision"><ComboBoxItem Content="Precise cut"/><ComboBoxItem Content="Rough cut · fast"/></ComboBox>
+       <TextBlock Grid.Row="3" Text="Speed" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,6,0,0"/>
+       <ComboBox x:Name="ExportSpeed" Grid.Row="3" Grid.Column="1" MinHeight="32" Margin="0,6,0,0" SelectedIndex="0" SelectionChanged="ExportSpeed_Changed" AutomationProperties.Name="Export speed" ToolTip="Slow motion for the whole export. Audio slows down without changing pitch."><ComboBoxItem Content="Normal speed"/><ComboBoxItem Content="0.75× · slow motion"/><ComboBoxItem Content="0.5× · slow motion"/><ComboBoxItem Content="0.25× · slow motion"/></ComboBox>
        <TextBlock Grid.Row="2" Text="Size limit" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,6,0,0"/>
        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,6,0,0"><TextBox x:Name="SizeLimit" Width="70" Height="32" Text="0" ToolTip="0 = no limit. MB uses 1,000,000 bytes; enter your upload limit." TextChanged="SizeLimit_Changed" AutomationProperties.Name="Size limit in megabytes"/><TextBlock Text="MB · 0 = no limit" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/></StackPanel>
       </Grid>

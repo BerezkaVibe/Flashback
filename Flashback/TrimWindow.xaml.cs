@@ -26,8 +26,8 @@ public partial class TrimWindow : Window
     private readonly bool previewEnabled;
     private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
-    // Undo covers both kept sections and cut-outs.
-    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts);
+    // Undo covers kept sections, cut-outs and slow motion.
+    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow);
     private readonly Stack<EditState> undo = new(), redo = new();
     private int previewSection = -1;
     public event Action<ClipResult>? Exported;
@@ -43,6 +43,8 @@ public partial class TrimWindow : Window
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
         Timeline.SpeedStepRequested += StepPreviewRate;
+        Timeline.SlowAdded += SlowAdded; Timeline.SlowTagClicked += SlowTagClicked; Timeline.SlowRemoved += SlowRemoved;
+        LoadSlowChoices();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -121,6 +123,9 @@ public partial class TrimWindow : Window
             return;
         }
         SetPlayhead(actual);
+        // Slow-motion parts play slowed down in the preview as well.
+        double speed = PreviewRate * RegionSpeedAt(actual);
+        if (Math.Abs(Player.SpeedRatio - speed) > 1e-6) Player.SpeedRatio = speed;
     }
     private void SetPlayhead(double time)
     {
@@ -152,6 +157,7 @@ public partial class TrimWindow : Window
         Timeline.Sections = sections; Timeline.InvalidateVisual();
         SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed; UpdateRangeRow();
         TotalLabel.Text = sections.Count > 0 ? $"{sections.Count} sections · {sections.Sum(s => s.Duration):0.##} s" : $"Selected range · {Math.Max(0,Timeline.End-Timeline.Start):0.##} s";
+        if (Timeline.SlowRegions.Count > 0 || ExportSpeedValue != 1) TotalLabel.Text += $" · {OutputLength(SelectedRanges()):0.##} s with slow motion";
         ProjectChanged(); UpdateExportHint();
         ExportButton.IsEnabled = source.Length>0 && exportCancellation == null && (sections.Count > 0 || Timeline.End-Timeline.Start >= .1);
     }
@@ -223,7 +229,7 @@ public partial class TrimWindow : Window
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
-    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray());
+    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray());
     private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
     private void Restore(Stack<EditState> from, Stack<EditState> to)
@@ -232,7 +238,7 @@ public partial class TrimWindow : Window
         Pause(); to.Push(CurrentEdit()); var saved = from.Pop();
         if (!saved.Sections.SequenceEqual(sections))
         { sections.Clear(); foreach(var s in saved.Sections) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0; }
-        Timeline.Cuts = saved.Cuts; ApplyPreviewCuts(); UpdateExportHint();
+        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
     }
     private void Split_Click(object sender, RoutedEventArgs e)
     {
@@ -266,9 +272,10 @@ public partial class TrimWindow : Window
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
         // Esc drops a half-placed cut first, then leaves the cut tool.
-        if (key==Key.Escape && modifiers==ModifierKeys.None && Timeline.CutMode)
+        if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode))
         {
-            if (Timeline.HasPendingCut) { Timeline.CancelPendingCut(); StatusLabel.Text="Cut cancelled."; }
+            if (Timeline.HasPendingCut) { Timeline.CancelPendingCut(); StatusLabel.Text=Timeline.SlowMode ? "Slow motion cancelled." : "Cut cancelled."; }
+            else if (Timeline.SlowMode) SlowTool_Click(this,new RoutedEventArgs());
             else CutTool_Click(this,new RoutedEventArgs());
             return true;
         }

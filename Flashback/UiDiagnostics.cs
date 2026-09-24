@@ -21,6 +21,19 @@ internal static class UiDiagnostics
             File.AppendAllText(Path.Combine(Storage.Root, "ui-results.txt"), "PASS " + message + "\n");
         }
         Storage.Save(new Settings { MicrophoneAudio = true, OutputFolder = Path.Combine(Storage.Root, "clips") });
+        // Clip rename: keeps the extension and folder, updates history, refuses bad names and overwrites.
+        var renameDir = Path.Combine(Storage.Root, "rename-test"); Directory.CreateDirectory(renameDir);
+        string original = Path.Combine(renameDir, "Game — 2026-01-01.mp4"), other = Path.Combine(renameDir, "Taken.mp4");
+        File.WriteAllText(original, "x"); File.WriteAllText(other, "y");
+        ClipLibrary.Remember(new ClipResult(original, 5, "Game", DateTimeOffset.Now));
+        string renamed = ClipLibrary.Rename(original, "  Clutch ace.mp4 ");
+        Check(renamed == Path.Combine(renameDir, "Clutch ace.mp4") && File.Exists(renamed) && !File.Exists(original), "Rename keeps the folder and .mp4 extension and trims spaces");
+        Check(File.ReadAllText(Path.Combine(Storage.Root, "clips.jsonl")).Contains("Clutch ace.mp4") && !File.ReadAllText(Path.Combine(Storage.Root, "clips.jsonl")).Contains("2026-01-01.mp4"), "Rename updates the saved-clip history");
+        bool Throws(Action a) { try { a(); return false; } catch { return true; } }
+        Check(Throws(() => ClipLibrary.Rename(renamed, "Taken")) && File.ReadAllText(other) == "y", "Rename never overwrites another clip");
+        Check(Throws(() => ClipLibrary.Rename(renamed, "bad:name")) && Throws(() => ClipLibrary.Rename(renamed, "   ")), "Rename rejects empty names and invalid characters");
+        Check(ClipLibrary.Rename(renamed, "clutch ACE") == Path.Combine(renameDir, "clutch ACE.mp4"), "Case-only renames work");
+        Directory.Delete(renameDir, true); File.Delete(Path.Combine(Storage.Root, "clips.jsonl"));
         var window = new MainWindow(true);
         var content = (FrameworkElement)window.Content; window.Content = null;
         var canvas = new Border { Child = content, Background = (Brush)new BrushConverter().ConvertFromString("#111419")! };

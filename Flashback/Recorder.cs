@@ -274,6 +274,14 @@ public sealed class Recorder : IAsyncDisposable
         double scale = s.Height == 0 ? 1 : Math.Min(1, s.Height / (double)bounds.Height);
         return (Math.Max(2, (int)(bounds.Width * scale / 2) * 2), Math.Max(2, (int)(bounds.Height * scale / 2) * 2));
     }
+    // Adaptive FFT denoising for the microphone: tracks steady noise (fans, hum, hiss) as it changes.
+    // Strong also rolls off low rumble. About 1% of one CPU core.
+    internal static string NoiseFilter(Settings s, string prefix = "") => s.MicNoiseReduction switch
+    {
+        "Light" => prefix + "afftdn=nr=10:nf=-40:tn=1",
+        "Strong" => prefix + "highpass=f=80,afftdn=nr=20:nf=-35:tn=1",
+        _ => ""
+    };
     internal static List<string> BuildArguments(Settings s, string dir, IRecordingAudio? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false)
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.25", "-progress", "pipe:1" };
@@ -345,7 +353,7 @@ public sealed class Recorder : IAsyncDisposable
         {
             // Normalize each independent device clock before mixing to one stereo track.
             for (int i = 0; i < audioInputs.Count; i++)
-                filters.Add($"[{audioInputs[i]}:a:0]aresample=48000:async=1000:first_pts=0,aformat=channel_layouts=stereo[a{i}]");
+                filters.Add($"[{audioInputs[i]}:a:0]aresample=48000:async=1000:first_pts=0,aformat=channel_layouts=stereo{(i == 1 && !synthetic ? NoiseFilter(s, ",") : "")}[a{i}]");
             if (s.SeparateAudioTracks)
             {
                 // Track 1 stays the combined mix so every player and Discord hears everything;
@@ -368,7 +376,8 @@ public sealed class Recorder : IAsyncDisposable
         if (audioInputs.Count > 0)
         {
             args.AddRange(new[] { "-c:a", "aac", "-b:a", s.AudioBitrate + "k", "-ac", "2", "-ar", "48000" });
-            if (audioInputs.Count == 1) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" });
+            // A lone microphone (desktop audio off) gets its noise reduction here.
+            if (audioInputs.Count == 1) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" + (microphone != null && audio == null && !synthetic ? NoiseFilter(s, ",") : "") });
         }
         args.AddRange(new[] { "-f", "segment", "-segment_time", "2", "-segment_time_delta", "0.02", "-segment_format", "mpegts", "-segment_list", "segments.csv", "-segment_list_type", "csv", "-segment_list_size", (s.ReplaySeconds / 2 + 12).ToString(), "-reset_timestamps", "1", "part-%09d.ts" });
         args.InsertRange(args.Count - 1, new[] { "-segment_start_number", startSegmentNumber.ToString(CultureInfo.InvariantCulture) });

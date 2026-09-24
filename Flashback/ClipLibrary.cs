@@ -52,4 +52,35 @@ public static class ClipLibrary
         Directory.CreateDirectory(Storage.Root);
         File.AppendAllText(System.IO.Path.Combine(Storage.Root, "clips.jsonl"), JsonSerializer.Serialize(clip) + Environment.NewLine);
     }
+    // Renames a clip in place, keeping its extension and folder. The saved-clip history is updated
+    // too, so clips kept outside the clips folder (trimmer exports) stay in the library.
+    public static string Rename(string path, string name)
+    {
+        name = name.Trim();
+        string extension = System.IO.Path.GetExtension(path);
+        if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) name = name[..^extension.Length].TrimEnd();
+        if (name.Length == 0) throw new ArgumentException("Type a name for the clip.");
+        if (name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException("Clip names can't contain \\ / : * ? \" < > |");
+        if (name.EndsWith('.')) throw new ArgumentException("Clip names can't end with a period.");
+        string target = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path)!, name + extension);
+        if (string.Equals(target, path, StringComparison.Ordinal)) return path;
+        // A case-only change is the same file; anything else must not overwrite another clip.
+        if (File.Exists(target) && !string.Equals(target, path, StringComparison.OrdinalIgnoreCase)) throw new IOException("Another clip in this folder already has that name.");
+        File.Move(path, target);
+        var history = System.IO.Path.Combine(Storage.Root, "clips.jsonl");
+        try
+        {
+            if (File.Exists(history))
+            {
+                var lines = File.ReadAllLines(history).Select(line =>
+                {
+                    try { return JsonSerializer.Deserialize<ClipResult>(line) is { } c && string.Equals(c.Path, path, StringComparison.OrdinalIgnoreCase) ? JsonSerializer.Serialize(c with { Path = target }) : line; }
+                    catch (JsonException) { return line; }
+                }).ToArray();
+                var temp = history + ".tmp"; File.WriteAllLines(temp, lines); File.Move(temp, history, true);
+            }
+        }
+        catch (IOException) { }
+        return target;
+    }
 }

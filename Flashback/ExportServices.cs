@@ -26,6 +26,39 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     internal bool CustomMix => Math.Abs(DesktopVolume - 1) > .001 || Math.Abs(MicrophoneVolume - 1) > .001;
     // Lane -1 blacks out the picture; audio lanes follow the trimmer: combined, or desktop then microphone.
     internal IReadOnlyList<CutRegion> Cuts { get; init; } = Array.Empty<CutRegion>();
+    // Slow motion: 1 is normal speed, 0.5 plays at half speed. Audio keeps its pitch.
+    internal double Speed { get; init; } = 1;
+    internal static readonly double[] Speeds = { 1, .75, .5, .25 };
+    // Slow-motion regions from the timeline, in source time. They never overlap cuts.
+    internal IReadOnlyList<SpeedRegion> SlowRegions { get; init; } = Array.Empty<SpeedRegion>();
+    internal static readonly double[] RegionSpeeds = { .75, .5, .25 };
+    // Kept ranges split at slow-motion edges; each piece carries its combined speed.
+    internal List<(double Start, double End, double Speed)> Pieces(IEnumerable<KeepSection> ranges)
+    {
+        var pieces = new List<(double Start, double End, double Speed)>();
+        void Add(double a, double b, double s) { if (b - a > .005) pieces.Add((a, b, s * Speed)); }
+        foreach (var range in ranges)
+        {
+            double cursor = range.Start;
+            foreach (var region in SlowRegions.Where(r => r.End > range.Start && r.Start < range.End).OrderBy(r => r.Start))
+            {
+                Add(cursor, Math.Max(cursor, region.Start), 1);
+                Add(Math.Max(cursor, region.Start), Math.Min(region.End, range.End), region.Speed);
+                cursor = Math.Max(cursor, Math.Min(region.End, range.End));
+            }
+            Add(cursor, range.End, 1);
+        }
+        return pieces;
+    }
+    internal double OutputSeconds(IEnumerable<KeepSection> ranges) => Pieces(ranges).Sum(p => (p.End - p.Start) / p.Speed);
+    // atempo takes 0.5 to 2 per stage, so slower speeds chain halvings.
+    internal static string AudioTempo(double speed)
+    {
+        var stages = new List<string>(); double left = speed;
+        while (left < .5 - 1e-9) { stages.Add("atempo=0.5"); left /= .5; }
+        if (Math.Abs(left - 1) > 1e-9) stages.Add("atempo=" + ExportServices.Number(left));
+        return string.Join(",", stages);
+    }
     internal bool HasVideo => Format != ExportFormat.Mp3;
     internal bool IsGif => Format == ExportFormat.Gif;
     internal string Extension => Format switch { ExportFormat.Mov => ".mov", ExportFormat.Gif => ".gif", ExportFormat.Mp3 => ".mp3", _ => ".mp4" };
@@ -45,6 +78,8 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         if (Height is not (0 or 480 or 720 or 1080) || Fps is not (0 or 15 or 30 or 60)) throw new ArgumentException("Choose a supported export size and frame rate.");
         if (Crop is { } c && (c.X < 0 || c.Y < 0 || c.Width < 32 || c.Height < 32)) throw new ArgumentException("The crop area is too small.");
         if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
+        if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
+        if (SlowRegions.Any(r => !RegionSpeeds.Contains(r.Speed) || r.End <= r.Start)) throw new ArgumentException("A slow-motion area has an unsupported speed.");
     }
     internal int VideoBitrate(double seconds, bool audio)
     {
@@ -93,7 +128,9 @@ internal static class ExportServices
         bool video = options.HasVideo, audio = media.HasAudio && !options.IsGif;
         if (!video && !media.HasAudio) throw new ArgumentException("This clip has no audio to export as MP3.");
         bool encodeVideo = video && !options.IsGif;
-        int bitrate = options.TargetMb > 0 && encodeVideo ? options.VideoBitrate(total, audio) : 0;
+        var pieces = options.Pieces(ranges);
+        double output = pieces.Sum(p => (p.End - p.Start) / p.Speed);
+        int bitrate = options.TargetMb > 0 && encodeVideo ? options.VideoBitrate(output, audio) : 0;
         await Gate.WaitAsync(token);
         string temp = destination + "." + Guid.NewGuid().ToString("N") + ".partial";
         try
@@ -104,32 +141,35 @@ internal static class ExportServices
             // Thread counts are capped per input; no preview decoder or thumbnail job is started here.
             var inputs = new List<string>(); var filters = new List<string>(); var labels = "";
             bool mixTracks = audio && media.HasSeparateTracks && (options.CustomMix || options.Cuts.Any(c => c.Lane >= 0));
-            for (int i = 0; i < ranges.Count; i++)
+            for (int i = 0; i < pieces.Count; i++)
             {
-                var range = ranges[i]; string trim = $"atrim=duration={Number(range.Duration)},asetpts=PTS-STARTPTS";
-                // Cuts inside this section, as times relative to its start: black video or silence.
+                var (start, end, speed) = pieces[i]; double length = end - start;
+                string trim = $"atrim=duration={Number(length)},asetpts=PTS-STARTPTS";
+                // Slow motion stretches this piece after its cuts are applied in source time.
+                string slowVideo = speed != 1 ? $",setpts=PTS/{Number(speed)}" : "", slowAudio = speed != 1 ? "," + ShareExportOptions.AudioTempo(speed) : "";
+                // Cuts inside this piece, as times relative to its start: black video or silence.
                 string? Window(int lane)
                 {
-                    var parts = options.Cuts.Where(c => c.Lane == lane && c.End > range.Start && c.Start < range.End)
-                        .Select(c => $"between(t,{Number(Math.Max(0, c.Start - range.Start))},{Number(Math.Min(range.Duration, c.End - range.Start))})").ToList();
+                    var parts = options.Cuts.Where(c => c.Lane == lane && c.End > start && c.Start < end)
+                        .Select(c => $"between(t,{Number(Math.Max(0, c.Start - start))},{Number(Math.Min(length, c.End - start))})").ToList();
                     return parts.Count == 0 ? null : string.Join("+", parts);
                 }
                 string Mute(int lane) => Window(lane) is { } w ? $",volume=0:enable='{w}'" : "";
-                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(range.Start), "-t", Number(range.Duration), "-i", source });
+                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(length), "-i", source });
                 if (video)
                 {
                     string blackout = Window(-1) is { } w ? $",drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{w}'" : "";
-                    filters.Add($"[{i}:v:0]trim=duration={Number(range.Duration)},setpts=PTS-STARTPTS{blackout}[v{i}]"); labels += $"[v{i}]";
+                    filters.Add($"[{i}:v:0]trim=duration={Number(length)},setpts=PTS-STARTPTS{blackout}{slowVideo}[v{i}]"); labels += $"[v{i}]";
                 }
                 if (mixTracks)
                 {
                     // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
-                    filters.Add($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0[a{i}]");
+                    filters.Add($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0{slowAudio}[a{i}]");
                     labels += $"[a{i}]";
                 }
-                else if (audio) { filters.Add($"[{i}:a:0]{trim}{Mute(0)}[a{i}]"); labels += $"[a{i}]"; }
+                else if (audio) { filters.Add($"[{i}:a:0]{trim}{Mute(0)}{slowAudio}[a{i}]"); labels += $"[a{i}]"; }
             }
-            filters.Add(labels + $"concat=n={ranges.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
+            filters.Add(labels + $"concat=n={pieces.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
             if (video)
             {
                 var conversion = new List<string>();
@@ -137,7 +177,7 @@ internal static class ExportServices
                 if (options.IsGif)
                 {
                     // Palette pass keeps GIF colors clean; diff mode favors moving areas.
-                    filters.Add($"[joined]{(conversion.Count > 0 ? conversion[0] + "," : "")}fps=15,scale=w=-2:h='min(ih,480)':flags=lanczos,split[g0][g1];[g0]palettegen=max_colors=128:stats_mode=diff[pal];[g1][pal]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[v]");
+                    filters.Add($"[joined]{(conversion.Count > 0 ? string.Join(",", conversion) + "," : "")}fps=15,scale=w=-2:h='min(ih,480)':flags=lanczos,split[g0][g1];[g0]palettegen=max_colors=128:stats_mode=diff[pal];[g1][pal]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[v]");
                 }
                 else
                 {
@@ -154,8 +194,8 @@ internal static class ExportServices
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
                 args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(';',filters) });
                 if (video) args.AddRange(new[] { "-map", "[v]" });
-                if (!video) { args.AddRange(new[] { "-map", "[a]", "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await RunAsync(args, token, progress, total); break; }
-                if (options.IsGif) { args.AddRange(new[] { "-loop", "0", "-f", "gif", temp }); await RunAsync(args, token, progress, total); break; }
+                if (!video) { args.AddRange(new[] { "-map", "[a]", "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await RunAsync(args, token, progress, output); break; }
+                if (options.IsGif) { args.AddRange(new[] { "-loop", "0", "-f", "gif", temp }); await RunAsync(args, token, progress, output); break; }
                 if (audio) args.AddRange(new[] { "-map", "[a]", "-c:a", "aac", "-b:a", "128k" });
                 if (syntheticEncoder) args.AddRange(new[] { "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2" });
                 else if (bitrate == 0) args.AddRange(encoder!.EncodingArguments(new Settings(), export: true));
@@ -165,19 +205,19 @@ internal static class ExportServices
                 if (bitrate > 0) args.AddRange(new[] { "-b:v", bitrate.ToString(CultureInfo.InvariantCulture), "-maxrate", bitrate.ToString(CultureInfo.InvariantCulture), "-bufsize", (bitrate * 2L).ToString(CultureInfo.InvariantCulture) });
                 else if (syntheticEncoder) args.AddRange(new[] { "-crf", "20" });
                 args.AddRange(new[] { "-bf", "0", "-fps_mode", "vfr", "-movflags", "+faststart", "-f", options.Format == ExportFormat.Mov ? "mov" : "mp4", temp });
-                await RunAsync(args, token, progress, total);
+                await RunAsync(args, token, progress, output);
                 if (options.TargetMb == 0 || new FileInfo(temp).Length <= options.MaxBytes) break;
                 long actual = new FileInfo(temp).Length;
                 File.Delete(temp);
                 if (attempt == 1) throw new IOException("The encoder could not meet this file limit. Choose a larger limit or a shorter selection.");
                 bitrate = Math.Max(100000, (int)(bitrate * (double)options.MaxBytes / actual * .85));
             }
-            double duration = total;
+            double duration = output;
             if (encodeVideo)
             {
                 var verified = ClipMedia.Read(temp);
-                double tolerance = Math.Max(.25, ranges.Count / media.FrameRate + .05);
-                if (Math.Abs(verified.Duration - total) > tolerance || verified.HasAudio != audio) throw new IOException("Export timing or audio did not match the selected sections.");
+                double tolerance = Math.Max(.25, pieces.Count / media.FrameRate / pieces.Min(p => p.Speed) + .05);
+                if (Math.Abs(verified.Duration - output) > tolerance || verified.HasAudio != audio) throw new IOException("Export timing or audio did not match the selected sections.");
                 duration = verified.Duration;
             }
             else if (!File.Exists(temp) || new FileInfo(temp).Length == 0) throw new IOException("The export produced an empty file.");

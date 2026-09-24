@@ -63,6 +63,26 @@ internal static class EditorDiagnostics
             };
             Check(valid && new FileInfo(output).Length > 1000, $"{format} export writes a valid file");
         }
+        // Slow motion: a 2 s selection at 0.5x and 0.25x becomes 4 s and 8 s, audio included.
+        foreach (double speed in new[] { .5, .25 })
+        {
+            var slow = Path.Combine(folder, $"Slow {speed}.mp4");
+            var slowResult = await ExportServices.PreciseAsync(source, slow, new[] { new KeepSection(1, 3) }, null, CancellationToken.None, true, new ShareExportOptions { Speed = speed });
+            var slowMedia = ClipMedia.Read(slow);
+            Check(Math.Abs(slowMedia.Duration - 2 / speed) < .3 && slowMedia.HasAudio && Math.Abs(slowResult.Duration - 2 / speed) < .3, $"{speed}x slow motion stretches 2 s to {2 / speed} s with audio");
+        }
+        // Slow-motion regions: 4 s kept with 2-3 s at 0.5x becomes 5 s; with a 0.25x region across two sections too.
+        var partSlow = Path.Combine(folder, "Part slow.mp4");
+        await ExportServices.PreciseAsync(source, partSlow, new[] { new KeepSection(1, 5) }, null, CancellationToken.None, true,
+            new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(2, 3, .5) }, Cuts = new[] { new CutRegion(-1, 3.5, 4) } });
+        Check(Math.Abs(ClipMedia.Read(partSlow).Duration - 5) < .3 && ClipMedia.Read(partSlow).HasAudio, "A 0.5x slow-motion part lengthens only that stretch, alongside a cut elsewhere");
+        var splitSlow = Path.Combine(folder, "Split slow.mp4");
+        await ExportServices.PreciseAsync(source, splitSlow, new[] { new KeepSection(1, 2), new KeepSection(3, 4) }, null, CancellationToken.None, true,
+            new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(1.5, 3.5, .25) } });
+        Check(Math.Abs(ClipMedia.Read(splitSlow).Duration - (1 + 1 * 4)) < .4, "Slow motion applies only where it overlaps the kept sections");
+        var slowGif = Path.Combine(folder, "Slow.gif");
+        await ExportServices.PreciseAsync(source, slowGif, new[] { new KeepSection(1, 2) }, null, CancellationToken.None, true, ShareExportOptions.For(ExportFormat.Gif) with { Speed = .5, Crop = new CropRect(0, 0, 320, 180) });
+        Check(new FileInfo(slowGif).Length > 1000, "Slow motion also works for cropped GIFs");
         // Cut out: 1.0-2.0 s of the source is blacked out and muted; the section keeps its full length.
         var censored = Path.Combine(folder, "Censored.mp4");
         await ExportServices.PreciseAsync(source, censored, new[] { new KeepSection(.5, 3.5) }, null, CancellationToken.None, true,

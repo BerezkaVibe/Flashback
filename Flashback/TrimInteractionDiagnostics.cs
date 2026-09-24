@@ -100,7 +100,25 @@ internal static class TrimInteractionDiagnostics
             place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); trim.HandleKey(Key.Escape,ModifierKeys.None,true);
             Check(!tl.HasPendingCut && tl.CutMode,"Esc cancels a half-placed cut and keeps the tool on");
             trim.HandleKey(Key.Escape,ModifierKeys.None,true);
-            Check(!tl.CutMode,"A second Esc leaves the cut tool");            trim.Timeline.SelectedSection=-1;
+            Check(!tl.CutMode,"A second Esc leaves the cut tool");
+            // Slow motion: two clicks add a 0.5x part; it can't overlap a cut; its tag changes speed; undo works.
+            tl.SlowMode=true; int slowBefore=tl.SlowRegions.Count;
+            place.Invoke(tl,new object[]{new Point(tl.XAt(7),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(8.5),26)});
+            Check(tl.SlowRegions.Count==slowBefore+1 && tl.SlowRegions[^1].Speed==.5 && Math.Abs(tl.SlowRegions[^1].Start-7)<.02,"Two clicks add a 0.5x slow-motion part");
+            place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(9.5),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(6.5),26)});
+            Check(tl.SlowRegions.Count==slowBefore+1,"Slow motion can't overlap a cut or another slow part");
+            var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+            typeof(TrimWindow).GetMethod("SlowTagClicked",flags)!.Invoke(trim,new object[]{tl.SlowRegions.Count-1});
+            typeof(TrimWindow).GetMethod("SetSlowSpeed",flags)!.Invoke(trim,new object[]{.25});
+            Check(tl.SlowRegions[^1].Speed==.25,"The speed tag changes a part's speed");
+            cutsBefore=tl.Cuts.Count; tl.CutMode=true;
+            place.Invoke(tl,new object[]{new Point(tl.XAt(7.2),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(7.8),26)});
+            Check(tl.Cuts.Count==cutsBefore,"Cuts can't be placed over slow motion");
+            tl.CutMode=false;
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(tl.SlowRegions[^1].Speed==.5,"Undo reverts a slow-motion speed change");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(tl.SlowRegions.Count==slowBefore,"Undo removes an added slow-motion part");            trim.Timeline.SelectedSection=-1;
             double spanBefore=trim.Timeline.VisibleDuration;
             trim.Timeline.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice,0,120){RoutedEvent=UIElement.MouseWheelEvent});
             Check(trim.Timeline.VisibleDuration<spanBefore-.01,"Scroll wheel zooms the timeline in");

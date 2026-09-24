@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -109,12 +110,18 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts };
+        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions };
         options.Validate(); return options;
     }
+    // What the export keeps, before validation: the sections, or the marked range.
+    private IEnumerable<KeepSection> SelectedRanges() => sections.Count>0 ? sections : new[] { new KeepSection(Timeline.Start, Math.Max(Timeline.Start+.1, Timeline.End)) };
+    // Length of the finished export after any slow motion.
+    private double OutputLength(IEnumerable<KeepSection> ranges) => new ShareExportOptions { Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions }.OutputSeconds(ranges);
+    private double ExportSpeedValue => ShareExportOptions.Speeds[Math.Clamp(ExportSpeed?.SelectedIndex ?? 0, 0, ShareExportOptions.Speeds.Length-1)];
+    private void ExportSpeed_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     // Anything beyond copying the original MP4 streams needs a re-encode.
     private bool NeedsReencode(ShareExportOptions options) =>
-        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix);
+        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0;
     private void Share_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     private void SizeLimit_Changed(object sender,TextChangedEventArgs e) => UpdateExportHint();
     private void UpdateExportHint()
@@ -130,8 +137,8 @@ public partial class TrimWindow
                 else ExportMode.SelectedIndex=preferredPrecision;
             }
             ExportMode.IsEnabled=exportCancellation==null && !convert;
-            double duration=sections.Count>0 ? sections.Sum(s=>s.Duration) : Math.Max(.1,Timeline.End-Timeline.Start);
-            string crop=(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "");
+            double duration=Math.Max(.1,options.OutputSeconds(SelectedRanges()));
+            string crop=(options.Speed!=1 || options.SlowRegions.Count>0 ? $" · slow motion, {duration:0.#} s long" : "")+(options.Crop is { } c ? $" · cropped to {c.Width & ~1} × {c.Height & ~1}" : "")+(options.Cuts.Count>0 ? $" · {options.Cuts.Count} cut{(options.Cuts.Count==1 ? "" : "s")}" : "");
             ModeHint.Text=options.Format switch
             {
                 ExportFormat.Gif => "Animated GIF · 480p, 15 fps, no sound. Best for short moments"+crop+".",

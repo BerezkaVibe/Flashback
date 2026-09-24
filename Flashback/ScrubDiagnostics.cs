@@ -67,6 +67,7 @@ internal static class ScrubDiagnostics
             foreach (var (a, b) in new[] { (5.0, 15.0), (25.0, 32.0) })
             { trim.StartBox.Text = a.ToString(); trim.EndBox.Text = b.ToString(); typeof(TrimWindow).GetMethod("Add_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() }); }
             typeof(TrimWindow).GetMethod("CutAdded", flags)!.Invoke(trim, new object[] { new CutRegion(-1, 8, 10) });
+            typeof(TrimWindow).GetMethod("SlowAdded", flags)!.Invoke(trim, new object[] { 11.0, 14.0 });
             trim.SeekTo(12); await Task.Delay(500); Shot(trim, "trim-sections.png");
             typeof(TrimWindow).GetMethod("Clear_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() });
             await Sweep("audio folded");
