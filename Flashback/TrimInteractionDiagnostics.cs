@@ -198,6 +198,17 @@ internal static class TrimInteractionDiagnostics
             using(var file=File.Create(sticker)){var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(System.Windows.Media.Imaging.BitmapSource.Create(64,64,96,96,System.Windows.Media.PixelFormats.Bgra32,null,pixels,256)));png.Save(file);}
             trim.SeekTo(6);
             Check(trim.DropPicture(sticker) && tl.Overlays.Count==1 && tl.Overlays[0].Kind==OverlayKind.Image && Math.Abs(tl.Overlays[0].Start-6)<.01 && tl.Overlays[0].Scale<1,"Dropping a picture adds it at the playhead at its own size");
+            // Cropping on the video trims the left edge while the right edge stays put.
+            trim.UpdateLayout(); var ov=trim.OverlayView; ov.SetCropping(true);
+            Check(ov.Cropping,"Pictures switch to a crop box on the video");
+            var pic=tl.Overlays[0]; var lf=typeof(OverlayLayer);
+            Rect Edges(OverlayItem o){var s=o.StateAt(trim.Playhead-o.Start);return Rect.Transform(OverlayRenderer.Content(o,s.Chars,trim.Playhead-o.Start,640.0/360).Bounds,OverlayRenderer.Placement(o,s,640,360));}
+            var pressAt=new Point(ov.ActualWidth/2,ov.ActualHeight/2);
+            lf.GetField("press",flags)!.SetValue(ov,pressAt); lf.GetField("cropEdges",flags)!.SetValue(ov,1);
+            var croppedPic=(OverlayItem)lf.GetMethod("CropTo",flags)!.Invoke(ov,new object[]{pic,pressAt+new Vector(15,0)})!;
+            Check(croppedPic.CropLeft>.05 && Math.Abs(Edges(croppedPic).Right-Edges(pic).Right)<1 && Edges(croppedPic).Left>Edges(pic).Left+2,"Cropping trims the picture's edge without moving the rest of it");
+            trim.HandleKey(Key.Escape,ModifierKeys.None,true);
+            Check(!ov.Cropping,"Esc finishes cropping");
             trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             Check(tl.Overlays.Count==0 && trim.OverlayPanel.Visibility!=Visibility.Visible,"Undo removes the dropped picture and closes its editor");
             trim.Timeline.SelectedSection=-1;

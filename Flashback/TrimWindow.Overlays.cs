@@ -33,6 +33,7 @@ public partial class TrimWindow
         OverlayView.EditStarted += () => { Snapshot(); lastOverlayControl = "view"; };
         OverlayView.Changed += item => { if (Timeline.SelectedOverlay >= 0) { ReplaceOverlay(Timeline.SelectedOverlay, item.Validated()); LoadOverlayUi(); } };
         OverlayView.WheelAdjusted += WheelAdjust;
+        OverlayView.CroppingChanged += on => StatusLabel.Text = on ? "Cropping: drag the edges or corners, or drag inside to move the crop. Double-click or Esc when done." : "Crop done.";
     }
     // Scroll over an item on the preview: scale, Shift for rotation, Ctrl for opacity. A run of
     // scrolling is one undo step.
@@ -264,11 +265,12 @@ public partial class TrimWindow
             Toggle(flips, "", "Flip left to right", o => o.FlipX, (o, on) => o with { FlipX = on }, glyph: true);
             Toggle(flips, "", "Flip upside down", o => o.FlipY, (o, on) => o with { FlipY = on }, glyph: true, rotate: 90);
             OverlayControls.Children.Add(flips);
-            Header("Crop");
-            SliderRow("Left", "cropL", 0, .9, o => o.CropLeft, (o, v) => o with { CropLeft = Math.Round(v, 3) }, v => $"{v * 100:0}%");
-            SliderRow("Right", "cropR", 0, .9, o => o.CropRight, (o, v) => o with { CropRight = Math.Round(v, 3) }, v => $"{v * 100:0}%");
-            SliderRow("Top", "cropT", 0, .9, o => o.CropTop, (o, v) => o with { CropTop = Math.Round(v, 3) }, v => $"{v * 100:0}%");
-            SliderRow("Bottom", "cropB", 0, .9, o => o.CropBottom, (o, v) => o with { CropBottom = Math.Round(v, 3) }, v => $"{v * 100:0}%");
+            // Cropping happens on the video: double-click the picture, or use the button.
+            SmallButton(flips, "Crop", "Crop on the video · or double-click the picture", () => { if (SelectedOverlayItem is { } o && (playhead < o.Start || playhead >= o.End)) OpenOverlay(Timeline.SelectedOverlay); OverlayView.SetCropping(true); });
+            var resetCrop = new Button { Content = "Reset crop", FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 0, 4, 4), ToolTip = "Show the whole picture again" };
+            resetCrop.SetResourceReference(StyleProperty, "TrimButton");
+            resetCrop.Click += (_, _) => EditOverlay("resetCrop", o => o with { CropLeft = 0, CropTop = 0, CropRight = 0, CropBottom = 0 });
+            flips.Children.Add(resetCrop); overlayRows.Add((resetCrop, o => o.CropLeft + o.CropTop + o.CropRight + o.CropBottom > 0));
             Header("Frame");
             SliderRow("Corners", "imageCorner", 0, 50, o => o.ImageCorner, (o, v) => o with { ImageCorner = Math.Round(v) }, v => v < .5 ? "Square" : v > 49.5 ? "Round" : $"{v:0}%");
             var borderRow = new StackPanel { Orientation = Orientation.Horizontal };

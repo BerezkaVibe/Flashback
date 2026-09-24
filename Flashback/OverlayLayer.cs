@@ -15,7 +15,7 @@ internal sealed class OverlayLayer : FrameworkElement
     internal double VideoWidth = 1920, VideoHeight = 1080;
     private IReadOnlyList<OverlayItem> items = Array.Empty<OverlayItem>();
     internal IReadOnlyList<OverlayItem> Items { get => items; set { items = value; Refresh(); } }
-    internal int Selected { get => selected; set { selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
+    internal int Selected { get => selected; set { if (value != selected) SetCropping(false); selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
     private int selected = -1;
     private double time;
     internal double Time { get => time; set { if (Math.Abs(time - value) < 1e-9) return; time = value; Refresh(onlyIfChanged: true); } }
@@ -114,7 +114,8 @@ internal sealed class OverlayLayer : FrameworkElement
         using var dc = handles.RenderOpen();
         // Handles only show while the pointer is on the item or dragging it, so the rest of the
         // time the preview looks exactly like the export.
-        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None)) return;
+        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None && !Cropping)) return;
+        if (Cropping) { DrawCrop(dc, item); return; }
         var m = ItemToScreen(item, out var content, out _);
         var box = HandleBox(item, content); var c = Corners(box, m);
         var outline = new StreamGeometry();
@@ -147,8 +148,87 @@ internal sealed class OverlayLayer : FrameworkElement
         return item.Points.Select(p => m.Transform(new Point(box.X + (p.X + .5) * box.Width, box.Y + (p.Y + .5) * box.Height)));
     }
 
+    // ---- Cropping ----
+    // Double-click a picture to crop it on the video: the cut-away parts show faintly around a crop
+    // box whose edges and corners drag. The picture stays put while its edges are trimmed.
+    internal bool Cropping { get; private set; }
+    internal event Action<bool>? CroppingChanged;
+    internal void SetCropping(bool on)
+    {
+        if (on && Current is not { Kind: OverlayKind.Image }) on = false;
+        if (Cropping == on) return;
+        Cropping = on; DrawHandles(); CroppingChanged?.Invoke(on);
+    }
+    private const int EdgeLeft = 1, EdgeTop = 2, EdgeRight = 4, EdgeBottom = 8;
+    private static Rect Kept(OverlayItem item, Rect full) =>
+        new(full.Left + item.CropLeft * full.Width, full.Top + item.CropTop * full.Height, full.Width * (1 - item.CropLeft - item.CropRight), full.Height * (1 - item.CropTop - item.CropBottom));
+    private void DrawCrop(DrawingContext dc, OverlayItem item)
+    {
+        var m = ItemToScreen(item, out _, out _);
+        var (picture, full) = OverlayRenderer.Uncropped(item, time - item.Start);
+        if (picture == null) return;
+        var kept = Kept(item, full);
+        dc.PushTransform(new MatrixTransform(m));
+        var away = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        away.Children.Add(new RectangleGeometry(full)); away.Children.Add(new RectangleGeometry(kept));
+        dc.PushClip(away); dc.PushOpacity(.35); dc.DrawImage(picture, full); dc.Pop(); dc.Pop();
+        dc.Pop();
+        var c = Corners(kept, m);
+        var outline = new StreamGeometry();
+        using (var g = outline.Open()) { g.BeginFigure(c[0], false, true); g.PolyLineTo(c.Skip(1).ToArray(), true, false); }
+        dc.DrawGeometry(null, HandlePen, outline);
+        foreach (var p in c) dc.DrawRectangle(HandleFill, HandlePen, new Rect(p.X - 5, p.Y - 5, 10, 10));
+        foreach (var p in SideHandles(c).Concat(new[] { Mid(c[0], c[1]), Mid(c[3], c[2]) })) dc.DrawEllipse(HandleFill, HandlePen, p, 4.5, 4.5);
+    }
+    private static Point Mid(Point a, Point b) => new((a.X + b.X) / 2, (a.Y + b.Y) / 2);
+    // Which crop edges are under a point (a corner is two), or -1 inside the box to move it.
+    private int CropEdgesAt(OverlayItem item, Point p)
+    {
+        var m = ItemToScreen(item, out _, out _); if (!m.HasInverse) return 0;
+        var (_, full) = OverlayRenderer.Uncropped(item, time - item.Start);
+        var kept = Kept(item, full); var local = Inverse(m).Transform(p);
+        double tol = 9 / Math.Max(1e-6, Math.Sqrt(m.M11 * m.M11 + m.M12 * m.M12));
+        bool inY = local.Y > kept.Top - tol && local.Y < kept.Bottom + tol, inX = local.X > kept.Left - tol && local.X < kept.Right + tol;
+        int edges = 0;
+        if (inY && Math.Abs(local.X - kept.Left) <= tol) edges |= EdgeLeft;
+        if (inY && Math.Abs(local.X - kept.Right) <= tol) edges |= EdgeRight;
+        if (inX && Math.Abs(local.Y - kept.Top) <= tol) edges |= EdgeTop;
+        if (inX && Math.Abs(local.Y - kept.Bottom) <= tol) edges |= EdgeBottom;
+        return edges != 0 ? edges : kept.Contains(local) ? -1 : 0;
+    }
+    private OverlayItem CropTo(OverlayItem o, Point p)
+    {
+        var m = ItemToScreen(o, out _, out var state); if (!m.HasInverse) return o;
+        var inverse = Inverse(m);
+        var (_, full) = OverlayRenderer.Uncropped(o, time - o.Start);
+        var kept = Kept(o, full); var d = inverse.Transform(p) - inverse.Transform(press);
+        double minW = full.Width * .04, minH = full.Height * .04;
+        double left = kept.Left, top = kept.Top, right = kept.Right, bottom = kept.Bottom;
+        if (cropEdges == -1)
+        {
+            double dx = Math.Clamp(d.X, full.Left - kept.Left, full.Right - kept.Right), dy = Math.Clamp(d.Y, full.Top - kept.Top, full.Bottom - kept.Bottom);
+            left += dx; right += dx; top += dy; bottom += dy;
+        }
+        else
+        {
+            if ((cropEdges & EdgeLeft) != 0) left = Math.Clamp(left + d.X, full.Left, right - minW);
+            if ((cropEdges & EdgeRight) != 0) right = Math.Clamp(right + d.X, left + minW, full.Right);
+            if ((cropEdges & EdgeTop) != 0) top = Math.Clamp(top + d.Y, full.Top, bottom - minH);
+            if ((cropEdges & EdgeBottom) != 0) bottom = Math.Clamp(bottom + d.Y, top + minH, full.Bottom);
+        }
+        // Keep the whole picture where it is: the item's centre follows the middle of the kept part.
+        var centre = OverlayRenderer.Placement(o, state, VideoWidth, VideoHeight).Transform(new Point((left + right) / 2, (top + bottom) / 2));
+        return o with
+        {
+            CropLeft = (left - full.Left) / full.Width, CropRight = (full.Right - right) / full.Width,
+            CropTop = (top - full.Top) / full.Height, CropBottom = (full.Bottom - bottom) / full.Height,
+            X = centre.X / VideoWidth - state.Dx, Y = centre.Y / VideoHeight - state.Dy,
+        };
+    }
+
     // ---- Mouse ----
-    private enum Grip { None, Move, Scale, Rotate, WrapLeft, WrapRight, Tail, Point }
+    private enum Grip { None, Move, Scale, Rotate, WrapLeft, WrapRight, Tail, Point, Crop }
+    private int cropEdges;
     private Grip grip; private Point press; private OverlayItem? original; private int pointIndex; private bool moved;
     protected override HitTestResult? HitTestCore(PointHitTestParameters p) => ItemAt(p.HitPoint) >= 0 || GripAt(p.HitPoint).Grip != Grip.None ? new PointHitTestResult(this, p.HitPoint) : null;
     private int ItemAt(Point p)
@@ -166,6 +246,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private (Grip Grip, int Point) GripAt(Point p)
     {
         if (Current is not { } item || !Visible(item)) return (Grip.None, -1);
+        if (Cropping) { int edges = CropEdgesAt(item, p); return edges != 0 ? (Grip.Crop, edges) : (Grip.None, -1); }
         var m = ItemToScreen(item, out var content, out _);
         var c = Corners(HandleBox(item, content), m);
         bool Near(Point a, double r = 8) => (a - p).Length <= r;
@@ -185,12 +266,21 @@ internal sealed class OverlayLayer : FrameworkElement
         base.OnMouseLeftButtonDown(e);
         var p = e.GetPosition(this);
         var (g, point) = GripAt(p);
+        if (Cropping)
+        {
+            // Double-click, or click outside the crop box, to finish cropping.
+            if (g == Grip.None || e.ClickCount == 2) { SetCropping(false); if (g == Grip.None && ItemAt(p) < 0) return; if (e.ClickCount == 2) { e.Handled = true; return; } }
+            else { grip = g; cropEdges = point; press = p; original = Current; moved = false; CaptureMouse(); e.Handled = true; return; }
+            (g, point) = GripAt(p);
+        }
         if (g == Grip.None)
         {
             int hit = ItemAt(p);
             if (hit < 0) return;
             if (hit != selected) { Picked?.Invoke(hit); }
             g = Grip.Move;
+            // Double-clicking a picture crops it on the video.
+            if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Image }) { SetCropping(true); e.Handled = true; return; }
             // Double-clicking a custom shape's edge adds a corner there.
             if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Text, Shape: OverlayShape.Custom } custom) { AddPoint(custom, p); e.Handled = true; return; }
         }
@@ -236,7 +326,14 @@ internal sealed class OverlayLayer : FrameworkElement
         var p = e.GetPosition(this);
         if (grip == Grip.None || original is not { } o)
         {
-            var (g, _) = GripAt(p);
+            var (g, edges) = GripAt(p);
+            if (Cropping)
+            {
+                Cursor = g != Grip.Crop ? null : edges == -1 ? Cursors.SizeAll : edges is EdgeLeft or EdgeRight ? Cursors.SizeWE : edges is EdgeTop or EdgeBottom ? Cursors.SizeNS
+                    : edges == (EdgeLeft | EdgeTop) || edges == (EdgeRight | EdgeBottom) ? Cursors.SizeNWSE : Cursors.SizeNESW;
+                ToolTip = "Drag the edges to crop · double-click or Esc when done";
+                return;
+            }
             bool over = g != Grip.None || (selected >= 0 && ItemAt(p) == selected);
             if (over != hovering) { hovering = over; DrawHandles(); }
             Cursor = g switch { Grip.Scale => Cursors.SizeNWSE, Grip.Rotate => Cursors.Hand, Grip.WrapLeft or Grip.WrapRight => Cursors.SizeWE, Grip.Tail or Grip.Point => Cursors.Cross, _ => ItemAt(p) >= 0 ? Cursors.SizeAll : null };
@@ -251,6 +348,7 @@ internal sealed class OverlayLayer : FrameworkElement
         OverlayItem next = o;
         switch (grip)
         {
+            case Grip.Crop: next = CropTo(o, p); break;
             case Grip.Move:
             {
                 var delta = Inverse(toScreen).Transform(p - press);

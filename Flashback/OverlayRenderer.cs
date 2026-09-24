@@ -231,8 +231,9 @@ internal static class OverlayRenderer
             missing.DrawRoundedRectangle(Brush("#80252D36"), new Pen(Brush("#E5484D"), 3) { DashStyle = DashStyles.Dash }, new Rect(-160, -90, 320, 180), 10, 10);
             group.Freeze(); return group;
         }
-        var size = ImageSize(picture.PixelWidth, picture.PixelHeight);
-        var rect = new Rect(-size.Width / 2, -size.Height / 2, size.Width, size.Height);
+        // Sized from the whole picture, so cropping trims the edges rather than enlarging what's left.
+        double f = ImageScale(item);
+        var rect = new Rect(-picture.PixelWidth * f / 2, -picture.PixelHeight * f / 2, picture.PixelWidth * f, picture.PixelHeight * f);
         double radius = item.ImageCorner / 100 * Math.Min(rect.Width, rect.Height);
         using (var dc = group.Open())
         {
@@ -251,6 +252,18 @@ internal static class OverlayRenderer
     }
     // A picture fits a 540-pixel square at scale 1 (half the height of a 1080p frame).
     internal static Size ImageSize(double w, double h) { double f = ImageBox / Math.Max(1, Math.Max(w, h)); return new Size(w * f, h * f); }
+    // Reference pixels per picture pixel: the whole (uncropped) picture fits the 540-pixel square.
+    internal static double ImageScale(OverlayItem item) => Load(item.ImagePath) is { } s ? ImageBox / Math.Max(1, Math.Max(s.Frames[0].PixelWidth, s.Frames[0].PixelHeight)) : 1;
+    // The whole picture (flipped and keyed, not cropped) and where it sits around the item's centre.
+    internal static (BitmapSource? Picture, Rect Full) Uncropped(OverlayItem item, double t)
+    {
+        var picture = ProcessedFrame(item with { CropLeft = 0, CropTop = 0, CropRight = 0, CropBottom = 0 }, t);
+        if (picture == null) return (null, Rect.Empty);
+        double f = ImageScale(item), w = picture.PixelWidth * f, h = picture.PixelHeight * f;
+        // The item's centre is the middle of the kept part.
+        double cx = ((item.CropLeft + 1 - item.CropRight) / 2 - .5) * w, cy = ((item.CropTop + 1 - item.CropBottom) / 2 - .5) * h;
+        return (picture, new Rect(-cx - w / 2, -cy - h / 2, w, h));
+    }
 
     private sealed record Source(BitmapSource[] Frames, double[] Starts, double Length);
     private static readonly Dictionary<string, (DateTime Stamp, Source? Source)> sources = new(StringComparer.OrdinalIgnoreCase);
