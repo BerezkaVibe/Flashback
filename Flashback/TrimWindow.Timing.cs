@@ -93,7 +93,7 @@ public partial class TrimWindow
                 next = newVolume; break;
             case SoundItem sound:
                 if (Timeline.Sounds.Any(o => o != sound && o.Row == sound.Row && Hits(o.Start, o.End))) { error = "It would overlap another sound on its row."; return false; }
-                var newSound = sound with { Start = start, End = end };
+                var newSound = sound with { Start = start, End = end, Hold = Math.Abs(start - sound.Start) < 1e-9 ? sound.Hold : 0 };
                 ReplaceSound(sound, newSound);
                 next = newSound; break;
             default: return false;
@@ -108,15 +108,42 @@ public partial class TrimWindow
         if (ZoomPanel.Visibility == Visibility.Visible) LoadZoomUi();
         if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi();
     }
-    // Sets one end of a part (typed, or picked on the timeline) as one undo step.
-    private void SetPartTime(object? part, bool isStart, double time)
+    // A part's start and end as the timeline shows them: the recording's times, or in the finished view
+    // where it plays in the finished video.
+    private (double Start, double End) ShownSpan(object part)
+    {
+        var (s, e) = SpanOf(part);
+        if (!Timeline.Finished) return (s, e);
+        if (part is SoundItem sound) { double at = Timeline.ToView(sound.Start) + sound.Hold; return (at, at + sound.Length); }
+        return (Timeline.ToView(s), Timeline.EndView(e));
+    }
+    // Sets one end of a part (typed, or picked on the timeline) as one undo step. view: the time is in
+    // the finished video's time.
+    private void SetPartTime(object? part, bool isStart, double time, bool view = false)
     {
         if (part == null || CurrentVersion(part) is not { } current) { StatusLabel.Text = "That part is no longer there."; return; }
-        var (start, end) = SpanOf(current);
-        if (isStart) start = time; else end = time;
+        var (start, end) = SpanOf(current); double typed = time;
         Snapshot();
-        if (!TryRetime(current, start, end, out _, out var error)) { undo.Pop(); StatusLabel.Text = error; }
-        else StatusLabel.Text = $"{(isStart ? "Starts" : "Ends")} at {KeepSection.TimeText(time)}.";
+        bool done; string? error = null;
+        if (view && current is SoundItem sound)
+        {
+            // A sound plays for real seconds from where its start is anchored, so work in finished time.
+            var (from, to) = ShownSpan(sound);
+            double a = isStart ? time : from, b = isStart ? to : time;
+            var (at, hold) = Timeline.FromView(Math.Max(0, a));
+            var next = sound with { Start = at, Hold = hold, End = at + (b - a) };
+            done = b - a >= FrameStep - 1e-9 && !Timeline.Sounds.Any(o => o != sound && o.Row == sound.Row && ShownSpan(o).End > a + 1e-9 && ShownSpan(o).Start < b - 1e-9);
+            if (done) { ReplaceSound(sound, next); FocusPart(next); }
+            else error = b - a < FrameStep - 1e-9 ? "It needs to be at least a frame long, with the end after the start." : "It would overlap another sound on its row.";
+        }
+        else
+        {
+            if (view) time = Timeline.SourceNear(time, isStart ? end : start);
+            if (isStart) start = time; else end = time;
+            done = TryRetime(current, start, end, out _, out error);
+        }
+        if (!done) { undo.Pop(); StatusLabel.Text = error; }
+        else StatusLabel.Text = $"{(isStart ? "Starts" : "Ends")} at {KeepSection.TimeText(typed)}.";
         AfterRetime();
     }
     // Start and end fields with pick buttons, and the length. refresh re-reads the part.
@@ -142,9 +169,9 @@ public partial class TrimWindow
             {
                 // Style edits replace the part's record, so match by kind and times rather than identity.
                 if (shown == null || part() is not { } p || p.GetType() != shown.GetType() || SpanOf(p) != SpanOf(shown)) return;
-                try { double t = KeepSection.Parse(box.Text); if (Math.Abs(t - (isStart ? SpanOf(p).Start : SpanOf(p).End)) > 1e-6) SetPartTime(p, isStart, t); }
+                try { double t = KeepSection.Parse(box.Text); if (Math.Abs(t - (isStart ? ShownSpan(p).Start : ShownSpan(p).End)) > 1e-6) SetPartTime(p, isStart, t, Timeline.Finished); }
                 catch (ArgumentException ex) { StatusLabel.Text = ex.Message; }
-                if (part() is { } now) { shown = now; var (s, e) = SpanOf(now); box.Text = KeepSection.TimeText(isStart ? s : e); }
+                if (part() is { } now) { shown = now; var (s, e) = ShownSpan(now); box.Text = KeepSection.TimeText(isStart ? s : e); }
             }
             box.KeyDown += (_, k) => { if (k.Key == Key.Enter) { Commit(); k.Handled = true; } };
             box.LostKeyboardFocus += (_, _) => Commit();
@@ -165,7 +192,7 @@ public partial class TrimWindow
         {
             if (part() is not { } p) return;
             shown = p;
-            var (s, e) = SpanOf(p);
+            var (s, e) = ShownSpan(p);
             if (!boxes[0].IsKeyboardFocused) boxes[0].Text = KeepSection.TimeText(s);
             if (!boxes[1].IsKeyboardFocused) boxes[1].Text = KeepSection.TimeText(e);
             length.Text = $"Lasts {e - s:0.00} s";
@@ -177,7 +204,8 @@ public partial class TrimWindow
     {
         if (part == null) return;
         SlowPopup.IsOpen = false; CutPopup.IsOpen = false; VolumePopup.IsOpen = false; SoundPopup.IsOpen = false;
-        Timeline.PickTime = t => { Timeline.PickTime = null; SetPartTime(part, isStart, t); };
+        // A sound's ends are in real seconds, so in the finished view a picked moment goes over as finished time.
+        Timeline.PickTime = t => { Timeline.PickTime = null; bool view = Timeline.Finished && part is SoundItem; SetPartTime(part, isStart, view ? Timeline.ToView(t) : t, view); };
         Timeline.Focus();
         StatusLabel.Text = $"Click the timeline where it should {(isStart ? "start" : "end")}. It locks onto the playhead and other parts' edges · Esc cancels.";
     }

@@ -129,17 +129,20 @@ public partial class TrimWindow
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Add music or a sound", Filter = "Sound files|" + string.Join(";", SoundExtensions.Select(x => "*" + x)) + ";*.mp4;*.m4v;*.mov|All files|*.*", CheckFileExists = true };
         if (dialog.ShowDialog(this) != true) { StatusLabel.Text = "No sound added."; return; }
+        // In the finished view the two clicks mark how long it plays there (slowed parts and holds included).
+        if (Timeline.Finished) end = start + Math.Max(FrameStep, Timeline.EndView(end) - Timeline.ToView(start));
         AddSound(dialog.FileName, start, end);
     }
-    private void AddSound(string path, double start, double end)
+    // hold: how far into a freeze's hold at start it begins.
+    private void AddSound(string path, double start, double end, double hold = 0)
     {
         Snapshot();
-        var sound = new SoundItem(path, start, end, Row: FreeSoundRow(Timeline.Sounds, start, end));
+        var sound = new SoundItem(path, start, end, Row: FreeSoundRow(Timeline.Sounds, start, end)) { Hold = hold };
         SetSounds(Timeline.Sounds.Append(sound).ToArray());
         if (!Timeline.LanesExpanded) LanesToggleRequested();
         UpdateExportHint(); UpdateSummary();
         OpenSoundPopup(sound);
-        StatusLabel.Text = $"Added {Path.GetFileName(path)}. It's mixed over the finished export, so speed parts don't change it.";
+        StatusLabel.Text = $"Added {Path.GetFileName(path)}. It plays at its own speed over the finished video; change its speed here, or match the part under it.";
     }
     // Dropping a sound file adds it at the playhead for as long as it lasts (to the end of the clip).
     internal async Task<bool> DropSoundAsync(string path)
@@ -147,7 +150,13 @@ public partial class TrimWindow
         if (source.Length == 0 || exportCancellation != null || !SoundExtensions.Contains(Path.GetExtension(path).ToLowerInvariant())) return false;
         double start = Math.Min(playhead, Math.Max(0, media.Duration - .1));
         double length = await SoundLengthAsync(path) ?? 30;
-        AddSound(path, start, Math.Min(media.Duration, start + length));
+        if (Timeline.Finished)
+        {
+            // Plays from the playhead to the end of the finished video at most, even from inside a hold.
+            double from = Timeline.PositionView;
+            AddSound(path, playhead, playhead + Math.Max(FrameStep, Math.Min(length, Timeline.Map.Total - from)), Timeline.HoldOffset);
+        }
+        else AddSound(path, start, Math.Min(media.Duration, start + length));
         return true;
     }
     // How long a sound file lasts, read from ffmpeg's summary of it.
@@ -207,6 +216,19 @@ public partial class TrimWindow
         panel.Children.Add(duck);
         duckLevel = Slider("Clip sound", 0, 100, sound.DuckLevel * 100, v => $"{v:0}%", v => Edit("duckLevel", s => s with { DuckLevel = Math.Round(v) / 100 }));
         duckLevel.Visibility = sound.Duck ? Visibility.Visible : Visibility.Collapsed;
+        // Its own speed: normal under slowed parts and freezes, or slowed (or sped up) to match them.
+        // The slider runs in doublings so 0.5× and 2× sit either side of 1×.
+        Slider("Speed", Math.Log2(SoundItem.MinSpeed), Math.Log2(SoundItem.MaxSpeed), Math.Log2(sound.Speed), v => $"{SoundSpeed(v):0.##}×", v => Edit("speed", s => s with { Speed = SoundSpeed(v) }));
+        static double SoundSpeed(double log) { double speed = Math.Pow(2, log); return Math.Abs(speed - 1) < .04 ? 1 : Math.Round(speed, 2); }
+        var pitch = new CheckBox { Content = "Keep its pitch", IsChecked = sound.KeepPitch, Margin = new Thickness(0, 4, 0, 2), ToolTip = "Off: slower sounds deeper and faster sounds higher, like a tape" };
+        pitch.Click += (_, _) => Edit("pitch", s => s with { KeepPitch = pitch.IsChecked == true });
+        panel.Children.Add(pitch);
+        double under = RegionSpeedAt(sound.Start) * ExportSpeedValue;
+        var match = new Button { Content = $"Match the speed under it ({under:0.##}×)", FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 2, 0, 4), HorizontalAlignment = HorizontalAlignment.Stretch,
+            ToolTip = "Play it at the speed of the video where it starts, so it slows down or speeds up with that part" };
+        match.SetResourceReference(StyleProperty, "TrimButton");
+        match.Click += (_, _) => { Edit("match", s => s with { Speed = Math.Clamp(Math.Round(under, 2), SoundItem.MinSpeed, SoundItem.MaxSpeed) }); if (popupSound is { } now) OpenSoundPopup(now); };
+        panel.Children.Add(match);
         var offsetRow = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
         var offsetName = new TextBlock { Text = "Start from", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; offsetName.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
         var offset = new TextBox { Text = KeepSection.TimeText(sound.Offset), Height = 28, FontFamily = new FontFamily("Consolas"), FontSize = 12, ToolTip = "Where in the file the sound starts playing" };
@@ -235,6 +257,11 @@ public partial class TrimWindow
     {
         if (!previewEnabled) return;
         var wanted = new HashSet<string>();
+        // Sounds play along the finished video, as they're exported: from where they're anchored, for real
+        // seconds, through holds and speed parts alike. Footage that isn't kept has no sound over it.
+        var map = Timeline.Sounds.Count > 0 ? Timeline.Map : null;
+        bool kept = map != null && (sections.Count == 0 ? playhead >= Timeline.Start - 1e-6 && playhead <= Timeline.End + 1e-6 : map.SectionOf(playhead) >= 0);
+        double now = map != null ? map.ToOutput(playhead) + HoldAt(playhead) : 0;
         for (int i = 0; i < Timeline.Sounds.Count; i++)
         {
             var s = Timeline.Sounds[i]; string key = i + "|" + s.Path; wanted.Add(key);
@@ -243,15 +270,16 @@ public partial class TrimWindow
                 player = new MediaPlayer(); try { player.Open(new Uri(s.Path)); } catch { continue; }
                 soundPlayers[key] = player;
             }
-            bool inside = playhead >= s.Start && playhead < s.End;
+            double at = map!.ToOutput(s.Start) + s.Hold, local = now - at, speed = Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed);
+            bool inside = kept && local >= 0 && local < s.Length;
             if (playing && inside)
             {
-                double local = playhead - s.Start, fade = 1;
+                double fade = 1;
                 if (s.FadeIn > 0) fade = Math.Min(fade, local / s.FadeIn);
-                if (s.FadeOut > 0) fade = Math.Min(fade, (s.End - playhead) / s.FadeOut);
+                if (s.FadeOut > 0) fade = Math.Min(fade, (s.Length - local) / s.FadeOut);
                 player.Volume = Math.Clamp(s.Volume * Math.Clamp(fade, 0, 1), 0, 1);
-                player.SpeedRatio = PreviewRate;
-                var expected = TimeSpan.FromSeconds(s.Offset + local);
+                player.SpeedRatio = PreviewRate * speed;
+                var expected = TimeSpan.FromSeconds(s.Offset + local * speed);
                 if (!soundsPlaying.Contains(key)) { player.Position = expected; player.Play(); soundsPlaying.Add(key); }
                 else if (Math.Abs((player.Position - expected).TotalSeconds) > .3) player.Position = expected;
             }

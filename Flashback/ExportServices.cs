@@ -355,13 +355,18 @@ internal static class ExportServices
                     filters.Add($"[{silence}:a]anull[a]"); audio = true;
                 }
                 var mix = new List<string>(); var ducks = new List<string>();
+                // A sound starts at the footage moment it's anchored to (plus how far into a freeze's hold)
+                // and plays for its own length in real seconds, at its own speed, whatever plays under it.
+                var sequence = new SequenceMap(ranges, options);
                 foreach (var (sound, n) in sounds.Select((s, n) => (s, n)))
                 {
-                    double at = ShareExportOptions.OutputTime(pieces, sound.Start), until = ShareExportOptions.OutputTime(pieces, sound.End), length = Math.Min(until - at, sound.Length);
+                    double at = sequence.ToOutput(sound.Start) + Math.Max(0, sound.Hold), length = Math.Min(sound.Length, output - at);
                     if (length <= .05) continue;
-                    int input = AddInput("-ss", Number(sound.Offset), "-t", Number(length), "-i", sound.Path);
+                    double speed = Math.Clamp(sound.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed);
+                    int input = AddInput("-ss", Number(sound.Offset), "-t", Number(length * speed), "-i", sound.Path);
+                    string tempo = Math.Abs(speed - 1) < 1e-9 ? "" : sound.KeepPitch ? "," + ShareExportOptions.AudioTempo(speed) : $",asetrate={Number(48000 * speed)},aresample=48000";
                     string fades = (sound.FadeIn > 0 ? $",afade=t=in:d={Number(Math.Min(sound.FadeIn, length))}" : "") + (sound.FadeOut > 0 ? $",afade=t=out:st={Number(Math.Max(0, length - sound.FadeOut))}:d={Number(Math.Min(sound.FadeOut, length))}" : "");
-                    filters.Add($"[{input}:a:0]aresample=48000,asetpts=PTS-STARTPTS,volume={Number(sound.Volume)}{fades},adelay=delays={Number(at * 1000)}:all=1[snd{n}]");
+                    filters.Add($"[{input}:a:0]aresample=48000,asetpts=PTS-STARTPTS{tempo},volume={Number(sound.Volume)}{fades},adelay=delays={Number(at * 1000)}:all=1[snd{n}]");
                     mix.Add($"[snd{n}]");
                     if (sound.Duck) ducks.Add($",volume={Number(sound.DuckLevel)}:enable='between(t,{Number(at)},{Number(at + length)})'");
                 }

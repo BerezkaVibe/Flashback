@@ -24,25 +24,81 @@ internal sealed record FreezeFrame(double At, double Seconds)
 internal sealed class TrimTimeline : FrameworkElement
 {
     internal double Duration = 1, Start, End, Position, FrameRate = 60;
+    // The view: ViewStart and ViewDuration are in view time, which is the recording's time, or with the
+    // finished view on, the finished video's (sections in play order, speed parts stretched, freezes held).
     internal double ViewStart, ViewDuration;
-    internal double VisibleDuration => ViewDuration > 0 ? Math.Min(ViewDuration,Duration) : Duration;
-    internal double ZoomFactor => Duration / Math.Max(.001, VisibleDuration);
+    internal double VisibleDuration => ViewDuration > 0 ? Math.Min(ViewDuration,Total) : Total;
+    internal double ZoomFactor => Total / Math.Max(.001, VisibleDuration);
     private double Span => VisibleDuration;
     internal event Action? ViewChanged;
     private void RefreshView() { InvalidateVisual(); ViewChanged?.Invoke(); }
     internal void Fit() { ViewStart=0; ViewDuration=0; RefreshView(); }
-    internal void PanTo(double start) { ViewStart=Math.Clamp(start,0,Math.Max(0,Duration-Span)); RefreshView(); }
+    internal void PanTo(double start) { ViewStart=Math.Clamp(start,0,Math.Max(0,Total-Span)); RefreshView(); }
     // Zooms down to a dozen frames, so individual frames get their own ticks.
-    private double MinimumSpan => Math.Min(Duration, Math.Max(.2, 12 / Math.Max(1, FrameRate)));
-    internal void Zoom(double factor, double center)
+    private double MinimumSpan => Math.Min(Total, Math.Max(.2, 12 / Math.Max(1, FrameRate)));
+    // Zoom around a moment of the recording (the playhead, say).
+    internal void Zoom(double factor, double center) => ZoomView(factor, center == Position ? PositionView : ToView(center));
+    private void ZoomView(double factor, double center)
     {
-        double old=Span, next=Math.Clamp(old/factor,MinimumSpan,Duration);
+        double old=Span, next=Math.Clamp(old/factor,MinimumSpan,Total);
         double ratio=Math.Clamp((center-ViewStart)/old,0,1);
-        ViewStart=Math.Clamp(center-ratio*next,0,Math.Max(0,Duration-next)); ViewDuration=next>=Duration-1e-9 ? 0 : next; RefreshView();
+        ViewStart=Math.Clamp(center-ratio*next,0,Math.Max(0,Total-next)); ViewDuration=next>=Total-1e-9 ? 0 : next; RefreshView();
     }
     internal void Reveal(double time)
     {
-        if (time<ViewStart || time>ViewStart+Span) PanTo(time-Span/2);
+        double v = time == Position ? PositionView : ToView(time);
+        if (v<ViewStart || v>ViewStart+Span) PanTo(v-Span/2);
+    }
+
+    // ---- Finished view ----
+    // Off: the timeline is the whole recording. On: it's the finished video, laid out by Map, and every
+    // part slides with its footage. Parts are always stored in recording time.
+    private bool finished;
+    internal bool Finished { get => finished; set { if (finished == value) return; finished = value; ViewStart = 0; ViewDuration = 0; mapVersion++; Height = PreferredHeight; RefreshView(); } }
+    // Laid out again (lazily) when the sections, range, speed parts, freezes or export speed change.
+    internal SequenceMap Map
+    {
+        get
+        {
+            if (built != null && !remap) return built;
+            remap = false;
+            IReadOnlyList<KeepSection> ranges = Sections.Count > 0 ? Sections.ToArray() : new[] { new KeepSection(Start, Math.Min(Duration, Math.Max(Start + .1, End))) };
+            built = new SequenceMap(ranges, new ShareExportOptions { Speed = exportSpeed, SlowRegions = slowRegions, Freezes = freezes });
+            mapVersion++;
+            if (finished && ViewStart + Span > Total) ViewStart = Math.Max(0, Total - Span);
+            return built;
+        }
+    }
+    private SequenceMap? built; private bool remap = true; private (int, double, double, double) builtShape;
+    private SequenceMap? sequence => finished ? Map : null;
+    internal void Remap() { remap = true; if (finished) InvalidateVisual(); }
+    internal double ExportSpeed { get => exportSpeed; set { if (exportSpeed == value) return; exportSpeed = value; Remap(); } }
+    private double exportSpeed = 1;
+    private int mapVersion;
+    private bool Mapped => finished && sequence != null && sequence.Total > 0;
+    // How long the timeline is in view time.
+    internal double Total => Mapped ? sequence!.Total : Duration;
+    // Seconds into a freeze's hold the playhead is (the recording's time stands still meanwhile).
+    internal double HoldOffset { get => holdOffset; set { if (Math.Abs(holdOffset - value) < 1e-9) return; holdOffset = value; InvalidateVisual(); } }
+    private double holdOffset;
+    internal double ToView(double source) => Mapped ? sequence!.ToOutput(source) : source;
+    internal (double Source, double Hold) FromView(double view) => Mapped ? sequence!.ToSource(view) : (view, 0);
+    internal double PositionView => ToView(Position) + (Mapped ? holdOffset : 0);
+    internal event Action? ViewToggled;
+    // Whether any of a span of the recording is in view.
+    private bool Shows(double start, double end)
+    {
+        if (!Mapped) return !(end < ViewStart || start > ViewStart + Span);
+        if (end - start <= 1e-9) { double v = sequence!.ToOutput(start); return v >= ViewStart && v <= ViewStart + Span; }
+        foreach (var (a, b) in sequence!.Spans(start, end)) if (b >= ViewStart && a <= ViewStart + Span) return true;
+        return false;
+    }
+    // Where a span of the recording is drawn: one stretch, or in the finished view one per place it plays.
+    private IEnumerable<(double X0, double X1)> XSpans(double start, double end)
+    {
+        if (!Mapped) { yield return (XAt(start), XAt(end)); yield break; }
+        foreach (var (a, b) in sequence!.Spans(start, end))
+            if (b >= ViewStart && a <= ViewStart + Span) yield return (VX(a), VX(b));
     }
     internal IReadOnlyList<KeepSection> Sections = Array.Empty<KeepSection>();
     private IReadOnlyList<AudioLane> lanes = Array.Empty<AudioLane>();
@@ -95,7 +151,7 @@ internal sealed class TrimTimeline : FrameworkElement
     internal event Action<int>? ZoomTagClicked, ZoomRemoved;
     private readonly List<Rect> zoomTags = new();
     private IReadOnlyList<SpeedRegion> slowRegions = Array.Empty<SpeedRegion>();
-    internal IReadOnlyList<SpeedRegion> SlowRegions { get => slowRegions; set { slowRegions = value; slowVersion++; InvalidateVisual(); } }
+    internal IReadOnlyList<SpeedRegion> SlowRegions { get => slowRegions; set { slowRegions = value; slowVersion++; Remap(); InvalidateVisual(); } }
     private int slowVersion;
     internal int SelectedSlow { get => selectedSlow; set { selectedSlow = value; slowVersion++; InvalidateVisual(); } }
     private int selectedSlow = -1;
@@ -106,10 +162,12 @@ internal sealed class TrimTimeline : FrameworkElement
     // Freeze frames: a slit on the video track with a tag showing how long it holds. Click the tag (or the
     // slit) for its settings; drag the slit to move it.
     private IReadOnlyList<FreezeFrame> freezes = Array.Empty<FreezeFrame>();
-    internal IReadOnlyList<FreezeFrame> Freezes { get => freezes; set { freezes = value; slowVersion++; InvalidateVisual(); } }
+    internal IReadOnlyList<FreezeFrame> Freezes { get => freezes; set { freezes = value; slowVersion++; Remap(); InvalidateVisual(); } }
     internal event Action<int>? FreezeTagClicked;
     internal event Action? FreezeEditStarted, FreezeEditFinished;
     internal event Action<int, double>? FreezeMoved;
+    // Finished view: the end of a freeze's hold was dragged to a new length.
+    internal event Action<int, double>? FreezeHoldChanged;
     private readonly List<Rect> freezeTags = new();
     private int dragFreeze = -1; private bool freezeDragMoved;
     private (int Lane, double Time)? pendingCut, cutHover;
@@ -134,8 +192,11 @@ internal sealed class TrimTimeline : FrameworkElement
     private const double SoundHeight = 18;
     private int SoundRows => sounds.Count == 0 ? 0 : sounds.Max(s => s.Row) + 1;
     private double SoundTop(int row) => LanesTop + lanes.Count * (LaneHeight + LaneGap) + row * (SoundHeight + LaneGap);
-    private Rect SoundRect(SoundItem s) { double x = XAt(s.Start); return new Rect(x, SoundTop(s.Row), Math.Max(3, XAt(s.End) - x), SoundHeight); }
-    private SoundItem? SoundAt(Point p) => lanesExpanded ? sounds.LastOrDefault(s => s.End >= ViewStart && s.Start <= ViewStart + Span && Rect.Inflate(SoundRect(s), 2, 1).Contains(p)) : null;
+    // Where a sound plays in view time: from its anchor (plus any hold offset) for its real length.
+    private (double From, double To) SoundView(SoundItem s) { if (!Mapped) return (s.Start, s.End); double at = sequence!.ToOutput(s.Start) + s.Hold; return (at, at + s.Length); }
+    private Rect SoundRect(SoundItem s) { var (a, b) = SoundView(s); double x = VX(a); return new Rect(x, SoundTop(s.Row), Math.Max(3, VX(b) - x), SoundHeight); }
+    private bool SoundShows(SoundItem s) { var (a, b) = SoundView(s); return b >= ViewStart && a <= ViewStart + Span; }
+    private SoundItem? SoundAt(Point p) => lanesExpanded ? sounds.LastOrDefault(s => SoundShows(s) && Rect.Inflate(SoundRect(s), 2, 1).Contains(p)) : null;
     internal bool HasPendingCut => pendingCut != null;
     internal void CancelPendingCut() { pendingCut = null; InvalidateVisual(); }
     private double CutTimeAt(double x)
@@ -193,13 +254,15 @@ internal sealed class TrimTimeline : FrameworkElement
     private double RowsSpan => Rows == 0 ? 0 : Folded ? FoldHeight + RowGap + 1 : Rows * (RowHeight + RowGap) + 1;
     private double TrackTop => 8 + RowsSpan;
     private double RowTop(int layer) => Folded ? 8 : 8 + (Rows - 1 - layer) * (RowHeight + RowGap);
-    private Rect OverlayRect(OverlayItem o) { double x = XAt(o.Start); return new Rect(x, RowTop(o.Layer), Math.Max(3, XAt(o.End) - x), Folded ? FoldHeight : RowHeight); }
+    // An item's bar on its row: one per place it plays in the finished view.
+    private IEnumerable<Rect> OverlayRects(OverlayItem o) => XSpans(o.Start, o.End).Select(s => new Rect(s.X0, RowTop(o.Layer), Math.Max(3, s.X1 - s.X0), Folded ? FoldHeight : RowHeight));
+    private Rect OverlayRect(OverlayItem o) => OverlayRects(o).DefaultIfEmpty(new Rect(XAt(o.Start), RowTop(o.Layer), 3, Folded ? FoldHeight : RowHeight)).First();
     private Rect FoldToggleArea => new(0, 6, Inset - 5, Math.Max(12, RowsSpan));
     private int OverlayAt(Point p)
     {
         // Front-most first, so the item on top wins when rows are tight.
         for (int i = overlays.Count - 1; i >= 0; i--)
-            if (overlays[i].End >= ViewStart && overlays[i].Start <= ViewStart + Span && Rect.Inflate(OverlayRect(overlays[i]), 2, 1).Contains(p)) return i;
+            if (OverlayRects(overlays[i]).Any(r => Rect.Inflate(r, 2, 1).Contains(p))) return i;
         return -1;
     }
     private int RowAt(double y) => Rows == 0 ? -1 : (int)Math.Clamp(Math.Floor((8 + Rows * (RowHeight + RowGap) - y) / (RowHeight + RowGap)), -1, Rows);
@@ -233,11 +296,44 @@ internal sealed class TrimTimeline : FrameworkElement
     // Which end of the selected part is under the pointer: true for the start, false for the end.
     private bool? FocusedEdgeAt(Point p)
     {
-        if (FocusedSpan() is not { } span || p.Y < span.Band.Top - 4 || p.Y > span.Band.Bottom + 4) return null;
-        double a = XAt(span.Start), b = XAt(span.End);
-        bool nearA = Math.Abs(p.X - a) <= 6 && span.Start >= ViewStart && span.Start <= ViewStart + Span, nearB = Math.Abs(p.X - b) <= 6 && span.End >= ViewStart && span.End <= ViewStart + Span;
+        if (FocusedSpan() is not { } span || p.Y < span.Band.Top - 4 || p.Y > span.Band.Bottom + 4 || FocusedEdges() is not { } edges) return null;
+        double a = VX(edges.A), b = VX(edges.B);
+        bool nearA = Math.Abs(p.X - a) <= 6 && InView(edges.A), nearB = Math.Abs(p.X - b) <= 6 && InView(edges.B);
         if (nearA && nearB) return Math.Abs(p.X - a) <= Math.Abs(p.X - b);
         return nearA ? true : nearB ? false : null;
+    }
+    // Where the selected part's ends are, in view time (a sound's from where it plays).
+    private (double A, double B)? FocusedEdges()
+    {
+        if (FocusedSpan() is not { } span) return null;
+        if (Mapped && focusedPart is SoundItem s && sounds.FirstOrDefault(x => x.Start == s.Start && x.End == s.End && x.Row == s.Row) is { } now) return SoundView(now);
+        return (EdgeView(span.Start, false), EdgeView(span.End, true));
+    }
+    // Where an edge of a part of the recording falls in view time: an end edge stays with the footage before it.
+    private double EdgeView(double t, bool end) => !Mapped ? t : end ? sequence!.EndToOutput(t) : sequence!.ToOutput(t);
+    private double EdgeX(double t, bool end) => VX(EdgeView(t, end));
+    internal double EndView(double t) => EdgeView(t, true);
+    // The recording's moment for a view time, kept inside the section the anchor (a part's other end) is in.
+    internal double SourceNear(double view, double anchor)
+    {
+        if (!Mapped) return view;
+        int section = sequence!.SectionOf(anchor);
+        if (section < 0) return FromView(view).Source;
+        var (from, to) = sequence.SectionSpan(section);
+        return sequence.SourceIn(section, Math.Clamp(view, from, to));
+    }
+    private bool InView(double v) => v >= ViewStart - 1e-9 && v <= ViewStart + Span + 1e-9;
+    // In the finished view a part can't reach across a jump between sections: a time outside the section
+    // its anchor is in becomes the nearest moment of that section under the pointer.
+    private double SectionTime(double t, double x, double anchor)
+    {
+        if (!Mapped) return t;
+        int section = sequence!.SectionOf(anchor);
+        if (section < 0) return t;
+        var range = sequence.Range(section);
+        if (t >= range.Start - 1e-9 && t <= range.End + 1e-9) return t;
+        var (from, to) = sequence.SectionSpan(section);
+        return sequence.SourceIn(section, Math.Clamp(VT(x), from, to));
     }
     // A time from the pointer that locks onto the playhead and other parts' edges (not the moving part's own).
     private double LockedTime(double x, double? ownStart = null, double? ownEnd = null)
@@ -281,7 +377,7 @@ internal sealed class TrimTimeline : FrameworkElement
         int current = under.FindIndex(IsFocused);
         return under[(current + 1) % under.Count];
     }
-    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd, FreezeMove }
+    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd, FreezeMove, FreezeEnd }
     private SoundItem? soundOriginal, soundCurrent; private bool soundDragMoved;
     private Drag drag;
     private double grabOffset;
@@ -322,8 +418,11 @@ internal sealed class TrimTimeline : FrameworkElement
     private static readonly Pen TickPen = new(Tick, 1), MajorPen = new(Muted, 1), InkPen = new(Ink, 2);
     static TrimTimeline() { TickPen.Freeze(); MajorPen.Freeze(); InkPen.Freeze(); }
     internal bool IsDragging => drag != Drag.None && drag != Drag.Pan;
-    internal double TimeAt(double x) => Math.Clamp(ViewStart + (x-Inset) / Math.Max(1, ActualWidth-2*Inset) * Span, ViewStart, Math.Min(Duration,ViewStart+Span));
-    internal double XAt(double t) => Inset + Math.Clamp((t-ViewStart) / Math.Max(.001, Span), 0, 1) * Math.Max(1, ActualWidth-2*Inset);
+    // View time and x. TimeAt and XAt take and give the recording's time, whichever view is on.
+    private double VT(double x) => Math.Clamp(ViewStart + (x-Inset) / Math.Max(1, ActualWidth-2*Inset) * Span, ViewStart, Math.Min(Total,ViewStart+Span));
+    private double VX(double v) => Inset + Math.Clamp((v-ViewStart) / Math.Max(.001, Span), 0, 1) * Math.Max(1, ActualWidth-2*Inset);
+    internal double TimeAt(double x) => Mapped ? FromView(VT(x)).Source : VT(x);
+    internal double XAt(double t) => VX(ToView(t));
     private double Snap(double t) => Math.Clamp(Math.Round(t * FrameRate) / FrameRate, 0, Duration);
     public TrimTimeline()
     {
@@ -346,7 +445,14 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         if (Duration <= 0 || ActualWidth <= 2*Inset)
         { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion, zoomVersion, (overlayVersion, extraRow));
+        if (finished)
+        {
+            // Sections and the range are plain fields; notice when they've changed and lay out again first.
+            var shape = (SectionsKey(), Start, End, Duration);
+            if (!shape.Equals(builtShape)) { builtShape = shape; remap = true; }
+            _ = Map;
+        }
+        var key =(ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion, zoomVersion, (overlayVersion, extraRow, finished, mapVersion, viewHover));
         if (!Equals(cacheKey, key))
         {
             using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
@@ -363,8 +469,8 @@ internal sealed class TrimTimeline : FrameworkElement
             }
             if (cutHover is { } hover) DrawCutter(live, pendingCut?.Lane ?? hover.Lane, hover.Time);
         }
-        double playhead = XAt(Position);
-        if (Position >= ViewStart - 1e-9 && Position <= ViewStart + Span + 1e-9)
+        double playheadAt = PositionView, playhead = VX(playheadAt);
+        if (playheadAt >= ViewStart - 1e-9 && playheadAt <= ViewStart + Span + 1e-9)
         {
             live.DrawLine(InkPen, new Point(playhead, 2), new Point(playhead, ScrollTop - 2));
             live.DrawRoundedRectangle(Ink, null, new Rect(playhead-5, 0, 10, 7), 2, 2);
@@ -375,6 +481,8 @@ internal sealed class TrimTimeline : FrameworkElement
     private static readonly Brush Dim = Brush("#A00A0D11");
     private void DimOutsideKept(DrawingContext dc, Rect band, double radius)
     {
+        // The finished view only shows what's kept.
+        if (Mapped) return;
         var kept = Sections.Count > 0 ? Sections.Select(s => (s.Start, s.End)).OrderBy(k => k.Start).ToList() : new List<(double Start, double End)> { (Start, End) };
         kept.Add((double.MaxValue, double.MaxValue));
         dc.PushClip(new RectangleGeometry(band, radius, radius));
@@ -392,26 +500,36 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         double width = ActualWidth-2*Inset, dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         dc.DrawRoundedRectangle(Track, null, new Rect(Inset, TrackTop, width, TrackHeight), 6, 6);
-        for (int i = 0; i < Sections.Count; i++)
+        // Kept blocks: where each section sits in the recording, or in the finished view where it plays
+        // (in order, holds and speed included; with no sections the whole finished video is kept).
+        var blocks = new List<(int Index, double X0, double X1)>();
+        if (Mapped)
         {
-            var s = Sections[i];
-            if (s.End<ViewStart || s.Start>ViewStart+Span) continue;
-            var block = new Rect(XAt(s.Start), TrackTop+3, Math.Max(1, XAt(s.End)-XAt(s.Start)), TrackHeight-6);
-            dc.DrawRoundedRectangle(Kept, i == SelectedSection ? new Pen(Ink, 1.5) : null, block, 3, 3);
+            if (Sections.Count == 0) blocks.Add((-1, VX(0), VX(Total)));
+            else for (int i = 0; i < Sections.Count; i++) { var (a, b) = sequence!.SectionSpan(i); if (b >= ViewStart && a <= ViewStart + Span) blocks.Add((i, VX(a), VX(b))); }
+        }
+        else for (int i = 0; i < Sections.Count; i++) { var s = Sections[i]; if (Shows(s.Start, s.End)) blocks.Add((i, XAt(s.Start), XAt(s.End))); }
+        foreach (var (i, x0, x1) in blocks)
+        {
+            var block = new Rect(x0, TrackTop+3, Math.Max(1, x1-x0), TrackHeight-6);
+            dc.DrawRoundedRectangle(Kept, i >= 0 && i == SelectedSection ? new Pen(Ink, 1.5) : null, block, 3, 3);
+            if (i < 0) continue;
             // Number each kept block (bottom-left, clear of the ruler) so it matches its chip below the timeline.
             var number = Text((i + 1).ToString(CultureInfo.InvariantCulture), 11, Ink, dpi);
             if (block.Width >= number.Width + 8) dc.DrawText(number, new Point(block.X + 5, block.Bottom - number.Height - 1));
         }
         DrawRuler(dc, width, dpi);
         DimOutsideKept(dc, new Rect(Inset, TrackTop, width, TrackHeight), 6);
-        dc.DrawRoundedRectangle(null, new Pen(Accent, 1.5), new Rect(XAt(Start), TrackTop-2, Math.Max(1, XAt(End)-XAt(Start)), TrackHeight+4), 3, 3);
+        // The marked range and its handles belong to the recording view.
+        if (!Mapped) dc.DrawRoundedRectangle(null, new Pen(Accent, 1.5), new Rect(XAt(Start), TrackTop-2, Math.Max(1, XAt(End)-XAt(Start)), TrackHeight+4), 3, 3);
         foreach (var edge in new[] { (Time: Start, Color: Accent), (Time: End, Color: EndAccent) })
         {
-            if (edge.Time<ViewStart || edge.Time>ViewStart+Span) continue;
+            if (Mapped || !Shows(edge.Time, edge.Time)) continue;
             double x = XAt(edge.Time);
             // A slim bar; the grab area stays wide (see BeginDrag).
             dc.DrawRoundedRectangle(edge.Color, null, new Rect(x-3, TrackTop-3, 6, TrackHeight+6), 3, 3);
         }
+        DrawViewToggle(dc, dpi);
         DrawLaneToggle(dc, dpi);
         cutTags.Clear();
         foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi, focused: IsFocused(cut), cut: cut);
@@ -436,7 +554,7 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             // A slim scrollbar shows where the zoomed view sits in the whole clip.
             dc.DrawRoundedRectangle(Track, null, new Rect(Inset, ScrollTop, width, ScrollHeight), 3, 3);
-            double left = Inset + ViewStart / Duration * width, thumb = Math.Max(12, Span / Duration * width);
+            double left = Inset + ViewStart / Total * width, thumb = Math.Max(12, Span / Total * width);
             dc.DrawRoundedRectangle(Accent, null, new Rect(Math.Min(left, Inset + width - thumb), ScrollTop, thumb, ScrollHeight), 3, 3);
         }
     }
@@ -452,13 +570,14 @@ internal sealed class TrimTimeline : FrameworkElement
             : Steps.Where(s => s < major && s * pixelsPerSecond >= 8 && IsMultiple(major, s)).DefaultIfEmpty(major).Min();
         int decimals = major >= 1 ? 0 : major >= .1 ? 1 : 2;
         var labelRight = double.MinValue;
-        var handles = new[] { Start, End }.Where(t => t >= ViewStart && t <= ViewStart + Span).Select(XAt).ToArray();
+        var handles = Mapped ? Array.Empty<double>() : new[] { Start, End }.Where(t => t >= ViewStart && t <= ViewStart + Span).Select(XAt).ToArray();
         bool Blocked(double left, double w) => handles.Any(h => left < h + 8 && left + w > h - 8);
         double top = TrackTop + 1;
         // Integer tick counts avoid drift when stepping by a frame (1/60 s).
         for (long k = (long)Math.Ceiling(ViewStart / minor - 1e-9), last = (long)Math.Floor((ViewStart + Span) / minor + 1e-9); k <= last; k++)
         {
-            double t = k * minor, x = XAt(t);
+            // Ticks count view time: the recording's, or the finished video's.
+            double t = k * minor, x = VX(t);
             bool isMajor = minor == major || IsMultiple(t, major);
             dc.DrawLine(isMajor ? MajorPen : TickPen, new Point(x, top), new Point(x, top + (isMajor ? 6 : 3)));
             if (!isMajor) continue;
@@ -479,7 +598,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private string TimeLabel(double t, int decimals)
     {
         var time = TimeSpan.FromSeconds(Math.Max(0, t));
-        string whole = Duration >= 3600 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"m\:ss");
+        string whole = Total >= 3600 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"m\:ss");
         return decimals == 0 ? whole : whole + (time.TotalSeconds % 1).ToString("F" + decimals, CultureInfo.InvariantCulture)[1..];
     }
     // Labels are laid out once and reused: a timeline with a hundred layers redraws its labels on every
@@ -505,7 +624,7 @@ internal sealed class TrimTimeline : FrameworkElement
         dc.DrawRoundedRectangle(LaneFill, null, new Rect(Inset, top, width, LaneHeight), 4, 4);
         var peaks = lane.Peaks; double mid = top + LaneHeight / 2;
         // The outline only changes with the view, so edits elsewhere on the timeline reuse it.
-        var waveKey = (peaks, ViewStart, Span, width, top);
+        var waveKey = (peaks, ViewStart, Span, width, top + (Mapped ? sequence!.Version * 1e6 : 0));
         if (peaks.Length > 0 && waveCache.TryGetValue(lane.Name, out var cached) && cached.Key.Equals(waveKey)) dc.DrawGeometry(lane.Muted ? WaveMuted : Wave, null, cached.Geometry);
         else if (peaks.Length > 0)
         {
@@ -515,8 +634,19 @@ internal sealed class TrimTimeline : FrameworkElement
             var upper = new Point[columns]; var lower = new Point[columns];
             for (int px = 0; px < columns; px++)
             {
-                int a = (int)((ViewStart + px / width * Span) * 100), b = Math.Max(a + 1, (int)((ViewStart + (px + 1) / width * Span) * 100));
-                float peak = 0; for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]);
+                // In the finished view each column reads the recording where that moment of the finished
+                // video comes from (speed parts squeeze or stretch it; a hold is flat).
+                float peak = 0;
+                if (Mapped)
+                {
+                    var (from, held) = sequence!.ToSource(ViewStart + px / width * Span); var (to, _) = sequence!.ToSource(ViewStart + (px + 1) / width * Span);
+                    if (held <= 0) { int a = (int)(Math.Min(from, to) * 100), b = Math.Max(a + 1, (int)(Math.Max(from, to) * 100)); if (b - a > 400) b = a + 1; for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]); }
+                }
+                else
+                {
+                    int a = (int)((ViewStart + px / width * Span) * 100), b = Math.Max(a + 1, (int)((ViewStart + (px + 1) / width * Span) * 100));
+                    for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]);
+                }
                 double h = Math.Max(.5, peak * (LaneHeight / 2 - 2));
                 upper[px] = new Point(Inset + px + .5, mid - h); lower[columns - 1 - px] = new Point(Inset + px + .5, mid + h);
             }
@@ -550,7 +680,17 @@ internal sealed class TrimTimeline : FrameworkElement
         return -2;
     }
     // The audio toggle lives in the left margin beside the video track, so folding costs no height.
-    private Rect ToggleArea => new(0, TrackTop, Inset - 7, TrackHeight);
+    // The gutter beside the video track holds two small toggles: the view (top) and the audio (bottom).
+    private Rect ToggleArea => HasAudioArea ? new(0, TrackTop + TrackHeight / 2, Inset - 7, TrackHeight / 2) : Rect.Empty;
+    private Rect ViewToggleArea => new(0, TrackTop, Inset - 7, HasAudioArea ? TrackHeight / 2 : TrackHeight);
+    private bool viewHover;
+    private void DrawViewToggle(DrawingContext dc, double dpi)
+    {
+        var area = ViewToggleArea;
+        if (viewHover) dc.DrawRoundedRectangle(Track, null, area, 3, 3);
+        var icon = new FormattedText("\uE8AB", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyphs, 9, finished ? Accent : viewHover ? Ink : Muted, dpi);
+        dc.DrawText(icon, new Point(area.X + (area.Width - icon.Width) / 2, area.Y + (area.Height - icon.Height) / 2));
+    }
     private static readonly Typeface Glyphs = new("Segoe MDL2 Assets");
     // Just a chevron that turns down as the lanes open; a small red dot marks muted audio while folded.
     private void DrawLaneToggle(DrawingContext dc, double dpi)
@@ -558,8 +698,8 @@ internal sealed class TrimTimeline : FrameworkElement
         if (!HasAudioArea) return;
         var strong = lanesExpanded || toggleHover ? Ink : Muted;
         var chevron = new FormattedText("", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyphs, 9, strong, dpi);
-        var center = new Point((Inset - 7) / 2, TrackTop + TrackHeight / 2);
-        if (toggleHover) dc.DrawRoundedRectangle(Track, null, new Rect(0, TrackTop, Inset - 7, TrackHeight), 3, 3);
+        var center = new Point((Inset - 7) / 2, ToggleArea.Y + ToggleArea.Height / 2);
+        if (toggleHover) dc.DrawRoundedRectangle(Track, null, ToggleArea, 3, 3);
         dc.PushTransform(new RotateTransform(90 * LaneReveal, center.X, center.Y));
         dc.DrawText(chevron, new Point(center.X - chevron.Width / 2, center.Y - chevron.Height / 2));
         dc.Pop();
@@ -572,19 +712,24 @@ internal sealed class TrimTimeline : FrameworkElement
     // A cut-out (with its scissors tag when there's room), or the preview of a part being placed.
     private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false, bool zoom = false, bool focused = false, bool preview = false, CutRegion? cut = null)
     {
-        if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
-        var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
-        var area = new Rect(x, band.Top, w, band.Height);
-        if (preview && overlayMode != null && lane < 0) { dc.DrawRoundedRectangle(OverlayWash, new Pen(OverlayFill, 1), area, 3, 3); return; }
-        if (preview && (volumeMode || soundMode)) { dc.DrawRoundedRectangle(SoundFill, new Pen(SoundEdge, 1), area, 3, 3); return; }
-        dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(focused ? Ink : zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, focused ? 1.5 : 1), area, 3, 3);
-        if (cut != null && w >= 20)
+        if (lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0) || !Shows(start, end)) return;
+        var band = Band(lane); bool tagged = false;
+        foreach (var (x0, x1) in XSpans(start, end))
         {
+        double x = x0, w = Math.Max(2, x1 - x0);
+        var area = new Rect(x, band.Top, w, band.Height);
+        if (preview && overlayMode != null && lane < 0) { dc.DrawRoundedRectangle(OverlayWash, new Pen(OverlayFill, 1), area, 3, 3); continue; }
+        if (preview && (volumeMode || soundMode)) { dc.DrawRoundedRectangle(SoundFill, new Pen(SoundEdge, 1), area, 3, 3); continue; }
+        dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(focused ? Ink : zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, focused ? 1.5 : 1), area, 3, 3);
+        if (cut != null && w >= 20 && !tagged)
+        {
+            tagged = true;
             var icon = new FormattedText("", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, Ink, dpi);
             var tag = new Rect(x + 2, band.Top + 2, icon.Width + 8, 13);
             dc.DrawRoundedRectangle(CutEdge, null, tag, 3, 3);
             dc.DrawText(icon, new Point(tag.X + 4, tag.Y + (tag.Height - icon.Height) / 2));
             cutTags.Add((tag, cut));
+        }
         }
     }
     // Volume parts: green on their audio lane, with a tag showing the level (click it to change it).
@@ -594,10 +739,14 @@ internal sealed class TrimTimeline : FrameworkElement
         volumeTags.Clear();
         foreach (var v in volumeRegions)
         {
-            if (v.Lane >= lanes.Count || v.End < ViewStart || v.Start > ViewStart + Span) continue;
-            var band = Band(v.Lane); double x = XAt(v.Start), w = Math.Max(2, XAt(v.End) - x);
+            if (v.Lane >= lanes.Count || !Shows(v.Start, v.End)) continue;
+            var band = Band(v.Lane); double x = 0, w = 0;
             bool focused = IsFocused(v);
-            dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1) { DashStyle = focused ? null : DashStyles.Dash }, new Rect(x, band.Top, w, band.Height), 3, 3);
+            foreach (var (x0, x1) in XSpans(v.Start, v.End))
+            {
+                x = x0; w = Math.Max(2, x1 - x0);
+                dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1) { DashStyle = focused ? null : DashStyles.Dash }, new Rect(x, band.Top, w, band.Height), 3, 3);
+            }
             var label = Text($"{v.Gain * 100:0}%", 10, SoundInk, dpi);
             var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), band.Bottom - 15, label.Width + 8, 13);
             dc.DrawRoundedRectangle(SoundEdge, null, tag, 3, 3);
@@ -611,7 +760,7 @@ internal sealed class TrimTimeline : FrameworkElement
         for (int r = 0; r < SoundRows; r++) dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, SoundTop(r), width, SoundHeight), 4, 4);
         foreach (var s in sounds)
         {
-            if (s.End < ViewStart || s.Start > ViewStart + Span) continue;
+            if (!SoundShows(s)) continue;
             var rect = SoundRect(s); bool focused = IsFocused(s);
             dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1), rect, 4, 4);
             double pps = rect.Width / Math.Max(1e-6, s.Length);
@@ -626,10 +775,10 @@ internal sealed class TrimTimeline : FrameworkElement
     // Small handles on the ends of the selected part show they can be dragged.
     private void DrawFocusGrips(DrawingContext dc)
     {
-        if (FocusedSpan() is not { } span) return;
-        foreach (double t in new[] { span.Start, span.End })
-            if (t >= ViewStart && t <= ViewStart + Span)
-                dc.DrawRoundedRectangle(Ink, null, new Rect(XAt(t) - 2, span.Band.Top + 4, 4, Math.Max(6, span.Band.Height - 8)), 2, 2);
+        if (FocusedSpan() is not { } span || FocusedEdges() is not { } edges) return;
+        foreach (double v in new[] { edges.A, edges.B })
+            if (InView(v))
+                dc.DrawRoundedRectangle(Ink, null, new Rect(VX(v) - 2, span.Band.Top + 4, 4, Math.Max(6, span.Band.Height - 8)), 2, 2);
     }
     // Zoom regions: teal boxes with a magnifier tag (top-right) that selects the region for editing.
     private void DrawZoomRegions(DrawingContext dc, double dpi)
@@ -638,9 +787,13 @@ internal sealed class TrimTimeline : FrameworkElement
         for (int i = 0; i < zoomRegions.Count; i++)
         {
             var r = zoomRegions[i];
-            if (r.End < ViewStart || r.Start > ViewStart + Span) { zoomTags.Add(Rect.Empty); continue; }
-            double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
-            dc.DrawRoundedRectangle(ZoomFill, new Pen(i == selectedZoom || IsFocused(r) ? Ink : ZoomEdge, i == selectedZoom || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            if (!Shows(r.Start, r.End)) { zoomTags.Add(Rect.Empty); continue; }
+            double x = 0, w = 0;
+            foreach (var (x0, x1) in XSpans(r.Start, r.End))
+            {
+                x = x0; w = Math.Max(2, x1 - x0);
+                dc.DrawRoundedRectangle(ZoomFill, new Pen(i == selectedZoom || IsFocused(r) ? Ink : ZoomEdge, i == selectedZoom || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            }
             var icon = new FormattedText("\uE71E", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, ZoomInk, dpi);
             var label = Text(r.MaxZoom.ToString("0.#", CultureInfo.InvariantCulture) + "×", 10, ZoomInk, dpi);
             double width = icon.Width + label.Width + 11;
@@ -671,8 +824,7 @@ internal sealed class TrimTimeline : FrameworkElement
         if (end > start) Wash(start, end);
         void Wash(double a, double b)
         {
-            if (b < ViewStart || a > ViewStart + Span) return;
-            double x = XAt(a); dc.DrawRoundedRectangle(OverlayWash, null, new Rect(x, TrackTop, Math.Max(2, XAt(b) - x), TrackHeight), 3, 3);
+            foreach (var (x0, x1) in XSpans(a, b)) dc.DrawRoundedRectangle(OverlayWash, null, new Rect(x0, TrackTop, Math.Max(2, x1 - x0), TrackHeight), 3, 3);
         }
     }
     private void DrawOverlayRows(DrawingContext dc, double dpi)
@@ -692,11 +844,12 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.PushClip(new RectangleGeometry(new Rect(Inset, 0, width, TrackTop)));
             foreach (var o in OverlayOrder.BackToFront(overlays))
             {
-                if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
-                var rect = OverlayRect(o);
                 var (fill, dim) = o.Kind switch { OverlayKind.Image or OverlayKind.Video => (MediaFill, MediaDim), OverlayKind.Shape => (ShapeFillBrush, ShapeDim), _ => (OverlayFill, OverlayDim) };
-                dc.DrawRoundedRectangle(dim, null, new Rect(rect.X, rect.Y + 3, rect.Width, rect.Height - 6), 2, 2);
-                dc.DrawRoundedRectangle(fill, null, new Rect(rect.X, rect.Y + 1, Math.Min(3, rect.Width), rect.Height - 2), 1, 1);
+                foreach (var rect in OverlayRects(o))
+                {
+                    dc.DrawRoundedRectangle(dim, null, new Rect(rect.X, rect.Y + 3, rect.Width, rect.Height - 6), 2, 2);
+                    dc.DrawRoundedRectangle(fill, null, new Rect(rect.X, rect.Y + 1, Math.Min(3, rect.Width), rect.Height - 2), 1, 1);
+                }
             }
             dc.Pop();
             return;
@@ -706,8 +859,9 @@ internal sealed class TrimTimeline : FrameworkElement
         for (int i = 0; i < overlays.Count; i++)
         {
             var o = overlays[i];
-            if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
-            var rect = OverlayRect(o); bool selected = i == selectedOverlay || IsFocused(o);
+            bool selected = i == selectedOverlay || IsFocused(o);
+            foreach (var rect in OverlayRects(o))
+            {
             // Colour by kind: text amber, pictures and videos blue, shapes pink.
             var (fill, dim) = o.Kind switch { OverlayKind.Image or OverlayKind.Video => (MediaFill, MediaDim), OverlayKind.Shape => (ShapeFillBrush, ShapeDim), _ => (OverlayFill, OverlayDim) };
             dc.DrawRoundedRectangle(selected ? fill : dim, selected ? new Pen(Ink, 1.2) : null, rect, 3, 3);
@@ -726,6 +880,7 @@ internal sealed class TrimTimeline : FrameworkElement
             var label = Text(o.Label, 9, OverlayInk, dpi);
             label.MaxTextWidth = Math.Max(1, rect.Width - icon.Width - 11); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
             if (rect.Width > icon.Width + 20) dc.DrawText(label, new Point(rect.X + icon.Width + 7, rect.Y + (RowHeight - label.Height) / 2));
+            }
         }
         dc.Pop();
     }
@@ -737,9 +892,13 @@ internal sealed class TrimTimeline : FrameworkElement
         for (int i = 0; i < slowRegions.Count; i++)
         {
             var r = slowRegions[i];
-            if (r.End < ViewStart || r.Start > ViewStart + Span) { slowTags.Add(Rect.Empty); continue; }
-            double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
-            dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow || IsFocused(r) ? Ink : SlowEdge, i == selectedSlow || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            if (!Shows(r.Start, r.End)) { slowTags.Add(Rect.Empty); continue; }
+            double x = 0, w = 0;
+            foreach (var (x0, x1) in XSpans(r.Start, r.End))
+            {
+                x = x0; w = Math.Max(2, x1 - x0);
+                dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow || IsFocused(r) ? Ink : SlowEdge, i == selectedSlow || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            }
             var label = Text(r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
             var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), TrackTop + TrackHeight - 15, label.Width + 8, 13);
             dc.DrawRoundedRectangle(SlowEdge, null, tag, 3, 3);
@@ -748,22 +907,45 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
-    private int FreezeAt(Point p)
+    private int FreezeAt(Point p) => FreezeHit(p).Index;
+    // A freeze under the pointer, and whether it's the end of its hold (finished view only).
+    private (int Index, bool End) FreezeHit(Point p)
     {
+        bool onTrack = p.Y >= TrackTop - 3 && p.Y <= TrackTop + TrackHeight + 3;
         for (int i = freezes.Count - 1; i >= 0; i--)
         {
-            if (i < freezeTags.Count && freezeTags[i].Contains(p)) return i;
-            if (p.Y >= TrackTop - 3 && p.Y <= TrackTop + TrackHeight + 3 && Math.Abs(p.X - XAt(freezes[i].At)) <= 4 && freezes[i].At >= ViewStart && freezes[i].At <= ViewStart + Span) return i;
+            if (i < freezeTags.Count && freezeTags[i].Contains(p)) return (i, false);
+            if (!onTrack) continue;
+            if (Mapped)
+            {
+                // Only freezes in what's kept are in the finished video.
+                if (sequence!.Hold(freezes[i].At) is not { } hold) continue;
+                if (InView(hold.To) && Math.Abs(p.X - VX(hold.To)) <= 4) return (i, true);
+                if (InView(hold.From) && Math.Abs(p.X - VX(hold.From)) <= 4) return (i, false);
+            }
+            else if (Shows(freezes[i].At, freezes[i].At) && Math.Abs(p.X - XAt(freezes[i].At)) <= 4) return (i, false);
         }
-        return -1;
+        return (-1, false);
     }
+    private static readonly Brush FreezeWash = Brush("#337DD3FC");
     private void DrawFreezes(DrawingContext dc, double dpi)
     {
         freezeTags.Clear();
         foreach (var f in freezes)
         {
-            if (f.At < ViewStart || f.At > ViewStart + Span) { freezeTags.Add(Rect.Empty); continue; }
-            double x = XAt(f.At); bool focused = IsFocused(f);
+            bool focused = IsFocused(f);
+            if (Mapped)
+            {
+                // In the finished view the hold is a stretch of its own, with a slit at each end (and a
+                // freeze outside what's kept isn't there at all).
+                if (sequence!.Hold(f.At) is not { } hold || hold.To < ViewStart || hold.From > ViewStart + Span) { freezeTags.Add(Rect.Empty); continue; }
+                double x0 = VX(hold.From), x1 = VX(hold.To);
+                dc.DrawRoundedRectangle(FreezeWash, focused ? new Pen(Ink, 1.2) : null, new Rect(x0, TrackTop, Math.Max(2, x1 - x0), TrackHeight), 3, 3);
+                if (InView(hold.To)) dc.DrawRoundedRectangle(FreezeInk, null, new Rect(x1 - 1.5, TrackTop - 3, 3, TrackHeight + 6), 1.5, 1.5);
+                if (!InView(hold.From)) { freezeTags.Add(Rect.Empty); continue; }
+            }
+            else if (!Shows(f.At, f.At)) { freezeTags.Add(Rect.Empty); continue; }
+            double x = XAt(f.At);
             dc.DrawRoundedRectangle(FreezeInk, focused ? new Pen(Ink, 1) : null, new Rect(x - 1.5, TrackTop - 3, 3, TrackHeight + 6), 1.5, 1.5);
             var label = Text("❄ " + f.Seconds.ToString("0.#", CultureInfo.InvariantCulture) + " s", 10, FreezeText, dpi);
             double w = label.Width + 8, left = x + 3 + w > Inset + ActualWidth - 2 * Inset ? x - 3 - w : x + 3;
@@ -778,7 +960,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), ZoomCutterPen = new(Brush("#5EEAD4"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
     {
-        if (t < ViewStart || t > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
+        if (!Shows(t, t) || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(t);
         // Text and image markers reach up through the layer rows too.
         double top = overlayMode != null && lane < 0 ? 4 : band.Top - 3;
@@ -796,6 +978,7 @@ internal sealed class TrimTimeline : FrameworkElement
         else
         {
             pendingCut = null;
+            t = SectionTime(t, p.X, from.Time);
             double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
             if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9)
             {
@@ -832,8 +1015,10 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (pickTime != null) { var pick = pickTime; PickTime = null; pick(LockedTime(point.X)); e.Handled = true; return; }
+        if (ViewToggleArea.Contains(point)) { ViewToggled?.Invoke(); e.Handled = true; return; }
         if (HasAudioArea && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
-        if (!Placing && pendingCut == null && FocusedEdgeAt(point) is bool atStart && FocusedSpan() is { } span)
+        // (In the finished view a sound's ends trim through its own drag, which works in real seconds.)
+        if (!Placing && pendingCut == null && !(Mapped && focusedPart is SoundItem) && FocusedEdgeAt(point) is bool atStart && FocusedSpan() is { } span)
         {
             drag = Drag.PartEdge; resizing = focusedPart; resizingStart = atStart; resizeStart = span.Start; resizeEnd = span.End;
             pressPoint = point; overlayDragMoved = false; CaptureMouse(); e.Handled = true; return;
@@ -865,7 +1050,7 @@ internal sealed class TrimTimeline : FrameworkElement
             CaptureMouse(); e.Handled = true; return;
         }
         if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
-        if (pendingCut == null && !Placing && FreezeAt(point) is int freeze and >= 0) { drag = Drag.FreezeMove; dragFreeze = freeze; freezeDragMoved = false; pressPoint = point; CaptureMouse(); e.Handled = true; return; }
+        if (pendingCut == null && !Placing && FreezeHit(point) is { Index: >= 0 } freezeHit) { drag = freezeHit.End ? Drag.FreezeEnd : Drag.FreezeMove; dragFreeze = freezeHit.Index; freezeDragMoved = false; pressPoint = point; CaptureMouse(); e.Handled = true; return; }
         if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
         if (Placing && (pendingCut != null || BandAt(point) > -2))
         {
@@ -890,10 +1075,10 @@ internal sealed class TrimTimeline : FrameworkElement
         PartClicked?.Invoke(PartAt(point));
         BeginDrag(point); CaptureMouse(); DragStarted?.Invoke(); MoveTo(point.X); e.Handled=true;
     }
-    private void PanToPointer(double x) => PanTo((x - Inset) / Math.Max(1, ActualWidth - 2 * Inset) * Duration - Span / 2);
+    private void PanToPointer(double x) => PanTo((x - Inset) / Math.Max(1, ActualWidth - 2 * Inset) * Total - Span / 2);
     internal void BeginDrag(Point point)
     {
-        double left = Start<ViewStart || Start>ViewStart+Span ? double.MaxValue : Math.Abs(point.X-XAt(Start)), right = End<ViewStart || End>ViewStart+Span ? double.MaxValue : Math.Abs(point.X-XAt(End));
+        double left = Mapped || Start<ViewStart || Start>ViewStart+Span ? double.MaxValue : Math.Abs(point.X-XAt(Start)), right = Mapped || End<ViewStart || End>ViewStart+Span ? double.MaxValue : Math.Abs(point.X-XAt(End));
         bool handles = point.Y >= TrackTop-7 && point.Y <= TrackTop+TrackHeight+7;
         drag = handles && Math.Min(left,right)<=14 ? (left<=right ? Drag.Start : Drag.End) : Drag.Playhead;
         grabOffset = drag == Drag.Start ? point.X-XAt(Start) : drag == Drag.End ? point.X-XAt(End) : 0;
@@ -902,6 +1087,14 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseMove(e);
         var p=e.GetPosition(this);
+        if (IsMouseCaptured && drag == Drag.FreezeEnd && dragFreeze >= 0 && dragFreeze < freezes.Count && sequence?.Hold(freezes[dragFreeze].At) is { } holding)
+        {
+            // Dragging the end of a freeze's hold makes it hold longer or shorter (tenths of a second).
+            if (!freezeDragMoved && Math.Abs(p.X - pressPoint.X) <= 3) return;
+            if (!freezeDragMoved) { freezeDragMoved = true; FreezeEditStarted?.Invoke(); }
+            double seconds = Math.Clamp(Math.Round((VT(p.X) - holding.From) * 10) / 10, FreezeFrame.MinSeconds, FreezeFrame.MaxSeconds);
+            FreezeHoldChanged?.Invoke(dragFreeze, seconds); return;
+        }
         if (IsMouseCaptured && drag == Drag.FreezeMove && dragFreeze >= 0 && dragFreeze < freezes.Count)
         {
             if (!freezeDragMoved && Math.Abs(p.X - pressPoint.X) <= 3) return;
@@ -916,7 +1109,31 @@ internal sealed class TrimTimeline : FrameworkElement
             var others = sounds.Where(s => s != current).ToList();
             bool Free(int row, double a, double b) => !others.Any(s => s.Row == row && s.End > a + 1e-9 && s.Start < b - 1e-9);
             SoundItem next;
-            if (drag == Drag.SoundMove)
+            if (Mapped)
+            {
+                // Finished view: the sound moves or trims in finished time and re-anchors to the footage
+                // (or freeze hold) now under its start.
+                var (from, to) = SoundView(original);
+                if (drag == Drag.SoundMove)
+                {
+                    var (src, hold) = FromView(Math.Clamp(from + shift, 0, Math.Max(0, Total - original.Length)));
+                    if (hold <= 0) src = Snap(src);
+                    int row = Math.Clamp((int)Math.Floor((p.Y - SoundTop(0)) / (SoundHeight + LaneGap)), 0, SoundRows);
+                    // Rows are kept free of overlaps where the sounds play (in finished time).
+                    double a = ToView(src) + hold, b = a + original.Length;
+                    bool FreeView(int r) => !others.Any(s => s.Row == r && SoundView(s).To > a + 1e-9 && SoundView(s).From < b - 1e-9);
+                    if (!FreeView(row)) row = FreeView(original.Row) ? original.Row : Enumerable.Range(0, sounds.Count + 1).First(FreeView);
+                    next = original with { Start = src, End = src + original.Length, Hold = hold, Row = row };
+                }
+                else if (drag == Drag.SoundStart)
+                {
+                    double v = Math.Clamp(from + shift, 0, to - frame), trim = v - from;
+                    var (src, hold) = FromView(v);
+                    next = original with { Start = src, End = src + original.Length - trim, Hold = hold, Offset = Math.Max(0, original.Offset + trim * original.Speed) };
+                }
+                else next = original with { End = original.Start + (Math.Clamp(to + shift, from + frame, Total) - from) };
+            }
+            else if (drag == Drag.SoundMove)
             {
                 double length = original.Length, start = Math.Clamp(original.Start + shift, 0, Math.Max(0, Duration - length));
                 double a = LockedTime(XAt(start)), b = LockedTime(XAt(start + length)) - length;
@@ -949,7 +1166,7 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             if (!overlayDragMoved && (p - pressPoint).Length <= 2) return;
             if (!overlayDragMoved) { overlayDragMoved = true; PartResizeStarted?.Invoke(resizing); }
-            double t = LockedTime(p.X, resizeStart, resizeEnd), frame = 1 / Math.Max(1, FrameRate);
+            double t = SectionTime(LockedTime(p.X, resizeStart, resizeEnd), p.X, resizingStart ? resizeEnd : resizeStart), frame = 1 / Math.Max(1, FrameRate);
             if (resizingStart) PartResized?.Invoke(resizing, Math.Clamp(t, 0, resizeEnd - frame), resizeEnd);
             else PartResized?.Invoke(resizing, resizeStart, Math.Clamp(t, resizeStart + frame, Duration));
             return;
@@ -976,7 +1193,9 @@ internal sealed class TrimTimeline : FrameworkElement
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
         if (pickTime != null) { Cursor = Cursors.Cross; ToolTip = "Click where it should go · Esc cancels"; return; }
-        if (!Placing && pendingCut == null && FocusedEdgeAt(p) is bool edge) { Cursor = Cursors.SizeWE; ToolTip = edge ? "Drag to change when it starts" : "Drag to change when it ends"; return; }
+        if (ViewToggleArea.Contains(p) != viewHover) { viewHover = !viewHover; InvalidateVisual(); }
+        if (viewHover) { Cursor = Cursors.Hand; ToolTip = finished ? "Showing the finished video · click for the whole recording" : "Showing the whole recording · click for the finished video"; return; }
+        if (!Placing && pendingCut == null && !(Mapped && focusedPart is SoundItem) && FocusedEdgeAt(p) is bool edge) { Cursor = Cursors.SizeWE; ToolTip = edge ? "Drag to change when it starts" : "Drag to change when it ends"; return; }
         if (pendingCut == null && cutTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this cut-out's times, or restore it"; return; }
         if (pendingCut == null && lanesExpanded && volumeTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this part's volume · also selects it, so you can drag its ends"; return; }
         if (pendingCut == null && SoundAt(p) is { } hoverSound)
@@ -1010,14 +1229,14 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         int lane = LaneAt(p);
         Cursor = lane >= 0 && lanes[lane].Toggleable ? Cursors.Hand
-            : p.Y>=TrackTop-7 && p.Y<=TrackTop+TrackHeight+7 && Math.Min(Math.Abs(p.X-XAt(Start)),Math.Abs(p.X-XAt(End)))<=14 ? Cursors.SizeWE : Cursors.Hand;
+            : !Mapped && p.Y>=TrackTop-7 && p.Y<=TrackTop+TrackHeight+7 && Math.Min(Math.Abs(p.X-XAt(Start)),Math.Abs(p.X-XAt(End)))<=14 ? Cursors.SizeWE : Cursors.Hand;
         ToolTip = lane >= 0 ? (lanes[lane].Toggleable ? $"Click to {(lanes[lane].Muted ? "include" : "mute")} {lanes[lane].Name.ToLowerInvariant()} audio in exports" : "Record with separate tracks to adjust desktop and microphone audio separately")
             : "Click to seek; drag the edges to trim. Wheel zooms · Shift+wheel pans · Ctrl+wheel changes speed";
     }
     protected override void OnMouseLeave(MouseEventArgs e)
     {
         base.OnMouseLeave(e);
-        if (toggleHover || (cutHover != null && !IsMouseCaptured)) { toggleHover = false; if (!IsMouseCaptured) cutHover = null; InvalidateVisual(); }
+        if (toggleHover || viewHover || (cutHover != null && !IsMouseCaptured)) { toggleHover = viewHover = false; if (!IsMouseCaptured) cutHover = null; InvalidateVisual(); }
     }
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
@@ -1051,7 +1270,7 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
-        if (IsMouseCaptured && drag == Drag.FreezeMove)
+        if (IsMouseCaptured && drag is Drag.FreezeMove or Drag.FreezeEnd)
         {
             int picked = dragFreeze; bool moved = freezeDragMoved;
             ReleaseMouseCapture(); e.Handled = true;
@@ -1082,7 +1301,7 @@ internal sealed class TrimTimeline : FrameworkElement
     internal void EndDrag()
     {
         if (drag == Drag.None) return;
-        if (drag == Drag.FreezeMove)
+        if (drag is Drag.FreezeMove or Drag.FreezeEnd)
         {
             drag = Drag.None; dragFreeze = -1;
             if (freezeDragMoved) { freezeDragMoved = false; FreezeEditFinished?.Invoke(); }
@@ -1120,6 +1339,14 @@ internal sealed class TrimTimeline : FrameworkElement
             foreach (double edge in PartEdges(o).Prepend(Position)) if (Math.Abs(XAt(edge) - XAt(t)) <= PlayheadLock) return edge;
             locked = false; return Snap(t);
         }
+        // An edge moved by the drag. In the finished view the move is in finished time, then back to the
+        // footage under it (an edge stays in the section its other edge is in).
+        double Shifted(double t, bool end, double anchor)
+        {
+            if (!Mapped) return t + shift;
+            double v = Math.Clamp(EdgeView(t, end) + shift, 0, Total);
+            return SectionTime(FromView(v).Source, VX(v), anchor);
+        }
         // Work from the items as they were when the drag began, so layer swaps don't pile up.
         var list = dragStartList.Length == overlays.Count ? dragStartList.ToArray() : overlays.ToArray();
         var others = list.Where((_, i) => i != dragOverlay).ToList();
@@ -1127,7 +1354,7 @@ internal sealed class TrimTimeline : FrameworkElement
         var next = o;
         if (drag == Drag.OverlayMove)
         {
-            double length = o.Length, start = Math.Clamp(o.Start + shift, 0, Math.Max(0, Duration - length));
+            double length = o.Length, start = Math.Clamp(Mapped ? FromView(Math.Clamp(ToView(o.Start) + shift, 0, Total)).Source : o.Start + shift, 0, Math.Max(0, Duration - length));
             // Whichever edge is closer to something to lock onto wins.
             double a = SnapEdge(start, out bool lockA), b = SnapEdge(start + length, out bool lockB) - length;
             start = Math.Clamp(lockA || !lockB ? a : b, 0, Math.Max(0, Duration - length));
@@ -1160,12 +1387,12 @@ internal sealed class TrimTimeline : FrameworkElement
             if (drag == Drag.OverlayStart)
             {
                 double limit = neighbours.Where(x => x.End <= o.Start + 1e-9).Select(x => x.End).DefaultIfEmpty(0).Max();
-                next = o with { Start = Math.Clamp(SnapEdge(o.Start + shift, out _), limit, o.End - frame) };
+                next = o with { Start = Math.Clamp(SnapEdge(Shifted(o.Start, false, o.End), out _), limit, o.End - frame) };
             }
             else
             {
                 double limit = neighbours.Where(x => x.Start >= o.End - 1e-9).Select(x => x.Start).DefaultIfEmpty(Duration).Min();
-                next = o with { End = Math.Clamp(SnapEdge(o.End + shift, out _), o.Start + frame, limit) };
+                next = o with { End = Math.Clamp(SnapEdge(Shifted(o.End, true, o.Start), out _), o.Start + frame, limit) };
             }
         }
         list[dragOverlay] = next;
@@ -1186,12 +1413,19 @@ internal sealed class TrimTimeline : FrameworkElement
             while (Math.Abs(speedWheel) >= 120) { int step = Math.Sign(speedWheel); speedWheel -= step * 120; SpeedStepRequested?.Invoke(step); }
         }
         else if (mods == ModifierKeys.Shift) PanTo(ViewStart - e.Delta / 120.0 * Span * .15);
-        else Zoom(Math.Pow(1.5, e.Delta / 120.0), TimeAt(e.GetPosition(this).X));
+        else ZoomView(Math.Pow(1.5, e.Delta / 120.0), VT(e.GetPosition(this).X));
         e.Handled=true;
     }
     internal void MoveTo(double x)
     {
-        double t = Snap(TimeAt(x-grabOffset));
+        double t;
+        if (Mapped)
+        {
+            // Finished view: inside a freeze's hold the playhead parks on the frozen frame, that far in.
+            var (source, hold) = FromView(VT(x));
+            holdOffset = hold; t = hold > 0 ? source : Snap(source);
+        }
+        else { holdOffset = 0; t = Snap(TimeAt(x-grabOffset)); }
         if (drag == Drag.Start) { Start=Math.Min(t,Math.Max(0,End-.1)); RangeChanged?.Invoke(Start,End); t=Start; }
         else if (drag == Drag.End) { End=Math.Max(t,Math.Min(Duration,Start+.1)); RangeChanged?.Invoke(Start,End); t=End; }
         Position=t; InvalidateVisual(); SeekRequested?.Invoke(t);

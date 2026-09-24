@@ -87,7 +87,7 @@ public partial class TrimWindow
                 Snapshot(); Timeline.VolumeRegions = Timeline.VolumeRegions.Append(volume with { Start = start, End = end }).ToArray();
                 UpdateExportHint(); ProjectChanged(); StatusLabel.Text = "Pasted the volume change."; break;
             case SoundItem sound:
-                Snapshot(); SetSounds(Timeline.Sounds.Append(sound with { Start = start, End = end, Row = FreeSoundRow(Timeline.Sounds, start, end) }).ToArray());
+                Snapshot(); SetSounds(Timeline.Sounds.Append(sound with { Start = start, End = start + sound.Length, Hold = Timeline.Finished ? Timeline.HoldOffset : 0, Row = FreeSoundRow(Timeline.Sounds, start, start + sound.Length) }).ToArray());
                 UpdateExportHint(); ProjectChanged(); StatusLabel.Text = "Pasted the sound."; break;
             case OverlayItem item:
                 AddOverlay(item with { Start = start, End = end, Layer = 0 });

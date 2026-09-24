@@ -17,6 +17,15 @@ public partial class App : Application
         base.OnStartup(e);
         var data = Array.IndexOf(e.Args, "--data-dir");
         if (data >= 0 && data + 1 < e.Args.Length) Storage.Root = Path.GetFullPath(e.Args[data + 1]);
+        // Just the editor (optionally with a video), alongside a running recorder: for trying a build.
+        var editor = Array.IndexOf(e.Args, "--editor");
+        if (editor >= 0)
+        {
+            string? clip = editor + 1 < e.Args.Length && !e.Args[editor + 1].StartsWith("--") ? e.Args[editor + 1] : null;
+            var trim = new TrimWindow(clip); MainWindow = trim;
+            trim.Closed += (_, _) => Shutdown(0);
+            trim.Show(); return;
+        }
         if (e.Args.Contains("--clock-test") || e.Args.Contains("--soak-test") || e.Args.Contains("--sync-media-test") || e.Args.Contains("--backlog-test"))
         {
             try { if(e.Args.Contains("--clock-test")) ReliabilityDiagnostics.Clocks(); else if(e.Args.Contains("--sync-media-test")) await ReliabilityDiagnostics.SyncMediaAsync(); else if(e.Args.Contains("--backlog-test")) await ReliabilityDiagnostics.BacklogRecoveryAsync(); else await ReliabilityDiagnostics.SoakAsync(); Shutdown(0); }
@@ -66,6 +75,19 @@ public partial class App : Application
         if (e.Args.Contains("--media-parts-test") || e.Args.Contains("--media-parts-live-test"))
         {
             try { await MediaPartsDiagnostics.RunAsync(e.Args.Contains("--media-parts-live-test")); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--lag-compare"))
+        {
+            int at = Array.IndexOf(e.Args, "--lag-compare");
+            try { await LagCompare.RunAsync(at + 1 < e.Args.Length && !e.Args[at + 1].StartsWith("--") ? e.Args[at + 1] : null, at + 2 < e.Args.Length && e.Args[at + 2].EndsWith(".flashtrim") ? e.Args[at + 2] : null); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--sequence-test"))
+        {
+            try { await SequenceDiagnostics.RunAsync(); Shutdown(0); }
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }

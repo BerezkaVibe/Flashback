@@ -45,7 +45,7 @@ public partial class TrimWindow : Window
         Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
         Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
-        Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging);
+        Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging, Timeline.HoldOffset);
         Timeline.SpeedStepRequested += StepPreviewRate;
         Timeline.SlowAdded += SlowAdded; Timeline.SlowTagClicked += SlowTagClicked; Timeline.SlowRemoved += SlowRemoved;
         LoadSlowChoices();
@@ -53,11 +53,11 @@ public partial class TrimWindow : Window
         InitOverlays();
         InitParts();
         InitTiming(); InitFreezes(); InitSectionOrder();
-        InitAudioParts();
+        InitAudioParts(); InitSequence();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
-        Timeline.DragCompleted += () => { if (resumeAfterDrag) { resumeAfterDrag = false; StartPlayback(playhead); } else FlushSeek(); };
+        Timeline.DragCompleted += () => { if (resumeAfterDrag) { resumeAfterDrag = false; Resume(); } else FlushSeek(); };
         EndBox.Text = KeepSection.TimeText(media.Duration);
         SectionsList.ItemsSource = sections;
         sections.CollectionChanged += (_, _) => UpdateSummary(); UpdateSummary(); SetPlayhead(0);
@@ -167,8 +167,8 @@ public partial class TrimWindow : Window
     }
     private void SetPlayhead(double time)
     {
-        playhead = Math.Clamp(time, 0, media.Duration); Timeline.Position = playhead; if (!Timeline.IsDragging) Timeline.Reveal(playhead); Timeline.InvalidateVisual();
-        PositionLabel.Text = $"{KeepSection.TimeText(playhead)} / {KeepSection.TimeText(media.Duration)}";
+        playhead = Math.Clamp(time, 0, media.Duration); Timeline.HoldOffset = HoldAt(playhead); Timeline.Position = playhead; if (!Timeline.IsDragging) Timeline.Reveal(playhead); Timeline.InvalidateVisual();
+        PositionLabel.Text = PositionText();
         if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
         if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
         // A freeze frame holds everything on the video, pictures and videos included.
@@ -178,10 +178,12 @@ public partial class TrimWindow : Window
         if (!playing && OverlayPanel.Visibility == Visibility.Visible && SelectedOverlayItem is { Keys.Count: > 1 }) LoadOverlayUi();
         if (Timeline.Sounds.Count > 0 || soundsPlaying.Count > 0) SyncSounds();
     }
-    internal void SeekTo(double time, bool defer = false)
+    // hold: how far into a freeze's hold at that moment (finished view), or 0 for its first frame.
+    internal void SeekTo(double time, bool defer = false, double hold = 0)
     {
         // Pausing is only needed when something plays: a drag sends a seek for every mouse move.
         if (playing || freezing != null) Pause();
+        parkedHold = hold; freezeDone = null;
         SetPlayhead(time); pendingSeek = true;
         if (!defer) FlushSeek();
     }
@@ -201,23 +203,25 @@ public partial class TrimWindow : Window
     private void UpdateSummary()
     {
         if (ExportButton == null || media == null) return;
-        Timeline.Sections = sections; Timeline.InvalidateVisual();
+        Timeline.Sections = sections; Timeline.ExportSpeed = ExportSpeedValue; Timeline.Remap(); Timeline.InvalidateVisual();
+        if (Timeline.Finished) PositionLabel.Text = PositionText();
         SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed; UpdateRangeRow();
         TotalLabel.Text = sections.Count > 0 ? $"{sections.Count} sections · {sections.Sum(s => s.Duration):0.##} s" : $"Selected range · {Math.Max(0,Timeline.End-Timeline.Start):0.##} s";
-        if (Timeline.SlowRegions.Count > 0 || ExportSpeedValue != 1) TotalLabel.Text += $" · {OutputLength(SelectedRanges()):0.##} s after speed changes";
+        if (Timeline.SlowRegions.Count > 0 || Timeline.Freezes.Count > 0 || ExportSpeedValue != 1) TotalLabel.Text += $" · {OutputLength(SelectedRanges()):0.##} s finished";
         ProjectChanged(); UpdateExportHint();
         ExportButton.IsEnabled = source.Length>0 && exportCancellation == null && (sections.Count > 0 || Timeline.End-Timeline.Start >= .1);
     }
     // Scrubbing renders frames for paused seeks, but left on during playback it lets
     // Media Foundation's audio run ahead of video after a seek.
-    private void Pause() { Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
+    private void Pause() { if (freezing is { } held) parkedHold = HoldAt(held.Part.At); Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
     private void Player_Opened(object sender, RoutedEventArgs e) { Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
     private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
     { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
-    private void StartPlayback(double start, int section = -1)
+    // hold: start that far into the hold of a freeze at start (finished view).
+    private void StartPlayback(double start, int section = -1, double hold = 0)
     {
         // Seek while paused, then play, so audio and video restart from the same point.
         Player.Pause();
@@ -225,13 +229,22 @@ public partial class TrimWindow : Window
         pendingSeek=true; FlushSeek();
         Player.ScrubbingEnabled=false;
         Player.Play(); playing=true; PlayToggle.Content="\uE769"; ApplyZoomPreview();
-        OverlayView.Playing=true; SyncSounds();
+        OverlayView.Playing=true;
+        parkedHold=0;
+        if (hold > 0 && Timeline.Freezes.FirstOrDefault(f => Math.Abs(f.At - start) < 1e-9) is { } freeze)
+        {
+            // Carry on holding from partway in.
+            Player.Pause(); freezeDone=null;
+            freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp() - (long)(hold / PreviewRate * System.Diagnostics.Stopwatch.Frequency));
+            SetPlayhead(start);
+        }
+        SyncSounds();
     }
     private void Play_Click(object sender, RoutedEventArgs e)
     {
         if(exportCancellation!=null) return;
         if (playing) Pause();
-        else StartPlayback(playhead >= media.Duration-.01 ? 0 : playhead);
+        else Resume();
     }
     private void Preview_Click(object sender, RoutedEventArgs e)
     {
@@ -347,7 +360,7 @@ public partial class TrimWindow : Window
         if (action==null)
         {
             if (repeated) return key is not (Key.Left or Key.Right or Key.Up or Key.Down);
-            if (source.Length>0 && timelineFocused && modifiers==ModifierKeys.None && key is Key.Home or Key.End) { SeekTo(key==Key.Home ? 0 : media.Duration); return true; }
+            if (source.Length>0 && timelineFocused && modifiers==ModifierKeys.None && key is Key.Home or Key.End) { SeekView(key==Key.Home ? 0 : Timeline.Finished ? Timeline.Map.Total : media.Duration); return true; }
             return false;
         }
         if (source.Length==0) return false;

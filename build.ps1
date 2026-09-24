@@ -1,4 +1,4 @@
-param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.8.3')
+param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.0')
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $env:DOTNET_CLI_HOME = Join-Path $projectRoot '.dotnet-home'

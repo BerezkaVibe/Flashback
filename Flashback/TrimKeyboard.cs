@@ -31,8 +31,10 @@ public partial class TrimWindow
     }
     private void StepFrame(int direction)
     {
-        double frame=direction>0 ? Math.Floor(playhead*media.FrameRate+1e-6)+1 : Math.Ceiling(playhead*media.FrameRate-1e-6)-1;
-        SeekTo(frame/media.FrameRate);
+        // In the finished view frames are counted along the finished video, so a hold steps frame by frame too.
+        double at=Timeline.Finished ? Timeline.PositionView : playhead;
+        double frame=direction>0 ? Math.Floor(at*media.FrameRate+1e-6)+1 : Math.Ceiling(at*media.FrameRate-1e-6)-1;
+        SeekView(frame/media.FrameRate);
     }
     private void NavigateSection(int direction, bool edge=false)
     {
@@ -114,14 +116,14 @@ public partial class TrimWindow
                 Player.Volume=Math.Clamp(Player.Volume+(action==TrimAction.VolumeUp ? .1 : -.1),0,1); SetPreviewRate(PreviewRate); break;
             case TrimAction.PreviousFrame or TrimAction.FrameBack: StepFrame(-1); break;
             case TrimAction.NextFrame or TrimAction.FrameForward: StepFrame(1); break;
-            case TrimAction.HalfSecondBack: SeekTo(playhead-.5); break;
-            case TrimAction.HalfSecondForward: SeekTo(playhead+.5); break;
-            case TrimAction.SecondBack: SeekTo(playhead-1); break;
-            case TrimAction.SecondForward: SeekTo(playhead+1); break;
-            case TrimAction.TenSecondsBack: SeekTo(playhead-10); break;
-            case TrimAction.TenSecondsForward: SeekTo(playhead+10); break;
-            case TrimAction.VideoStart: SeekTo(0); break;
-            case TrimAction.VideoEnd: SeekTo(media.Duration); break;
+            case TrimAction.HalfSecondBack: StepView(-.5); break;
+            case TrimAction.HalfSecondForward: StepView(.5); break;
+            case TrimAction.SecondBack: StepView(-1); break;
+            case TrimAction.SecondForward: StepView(1); break;
+            case TrimAction.TenSecondsBack: StepView(-10); break;
+            case TrimAction.TenSecondsForward: StepView(10); break;
+            case TrimAction.VideoStart: SeekView(0); break;
+            case TrimAction.VideoEnd: SeekView(Timeline.Finished ? Timeline.Map.Total : media.Duration); break;
             case TrimAction.MarkedStart: SeekTo(Timeline.Start); break;
             case TrimAction.MarkedEnd: SeekTo(Timeline.End); break;
             case TrimAction.GoToTime: Timecode_Click(this,none); break;

@@ -8,7 +8,8 @@ using System.Windows.Controls.Primitives;
 namespace Flashback;
 
 // Freeze frames: the picture at one moment holds for a while, then the clip plays on from that same
-// moment. They show as a slit on the video track; the tag opens their settings and the slit drags.
+// moment. They show as a slit on the video track (in the finished view, as the stretch they hold); the tag
+// opens their settings and the slit drags.
 public partial class TrimWindow
 {
     private void InitFreezes()
@@ -23,6 +24,14 @@ public partial class TrimWindow
             var moved = Timeline.Freezes[i] with { At = at };
             Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? moved : f).ToArray();
             FocusPart(moved); StatusLabel.Text = $"Freeze frame at {KeepSection.TimeText(at)}.";
+        };
+        // Finished view: dragging the end of a hold makes it longer or shorter, and everything after slides with it.
+        Timeline.FreezeHoldChanged += (i, seconds) =>
+        {
+            if (i < 0 || i >= Timeline.Freezes.Count || Math.Abs(Timeline.Freezes[i].Seconds - seconds) < 1e-9) return;
+            var next = Timeline.Freezes[i] with { Seconds = seconds };
+            Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? next : f).ToArray();
+            FocusPart(next); StatusLabel.Text = $"Freeze frame holds for {seconds.ToString("0.#", CultureInfo.InvariantCulture)} s.";
         };
         Timeline.FreezeEditFinished += () =>
         {

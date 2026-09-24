@@ -242,9 +242,9 @@ internal static class TrimInteractionDiagnostics
             var videoCut=tl.Cuts.First(c=>c.Lane<0 && c.Start==10);
             typeof(TrimWindow).GetMethod("ZoomAdded",flags)!.Invoke(trim,new object[]{11.0,11.5});
             var setTime=typeof(TrimWindow).GetMethod("SetPartTime",flags)!;
-            setTime.Invoke(trim,new object?[]{tl.ZoomRegions.First(r=>r.Start==11),false,11.8});
+            setTime.Invoke(trim,new object?[]{tl.ZoomRegions.First(r=>r.Start==11),false,11.8,false});
             Check(tl.ZoomRegions.Any(r=>r.Start==11 && Math.Abs(r.End-11.8)<1e-9),"Typing an end time lengthens a zoom");
-            setTime.Invoke(trim,new object?[]{tl.ZoomRegions.First(r=>r.Start==11),true,10.2});
+            setTime.Invoke(trim,new object?[]{tl.ZoomRegions.First(r=>r.Start==11),true,10.2,false});
             Check(tl.ZoomRegions.Any(r=>r.Start==11),"A zoom can't be stretched over a video cut-out");
             typeof(TrimWindow).GetMethod("PickPartTime",flags)!.Invoke(trim,new object?[]{tl.ZoomRegions.First(r=>r.Start==11),true});
             Check(tl.PickTime!=null,"The pick button waits for a click on the timeline");
@@ -263,7 +263,7 @@ internal static class TrimInteractionDiagnostics
             Check(tl.ZoomRegions.Any(r=>Math.Abs(r.Start-10.5)<1e-9 && Math.Abs(r.End-11.8)<1e-9),"A whole drag undoes in one step");
             typeof(TrimWindow).GetMethod("OpenCutPopup",flags)!.Invoke(trim,new object[]{videoCut});
             Check(trim.CutPopupTitle.Text=="Video cut-out" && Equals(typeof(TrimWindow).GetField("popupCut",flags)!.GetValue(trim),videoCut),"A cut-out's tag opens its times");
-            setTime.Invoke(trim,new object?[]{videoCut,false,10.4});
+            setTime.Invoke(trim,new object?[]{videoCut,false,10.4,false});
             Check(tl.Cuts.Any(c=>c.Lane<0 && c.Start==10 && Math.Abs(c.End-10.4)<1e-9),"Typing a cut-out's end shortens it");
             typeof(TrimWindow).GetMethod("CutRestore_Click",flags)!.Invoke(trim,new object[]{trim,new RoutedEventArgs()});
             Check(!tl.Cuts.Any(c=>c.Lane<0 && c.Start==10),"Restore removes the cut-out");
