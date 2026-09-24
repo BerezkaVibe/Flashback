@@ -20,6 +20,8 @@ internal static class UpdateDiagnostics
             if (!ok) throw new Exception(message);
             File.AppendAllText(Path.Combine(Storage.Root, "update-results.txt"), "PASS " + message + "\n");
         }
+        Check(Updater.VersionIn("patch") == null && Updater.VersionIn("v0.7.4") == new Version(0, 7, 4) && Updater.VersionIn("Flashback v0.7.4") == new Version(0, 7, 4)
+            && Updater.VersionIn("Flashback-0.7.12-Setup.exe") == new Version(0, 7, 12), "Versions are read from tags, titles and installer names, and a word like \"patch\" is ignored");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var older = await Updater.CheckAsync(timeout.Token, new Version(0, 1, 0));
         Check(older != null && older.DownloadUrl.StartsWith("https://github.com/" + Updater.Repository + "/releases/download/") && older.DownloadUrl.EndsWith("-Setup.exe") && older.Size > 1_000_000,
