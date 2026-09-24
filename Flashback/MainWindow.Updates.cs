@@ -35,10 +35,12 @@ public partial class MainWindow
                 UpdateStatusLabel.Text = $"You're on the latest version ({Updater.Current}).";
                 return;
             }
-            UpdateButton.Content = $"Update to {availableUpdate.Version}";
+            // A small green download icon beside the title; the tooltip says what it installs.
+            UpdateButton.ToolTip = $"Flashback {availableUpdate.Version} is ready. Click to update from {Updater.Current}.";
+            System.Windows.Automation.AutomationProperties.SetName(UpdateButton, $"Install Flashback {availableUpdate.Version}");
             UpdateButton.Visibility = Visibility.Visible;
             UpdateStatusLabel.Text = $"Flashback {availableUpdate.Version} is available.";
-            if (manual || !IsActive) Tell($"Flashback {availableUpdate.Version} is available. Click Update in the top right when you're ready.");
+            if (manual || !IsActive) Tell($"Flashback {availableUpdate.Version} is available. Click the green download icon next to the title when you're ready.");
         }
         catch (Exception ex)
         {

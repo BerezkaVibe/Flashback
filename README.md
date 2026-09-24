@@ -6,7 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
-- **0.7.4**: Speed parts from 0.1× to 4× with a slider; X and R hotkeys for the cut out and speed tools; one Esc leaves a tool.
+- **0.7.4**: In-app updates now work (a green download icon appears beside the title when one is ready); speed parts from 0.1× to 4× with a slider; X and R hotkeys for the cut out and speed tools; one Esc leaves a tool.
 - **0.7.3**: Faster Record (encoder check remembered, no freeze) with Record/Recording button; rename clips in place; slow-motion parts on the timeline and a slow-motion export speed; microphone noise suppression; fixed garbled Compress file names.
 - **0.7.2**: Smoother scrubbing with the audio open; scroll to zoom the timeline, Ctrl+scroll for preview speed (0.1x to 4x); click-twice cut out tool that locks onto the playhead, with undo; ruler inside the timeline; shading on parts that will not be exported; Export menu with Copy and Compress; options in a pop-up; playback resumes after scrubbing.
 - **0.7.1**: Cut out tool to black out video or mute audio; audio lanes fold away and load only when opened (faster trimmer); Copy button beside Export; tidier per-app mixer with app icons.
