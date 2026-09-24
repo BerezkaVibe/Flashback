@@ -32,6 +32,19 @@ public partial class TrimWindow
         OverlayView.Picked += OpenOverlay;
         OverlayView.EditStarted += () => { Snapshot(); lastOverlayControl = "view"; };
         OverlayView.Changed += item => { if (Timeline.SelectedOverlay >= 0) { ReplaceOverlay(Timeline.SelectedOverlay, item.Validated()); LoadOverlayUi(); } };
+        OverlayView.WheelAdjusted += WheelAdjust;
+    }
+    // Scroll over an item on the preview: scale, Shift for rotation, Ctrl for opacity. A run of
+    // scrolling is one undo step.
+    private void WheelAdjust(int index, string control, Func<OverlayItem, OverlayItem> change)
+    {
+        if (exportCancellation != null) return;
+        if (index != Timeline.SelectedOverlay) OpenOverlay(index);
+        EditOverlay(control, change);
+        LoadOverlayUi();
+        if (SelectedOverlayItem is { } o)
+            StatusLabel.Text = control switch { "wheelRotation" => $"Rotation {o.Rotation:0}°", "wheelOpacity" => $"Opacity {o.Opacity * 100:0}%", _ => $"Scale {o.Scale:0.##}×" }
+                + " · scroll to scale, Shift+scroll to rotate, Ctrl+scroll for opacity";
     }
     private void TextTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Text);
     private void ImageTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Image);
@@ -108,7 +121,7 @@ public partial class TrimWindow
         if (index < 0 || index >= Timeline.Overlays.Count || exportCancellation != null) return;
         if (ZoomPanel.Visibility == Visibility.Visible) CloseZoom();
         SlowPopup.IsOpen = false;
-        Timeline.SelectedOverlay = index; OverlayView.Selected = index;
+        Timeline.SelectedOverlay = index; OverlayView.Selected = index; FocusPart(Timeline.Overlays[index]);
         var item = Timeline.Overlays[index];
         if (panelKind != item.Kind) BuildOverlayPanel(item.Kind);
         OverlayPanel.Visibility = Visibility.Visible;
@@ -120,6 +133,7 @@ public partial class TrimWindow
     private void CloseOverlay()
     {
         Timeline.SelectedOverlay = -1; OverlayView.Selected = -1;
+        if (focusedKind == PartKind.Overlay) FocusPart(null);
         OverlayPanel.Visibility = Visibility.Collapsed;
     }
     private void OverlayDone_Click(object sender, RoutedEventArgs e) => CloseOverlay();

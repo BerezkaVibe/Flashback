@@ -131,11 +131,33 @@ internal sealed class TrimTimeline : FrameworkElement
     }
     private int RowAt(double y) => Rows == 0 ? -1 : (int)Math.Clamp(Math.Floor((8 + Rows * (RowHeight + RowGap) - y) / (RowHeight + RowGap)), -1, Rows);
     internal event Action<CutRegion>? CutAdded, CutRemoved;
+    // The part last clicked (a cut, speed part, zoom or text/picture item), outlined in white;
+    // Delete removes it. Clicking a part's body selects it and still moves the playhead.
+    private object? focusedPart;
+    internal object? FocusedPart { get => focusedPart; set { focusedPart = value; cutsVersion++; slowVersion++; zoomVersion++; overlayVersion++; InvalidateVisual(); } }
+    internal event Action<object?>? PartClicked;
+    private bool IsFocused(object part) => focusedPart switch
+    {
+        CutRegion c => part is CutRegion p && p == c,
+        SpeedRegion s => part is SpeedRegion p && Math.Abs(p.Start - s.Start) < 1e-9 && Math.Abs(p.End - s.End) < 1e-9,
+        ZoomRegion z => part is ZoomRegion p && Math.Abs(p.Start - z.Start) < 1e-9 && Math.Abs(p.End - z.End) < 1e-9,
+        OverlayItem o => part is OverlayItem p && ReferenceEquals(p, o),
+        _ => false
+    };
+    // The part under a point: on the video track the zoom, then speed part, then cut; on a lane its cut.
+    private object? PartAt(Point p)
+    {
+        int band = BandAt(p); double t = TimeAt(p.X);
+        if (band == -1)
+            return (object?)zoomRegions.FirstOrDefault(r => t >= r.Start && t < r.End) ?? (object?)slowRegions.FirstOrDefault(r => t >= r.Start && t < r.End) ?? cuts.FirstOrDefault(c => c.Lane < 0 && t >= c.Start && t < c.End);
+        return band >= 0 ? cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t < c.End) : null;
+    }
     private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd }
     private Drag drag;
     private double grabOffset;
     // The item being dragged: its index, its state before the drag and whether it has moved yet.
     private int dragOverlay = -1; private OverlayItem? dragOriginal; private bool overlayDragMoved;
+    private OverlayItem[] dragStartList = Array.Empty<OverlayItem>();
     private const double Inset = 20, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 4;
     // Audio lanes fold away behind a chevron beside the video track, so they only take room (and load) when opened.
@@ -259,7 +281,7 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.DrawRoundedRectangle(edge.Color, null, new Rect(x-3, TrackTop-3, 6, TrackHeight+6), 3, 3);
         }
         DrawLaneToggle(dc, dpi);
-        foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+        foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi, focused: IsFocused(cut));
         DrawOverlayWash(dc);
         DrawSlowRegions(dc, dpi);
         DrawZoomRegions(dc, dpi);
@@ -270,7 +292,7 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.PushClip(new RectangleGeometry(new Rect(0, LanesTop, ActualWidth, LanesSpan * LaneReveal)));
             dc.PushOpacity(LaneReveal);
             for (int i = 0; i < lanes.Count; i++) { DrawLane(dc, lanes[i], LaneTop(i), width, dpi); DimOutsideKept(dc, new Rect(Inset, LaneTop(i), width, LaneHeight), 4); }
-            foreach (var cut in cuts) if (cut.Lane >= 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+            foreach (var cut in cuts) if (cut.Lane >= 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi, focused: IsFocused(cut));
             dc.Pop(); dc.Pop();
         }
         if (ZoomFactor > 1.001)
@@ -390,13 +412,13 @@ internal sealed class TrimTimeline : FrameworkElement
     // Zoom is teal; drawn translucent over slow motion, the two blend into a blue-violet.
     private static readonly Brush ZoomFill = Brush("#552DD4BF"), ZoomEdge = Brush("#5EEAD4"), ZoomInk = Brush("#0B1F1C");
     private static readonly Typeface Glyph = new("Segoe MDL2 Assets");
-    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false, bool zoom = false)
+    private void DrawCut(DrawingContext dc, int lane, double start, double end, double dpi, bool slow = false, bool zoom = false, bool focused = false)
     {
         if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
         if (overlayMode != null && lane < 0) { dc.DrawRoundedRectangle(OverlayWash, new Pen(OverlayFill, 1), area, 3, 3); return; }
-        dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, 1), area, 3, 3);
+        dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(focused ? Ink : zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, focused ? 1.5 : 1), area, 3, 3);
     }
     // Zoom regions: teal boxes with a magnifier tag (top-right) that selects the region for editing.
     private void DrawZoomRegions(DrawingContext dc, double dpi)
@@ -407,7 +429,7 @@ internal sealed class TrimTimeline : FrameworkElement
             var r = zoomRegions[i];
             if (r.End < ViewStart || r.Start > ViewStart + Span) { zoomTags.Add(Rect.Empty); continue; }
             double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
-            dc.DrawRoundedRectangle(ZoomFill, new Pen(i == selectedZoom ? Ink : ZoomEdge, i == selectedZoom ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            dc.DrawRoundedRectangle(ZoomFill, new Pen(i == selectedZoom || IsFocused(r) ? Ink : ZoomEdge, i == selectedZoom || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
             var icon = new FormattedText("\uE71E", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, ZoomInk, dpi);
             var label = Text(r.MaxZoom.ToString("0.#", CultureInfo.InvariantCulture) + "×", 10, ZoomInk, dpi);
             double width = icon.Width + label.Width + 11;
@@ -449,7 +471,7 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             var o = overlays[i];
             if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
-            var rect = OverlayRect(o); bool selected = i == selectedOverlay;
+            var rect = OverlayRect(o); bool selected = i == selectedOverlay || IsFocused(o);
             dc.DrawRoundedRectangle(selected ? OverlayFill : OverlayDim, selected ? new Pen(Ink, 1.2) : null, rect, 3, 3);
             if (rect.Width < 16) continue;
             var icon = new FormattedText(o.Kind == OverlayKind.Image ? "" : "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, OverlayInk, dpi);
@@ -470,7 +492,7 @@ internal sealed class TrimTimeline : FrameworkElement
             var r = slowRegions[i];
             if (r.End < ViewStart || r.Start > ViewStart + Span) { slowTags.Add(Rect.Empty); continue; }
             double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
-            dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow ? Ink : SlowEdge, i == selectedSlow ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
+            dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow || IsFocused(r) ? Ink : SlowEdge, i == selectedSlow || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
             var label = Text(r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
             var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), TrackTop + TrackHeight - 15, label.Width + 8, 13);
             dc.DrawRoundedRectangle(SlowEdge, null, tag, 3, 3);
@@ -536,7 +558,7 @@ internal sealed class TrimTimeline : FrameworkElement
             // Press on an item: a click opens it, a drag moves it (or its edges) and changes its layer.
             var rect = OverlayRect(overlays[item]);
             drag = point.X - rect.Left <= 5 && rect.Width > 14 ? Drag.OverlayStart : rect.Right - point.X <= 5 && rect.Width > 14 ? Drag.OverlayEnd : Drag.OverlayMove;
-            dragOverlay = item; dragOriginal = overlays[item]; overlayDragMoved = false; pressPoint = point;
+            dragOverlay = item; dragOriginal = overlays[item]; dragStartList = overlays.ToArray(); overlayDragMoved = false; pressPoint = point;
             CaptureMouse(); e.Handled = true; return;
         }
         if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
@@ -559,6 +581,7 @@ internal sealed class TrimTimeline : FrameworkElement
             // Dragging the scrollbar pans; clicking beside the thumb centers it there.
             drag = Drag.Pan; CaptureMouse(); PanToPointer(point.X); e.Handled = true; return;
         }
+        PartClicked?.Invoke(PartAt(point));
         BeginDrag(point); CaptureMouse(); DragStarted?.Invoke(); MoveTo(point.X); e.Handled=true;
     }
     private void PanToPointer(double x) => PanTo((x - Inset) / Math.Max(1, ActualWidth - 2 * Inset) * Duration - Span / 2);
@@ -689,7 +712,9 @@ internal sealed class TrimTimeline : FrameworkElement
             foreach (double edge in PartEdges(o).Prepend(Position)) if (Math.Abs(XAt(edge) - XAt(t)) <= PlayheadLock) return edge;
             locked = false; return Snap(t);
         }
-        var others = overlays.Where((_, i) => i != dragOverlay).ToList();
+        // Work from the items as they were when the drag began, so layer swaps don't pile up.
+        var list = dragStartList.Length == overlays.Count ? dragStartList.ToArray() : overlays.ToArray();
+        var others = list.Where((_, i) => i != dragOverlay).ToList();
         bool Free(int layer, double a, double b) => !others.Any(x => x.Layer == layer && x.End > a + 1e-9 && x.Start < b - 1e-9);
         var next = o;
         if (drag == Drag.OverlayMove)
@@ -698,10 +723,28 @@ internal sealed class TrimTimeline : FrameworkElement
             // Whichever edge is closer to something to lock onto wins.
             double a = SnapEdge(start, out bool lockA), b = SnapEdge(start + length, out bool lockB) - length;
             start = Math.Clamp(lockA || !lockB ? a : b, 0, Math.Max(0, Duration - length));
-            int row = RowAt(p.Y), layer = o.Layer;
-            if (p.Y < TrackTop && row >= 0) layer = Math.Min(row, others.Count == 0 ? 0 : others.Max(x => x.Layer) + 1);
-            if (!Free(layer, start, start + length)) layer = Free(o.Layer, start, start + length) ? o.Layer : Enumerable.Range(0, overlays.Count + 1).First(l => Free(l, start, start + length));
-            next = o with { Start = start, End = start + length, Layer = layer };
+            double end = start + length;
+            int top = others.Count == 0 ? 0 : others.Max(x => x.Layer) + 1;
+            int layer = o.Layer;
+            // Above the top row brings it to the front; down on the video track sends it to the back;
+            // onto another row puts it there, trading places with whatever overlaps it.
+            int target = p.Y >= TrackTop ? -1 : Math.Min(RowAt(p.Y), top);
+            bool Overlaps(OverlayItem x) => x.End > start + 1e-9 && x.Start < end - 1e-9;
+            if (target < 0 && !(o.Layer == 0 && Free(0, start, end)))
+            {
+                if (Free(0, start, end)) layer = 0;
+                else { for (int i = 0; i < list.Length; i++) if (i != dragOverlay) list[i] = list[i] with { Layer = list[i].Layer + 1 }; layer = 0; }
+            }
+            else if (target >= 0 && target != o.Layer)
+            {
+                var blockers = Enumerable.Range(0, list.Length).Where(i => i != dragOverlay && list[i].Layer == target && Overlaps(list[i])).ToList();
+                bool swapFits = blockers.All(bi => !Enumerable.Range(0, list.Length).Any(j => j != dragOverlay && !blockers.Contains(j) && list[j].Layer == o.Layer && list[j].End > list[bi].Start + 1e-9 && list[j].Start < list[bi].End - 1e-9));
+                if (blockers.Count == 0) layer = target;
+                else if (swapFits) { foreach (int bi in blockers) list[bi] = list[bi] with { Layer = o.Layer }; layer = target; }
+            }
+            others = list.Where((_, i) => i != dragOverlay).ToList();
+            if (!Free(layer, start, end)) layer = Enumerable.Range(0, list.Length + 1).First(l => Free(l, start, end));
+            next = o with { Start = start, End = end, Layer = layer };
         }
         else
         {
@@ -717,7 +760,7 @@ internal sealed class TrimTimeline : FrameworkElement
                 next = o with { End = Math.Clamp(SnapEdge(o.End + shift, out _), o.Start + frame, limit) };
             }
         }
-        var list = overlays.ToArray(); list[dragOverlay] = next;
+        list[dragOverlay] = next;
         overlays = list; overlayVersion++; Height = PreferredHeight; InvalidateVisual();
         OverlayMoved?.Invoke(dragOverlay, next);
     }

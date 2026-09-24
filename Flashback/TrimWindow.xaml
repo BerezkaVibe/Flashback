@@ -83,7 +83,7 @@
     </Popup>
    </StackPanel>
    <!-- Tools sit in a compact two-row block: timeline tools on top, section editing below. -->
-   <Border Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="3">
+   <Border Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
     <StackPanel x:Name="ListControls">
      <StackPanel Orientation="Horizontal">
       <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time · X" AutomationProperties.Name="Cut out tool"/>

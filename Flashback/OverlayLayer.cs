@@ -15,7 +15,7 @@ internal sealed class OverlayLayer : FrameworkElement
     internal double VideoWidth = 1920, VideoHeight = 1080;
     private IReadOnlyList<OverlayItem> items = Array.Empty<OverlayItem>();
     internal IReadOnlyList<OverlayItem> Items { get => items; set { items = value; Refresh(); } }
-    internal int Selected { get => selected; set { selected = value; Refresh(); } }
+    internal int Selected { get => selected; set { selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
     private int selected = -1;
     private double time;
     internal double Time { get => time; set { if (Math.Abs(time - value) < 1e-9) return; time = value; Refresh(onlyIfChanged: true); } }
@@ -112,7 +112,9 @@ internal sealed class OverlayLayer : FrameworkElement
     private void DrawHandles()
     {
         using var dc = handles.RenderOpen();
-        if (Current is not { } item || !Visible(item)) return;
+        // Handles only show while the pointer is on the item or dragging it, so the rest of the
+        // time the preview looks exactly like the export.
+        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None)) return;
         var m = ItemToScreen(item, out var content, out _);
         var box = HandleBox(item, content); var c = Corners(box, m);
         var outline = new StreamGeometry();
@@ -193,8 +195,8 @@ internal sealed class OverlayLayer : FrameworkElement
             if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Text, Shape: OverlayShape.Custom } custom) { AddPoint(custom, p); e.Handled = true; return; }
         }
         if (Current == null) return;
-        grip = g; pointIndex = point; press = p; original = Current; moved = false;
-        CaptureMouse(); e.Handled = true;
+        grip = g; pointIndex = point; press = p; original = Current; moved = false; hovering = true;
+        CaptureMouse(); DrawHandles(); e.Handled = true;
     }
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
@@ -235,7 +237,10 @@ internal sealed class OverlayLayer : FrameworkElement
         if (grip == Grip.None || original is not { } o)
         {
             var (g, _) = GripAt(p);
+            bool over = g != Grip.None || (selected >= 0 && ItemAt(p) == selected);
+            if (over != hovering) { hovering = over; DrawHandles(); }
             Cursor = g switch { Grip.Scale => Cursors.SizeNWSE, Grip.Rotate => Cursors.Hand, Grip.WrapLeft or Grip.WrapRight => Cursors.SizeWE, Grip.Tail or Grip.Point => Cursors.Cross, _ => ItemAt(p) >= 0 ? Cursors.SizeAll : null };
+            ToolTip = g == Grip.None && ItemAt(p) >= 0 ? "Drag to move · scroll to scale · Shift+scroll to rotate · Ctrl+scroll for opacity" : null;
             return;
         }
         if (!moved && (p - press).Length < 2) return;
@@ -328,6 +333,26 @@ internal sealed class OverlayLayer : FrameworkElement
         if (guideY is { } gy) guideY = (0, toScreen.Transform(new Point(0, gy.Y * VideoHeight)).Y);
         return (bestX ?? x, bestY ?? y);
     }
+    // Over an item: the wheel scales it, Shift+wheel rotates it and Ctrl+wheel changes its opacity.
+    internal event Action<int, string, Func<OverlayItem, OverlayItem>>? WheelAdjusted;
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        int index = ItemAt(e.GetPosition(this));
+        if (index < 0 || grip != Grip.None) return;
+        double notches = e.Delta / 120.0;
+        var mods = Keyboard.Modifiers;
+        if (mods == ModifierKeys.Shift)
+            WheelAdjusted?.Invoke(index, "wheelRotation", o => o with { Rotation = Math.Round((((o.Rotation + notches * 5) % 360) + 540) % 360 - 180, 1) });
+        else if (mods == ModifierKeys.Control)
+            WheelAdjusted?.Invoke(index, "wheelOpacity", o => o with { Opacity = Math.Clamp(Math.Round(o.Opacity + notches * .05, 2), 0, 1) });
+        else if (mods == ModifierKeys.None)
+            WheelAdjusted?.Invoke(index, "wheelScale", o => o with { Scale = Math.Clamp(Math.Round(o.Scale * Math.Pow(1.08, notches), 3), OverlayItem.MinScale, OverlayItem.MaxScale) });
+        else return;
+        e.Handled = true;
+    }
+    private bool hovering;
+    protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); if (hovering && grip == Grip.None) { hovering = false; DrawHandles(); } }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e) { base.OnMouseLeftButtonUp(e); Finish(); }
     protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); Finish(); }
     private void Finish()
@@ -336,6 +361,7 @@ internal sealed class OverlayLayer : FrameworkElement
         grip = Grip.None; original = null; guideX = guideY = null;
         if (IsMouseCaptured) ReleaseMouseCapture();
         if (moved) { moved = false; EditFinished?.Invoke(); }
+        hovering = IsMouseOver && (GripAt(Mouse.GetPosition(this)).Grip != Grip.None || ItemAt(Mouse.GetPosition(this)) == selected);
         DrawHandles();
     }
 }

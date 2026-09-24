@@ -50,7 +50,7 @@ public partial class TrimWindow
     {
         if (index < 0 || index >= Timeline.ZoomRegions.Count || exportCancellation != null) return;
         if (OverlayPanel.Visibility == Visibility.Visible) CloseOverlay();
-        Timeline.SelectedZoom = index; editingZoomOut = false;
+        Timeline.SelectedZoom = index; editingZoomOut = false; FocusPart(Timeline.ZoomRegions[index]);
         var r = Timeline.ZoomRegions[index];
         ZoomPanel.Visibility = ZoomTarget.Visibility = Visibility.Visible;
         ZoomTarget.VideoWidth = media.Width > 0 ? media.Width : 1920; ZoomTarget.VideoHeight = media.Height > 0 ? media.Height : 1080;
@@ -61,6 +61,7 @@ public partial class TrimWindow
     private void CloseZoom()
     {
         Timeline.SelectedZoom = -1;
+        if (focusedKind == PartKind.Zoom) FocusPart(null);
         ZoomPanel.Visibility = ZoomTarget.Visibility = Visibility.Collapsed;
         ApplyZoomPreview();
     }

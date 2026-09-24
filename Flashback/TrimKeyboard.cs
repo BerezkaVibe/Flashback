@@ -130,7 +130,7 @@ public partial class TrimWindow
             case TrimAction.MarkEnd: MarkEnd_Click(this,none); break;
             case TrimAction.AddSection: Add_Click(this,none); break;
             case TrimAction.Split: Split_Click(this,none); break;
-            case TrimAction.RemoveSection: Remove_Click(this,none); break;
+            case TrimAction.RemoveSection: if(!DeleteFocusedPart()) Remove_Click(this,none); break;
             case TrimAction.PreviousSection: NavigateSection(-1); break;
             case TrimAction.NextSection: NavigateSection(1); break;
             case TrimAction.FirstSection: NavigateSection(-1,true); break;

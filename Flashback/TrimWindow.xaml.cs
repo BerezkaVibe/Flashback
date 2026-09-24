@@ -47,6 +47,7 @@ public partial class TrimWindow : Window
         LoadSlowChoices();
         InitZoom();
         InitOverlays();
+        InitParts();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -233,6 +234,7 @@ public partial class TrimWindow : Window
     {
         if (SectionsList.SelectedItem is KeepSection s)
         { Pause(); StartBox.Text = KeepSection.TimeText(s.Start); EndBox.Text = KeepSection.TimeText(s.End); SeekTo(s.Start); }
+        if (SectionsList.SelectedIndex >= 0) FocusPart(null);
         Timeline.SelectedSection = SectionsList.SelectedIndex; Timeline.InvalidateVisual(); UpdateAddButton();
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -153,10 +154,36 @@ internal static class TrimInteractionDiagnostics
             Check(tl.ActualHeight>0 && tl.Height>tl.PreferredHeight-1,"The timeline grows a slim layer row for text");
             place.Invoke(tl,new object[]{new Point(tl.XAt(3),30)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),30)});
             Check(tl.Overlays.Count==2 && tl.Overlays[0].Layer==0 && tl.Overlays[1].Layer==1,"Overlapping text goes on the layer above");
+            // Dragging the bottom item up onto the other's row trades their layers.
+            var saved=tl.Overlays.ToArray(); var tf=typeof(TrimTimeline);
+            var dragField=tf.GetField("drag",flags)!; tf.GetField("dragOverlay",flags)!.SetValue(tl,0); tf.GetField("dragOriginal",flags)!.SetValue(tl,tl.Overlays[0]);
+            tf.GetField("dragStartList",flags)!.SetValue(tl,tl.Overlays.ToArray()); dragField.SetValue(tl,Enum.Parse(dragField.FieldType,"OverlayMove"));
+            double rowTop(int layer)=>(double)tf.GetMethod("RowTop",flags)!.Invoke(tl,new object[]{layer})!;
+            tf.GetField("pressPoint",flags)!.SetValue(tl,new Point(tl.XAt(3),rowTop(0)+7));
+            tf.GetMethod("DragOverlay",flags)!.Invoke(tl,new object[]{new Point(tl.XAt(3),rowTop(1)+7)});
+            Check(tl.Overlays[0].Layer==1 && tl.Overlays[1].Layer==0 && Math.Abs(tl.Overlays[0].Start-2)<.05,"Dragging text onto another's row trades their layers");
+            dragField.SetValue(tl,Enum.Parse(dragField.FieldType,"None")); typeof(TrimWindow).GetMethod("SetOverlays",flags)!.Invoke(trim,new object[]{saved});
+            // Delete removes the part last clicked, like right-clicking it.
+            typeof(TrimWindow).GetMethod("CutAdded",flags)!.Invoke(trim,new object[]{new CutRegion(-1,9,10)});
+            var clickedCut=tl.Cuts.First(c=>c.Start==9);
+            typeof(TrimWindow).GetMethod("FocusPart",flags)!.Invoke(trim,new object?[]{clickedCut});
+            int sectionsBefore=trim.SectionsList.Items.Count;
+            trim.HandleKey(Key.Delete,ModifierKeys.None,true);
+            Check(!tl.Cuts.Contains(clickedCut) && trim.SectionsList.Items.Count==sectionsBefore,"Delete removes the clicked cut instead of a section");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false); trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            typeof(TrimWindow).GetMethod("OpenOverlay",flags)!.Invoke(trim,new object[]{1});
             var textBox=(System.Windows.Controls.TextBox)typeof(TrimWindow).GetField("overlayTextBox",flags)!.GetValue(trim)!;
             textBox.Text="Hello there";
             Check(tl.Overlays[1].Text=="Hello there" && trim.OverlayView.Items[1].Text=="Hello there","Typing in the panel changes the text on the video");
             trim.SeekTo(3.5); EditorDiagnostics.Render(content,1120,900,"trim-overlays.png");
+            var wheel=typeof(TrimWindow).GetMethod("WheelAdjust",flags)!;
+            double scaleBefore=tl.Overlays[0].Scale;
+            for(int i=0;i<3;i++) wheel.Invoke(trim,new object[]{0,"wheelScale",(Func<OverlayItem,OverlayItem>)(o=>o with{Scale=o.Scale*1.08})});
+            wheel.Invoke(trim,new object[]{0,"wheelRotation",(Func<OverlayItem,OverlayItem>)(o=>o with{Rotation=o.Rotation+5})});
+            Check(tl.SelectedOverlay==0 && Math.Abs(tl.Overlays[0].Scale-scaleBefore*Math.Pow(1.08,3))<.01 && tl.Overlays[0].Rotation==5,"Scrolling over text on the video selects it, scales it and Shift rotates it");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false); trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(Math.Abs(tl.Overlays[0].Scale-scaleBefore)<1e-9 && tl.Overlays[0].Rotation==0,"A run of scrolling undoes in one step");
+            typeof(TrimWindow).GetMethod("OpenOverlay",flags)!.Invoke(trim,new object[]{1});
             typeof(TrimWindow).GetMethod("Restack",flags)!.Invoke(trim,new object[]{-1});
             Check(tl.Overlays[1].Layer==0 && tl.Overlays[0].Layer==1,"Send back trades layers with the overlapping item");
             var newer=OverlayItem.NewText(0,1,tl.Overlays[1]);

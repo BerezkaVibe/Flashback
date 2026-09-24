@@ -176,7 +176,7 @@ public partial class TrimWindow
     private void SlowTagClicked(int index)
     {
         if (index < 0 || index >= Timeline.SlowRegions.Count || exportCancellation != null) return;
-        Timeline.SelectedSlow = index; regionSpeedSnapshotted = false;
+        Timeline.SelectedSlow = index; regionSpeedSnapshotted = false; FocusPart(Timeline.SlowRegions[index]);
         ShowRegionSpeed(Timeline.SlowRegions[index].Speed);
         SlowPopup.IsOpen = true;
     }
