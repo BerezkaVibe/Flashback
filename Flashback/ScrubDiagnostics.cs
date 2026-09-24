@@ -69,6 +69,23 @@ internal static class ScrubDiagnostics
             typeof(TrimWindow).GetMethod("CutAdded", flags)!.Invoke(trim, new object[] { new CutRegion(-1, 8, 10) });
             typeof(TrimWindow).GetMethod("SlowAdded", flags)!.Invoke(trim, new object[] { 11.0, 14.0 });
             trim.SeekTo(12); await Task.Delay(500); Shot(trim, "trim-sections.png");
+            // A zoom overlapping the speed part: editor open (full frame + target box), then closed (zoomed preview).
+            typeof(TrimWindow).GetMethod("ZoomAdded", flags)!.Invoke(trim, new object[] { 12.5, 17.0 });
+            trim.ZoomTarget.Set(.62, .4, 2.2); typeof(TrimWindow).GetMethod("ZoomTargetChanged", flags)!.Invoke(trim, null);
+            await Task.Delay(600); Shot(trim, "trim-zoom-editor.png");
+            typeof(TrimWindow).GetMethod("ZoomDone_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() });
+            trim.SeekTo(15); await Task.Delay(600); Shot(trim, "trim-zoom-preview.png");
+            // The speed pop-up opens where the pointer is (it normally sits on the part's tag).
+            trim.Topmost = true; trim.Activate();
+            typeof(TrimWindow).GetMethod("SlowTagClicked", flags)!.Invoke(trim, new object[] { 0 });
+            trim.RegionSpeedSlider.Value = Math.Log(1.5); await Task.Delay(700);
+            var mouse = System.Windows.Forms.Cursor.Position;
+            using (var bmp = new System.Drawing.Bitmap(420, 200))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(mouse.X - 20, mouse.Y - 10, 0, 0, bmp.Size);
+                bmp.Save(Path.Combine(Storage.Root, "trim-speed-part.png"), System.Drawing.Imaging.ImageFormat.Png);
+            }
+            trim.SlowPopup.IsOpen = false; trim.Topmost = false;
             typeof(TrimWindow).GetMethod("Clear_Click", flags)!.Invoke(trim, new object[] { trim, new RoutedEventArgs() });
             await Sweep("audio folded");
             typeof(TrimWindow).GetMethod("LanesToggleRequested", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(trim, null);

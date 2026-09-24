@@ -108,8 +108,8 @@ public partial class TrimWindow
     }
     private void CutAdded(CutRegion cut)
     {
-        // Cuts and slow motion never overlap.
-        if (Timeline.SlowRegions.Any(r => r.End > cut.Start && r.Start < cut.End)) { StatusLabel.Text = "Cuts can't overlap slow motion. Pick a stretch outside the purple slow-motion parts."; return; }
+        // Cuts and speed parts never overlap.
+        if (Timeline.SlowRegions.Any(r => r.End > cut.Start && r.Start < cut.End)) { StatusLabel.Text = "Cuts can't overlap a speed part. Pick a stretch outside the purple speed parts."; return; }
         Snapshot();
         // Overlapping cuts on the same lane merge into one.
         var same = Timeline.Cuts.Where(c => c.Lane == cut.Lane && c.End >= cut.Start && c.Start <= cut.End).ToList();
@@ -145,48 +145,67 @@ public partial class TrimWindow
         }
     }
 
-    // Slow motion on part of the clip: click two spots with the tool, then click the purple part's
-    // speed tag to change its speed or remove it. It never overlaps a cut.
+    // Speed parts: click two spots with the tool, then click the purple part's tag to set its speed
+    // anywhere from 0.1x to 4x (slider or quick picks) or remove it. They never overlap a cut.
     private void SlowTool_Click(object sender, RoutedEventArgs e)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         Timeline.SlowMode = !Timeline.SlowMode; ShowCutTool();
-        StatusLabel.Text = !Timeline.SlowMode ? "Slow motion tool off."
-            : "Click two spots to slow that part down. Drag to move the playhead; the marker locks onto it. Click a speed tag to change it · Esc cancels.";
+        StatusLabel.Text = !Timeline.SlowMode ? "Speed tool off."
+            : "Click two spots to change that part's speed. Drag to move the playhead; the marker locks onto it. Click a speed tag to change it · Esc leaves the tool.";
     }
     private void SlowAdded(double start, double end)
     {
-        if (Timeline.Cuts.Any(c => c.End > start && c.Start < end)) { StatusLabel.Text = "Slow motion can't overlap a cut. Pick a stretch outside the red cut-outs."; return; }
-        if (Timeline.SlowRegions.Any(r => r.End > start && r.Start < end)) { StatusLabel.Text = "That overlaps another slow-motion part. Click its speed tag to change it instead."; return; }
+        if (Timeline.Cuts.Any(c => c.End > start && c.Start < end)) { StatusLabel.Text = "A speed part can't overlap a cut. Pick a stretch outside the red cut-outs."; return; }
+        if (Timeline.SlowRegions.Any(r => r.End > start && r.Start < end)) { StatusLabel.Text = "That overlaps another speed part. Click its tag to change it instead."; return; }
         Snapshot();
         Timeline.SlowRegions = Timeline.SlowRegions.Append(new SpeedRegion(start, end, .5)).OrderBy(r => r.Start).ToArray();
-        StatusLabel.Text = $"Slow motion 0.5× from {KeepSection.TimeText(start)} to {KeepSection.TimeText(end)}. Click its tag to change the speed.";
+        StatusLabel.Text = $"0.5× from {KeepSection.TimeText(start)} to {KeepSection.TimeText(end)}. Click its tag to change the speed.";
         UpdateExportHint(); UpdateSummary();
     }
     private void LoadSlowChoices()
     {
         foreach (double speed in ShareExportOptions.RegionSpeeds)
         {
-            var choice = new Button { Content = speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", Tag = speed, Style = (Style)FindResource("TrimButton"), MinHeight = 28, Height = 28, MinWidth = 52, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), FontSize = 12, Background = System.Windows.Media.Brushes.Transparent };
-            choice.Click += (_, _) => SetSlowSpeed(speed);
+            var choice = new Button { Content = speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", Tag = speed, Style = (Style)FindResource("TrimButton"), MinHeight = 28, Height = 28, MinWidth = 48, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), FontSize = 12, Background = System.Windows.Media.Brushes.Transparent };
+            choice.Click += (_, _) => { SetSlowSpeed(speed); SlowPopup.IsOpen = false; };
             SlowChoices.Children.Add(choice);
         }
     }
+    private bool syncingRegionSpeed, regionSpeedSnapshotted;
     private void SlowTagClicked(int index)
     {
         if (index < 0 || index >= Timeline.SlowRegions.Count || exportCancellation != null) return;
-        Timeline.SelectedSlow = index;
-        foreach (Button choice in SlowChoices.Children)
-            choice.SetResourceReference(Control.BorderBrushProperty, Math.Abs((double)choice.Tag - Timeline.SlowRegions[index].Speed) < 1e-9 ? "Accent" : "Outline");
+        Timeline.SelectedSlow = index; regionSpeedSnapshotted = false;
+        ShowRegionSpeed(Timeline.SlowRegions[index].Speed);
         SlowPopup.IsOpen = true;
     }
-    private void SetSlowSpeed(double speed)
+    private void ShowRegionSpeed(double speed, bool moveSlider = true)
     {
-        int i = Timeline.SelectedSlow; SlowPopup.IsOpen = false;
-        if (i < 0 || i >= Timeline.SlowRegions.Count || Timeline.SlowRegions[i].Speed == speed) return;
-        Snapshot();
+        RegionSpeedLabel.Text = speed.ToString("0.##", CultureInfo.InvariantCulture) + "×" + (speed < 1 ? " · slower" : speed > 1 ? " · faster" : "");
+        if (moveSlider) { syncingRegionSpeed = true; RegionSpeedSlider.Value = Math.Log(speed); syncingRegionSpeed = false; }
+        foreach (Button choice in SlowChoices.Children)
+            choice.SetResourceReference(Control.BorderBrushProperty, Math.Abs((double)choice.Tag - speed) < 1e-9 ? "Accent" : "Outline");
+    }
+    // One undo step per slider drag.
+    private void RegionSpeedSlider_Grab(object sender, System.Windows.Input.MouseButtonEventArgs e) => regionSpeedSnapshotted = false;
+    private void RegionSpeed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (syncingRegionSpeed || RegionSpeedLabel == null) return;
+        // Log scale, rounded to tidy steps: 0.05 below normal speed, 0.1 above it.
+        double speed = Math.Exp(e.NewValue);
+        speed = speed < 1 ? Math.Round(speed / .05) * .05 : Math.Round(speed, 1);
+        if (Math.Abs(speed - 1) < .03) speed = 1;
+        SetSlowSpeed(Math.Clamp(speed, ShareExportOptions.MinRegionSpeed, ShareExportOptions.MaxRegionSpeed), fromSlider: true);
+    }
+    private void SetSlowSpeed(double speed, bool fromSlider = false)
+    {
+        int i = Timeline.SelectedSlow;
+        if (i < 0 || i >= Timeline.SlowRegions.Count || Math.Abs(Timeline.SlowRegions[i].Speed - speed) < 1e-9) return;
+        if (!fromSlider || !regionSpeedSnapshotted) { Snapshot(); regionSpeedSnapshotted = fromSlider; }
         Timeline.SlowRegions = Timeline.SlowRegions.Select((r, n) => n == i ? r with { Speed = speed } : r).ToArray();
-        StatusLabel.Text = $"Slow motion set to {speed:0.##}×."; UpdateExportHint(); UpdateSummary();
+        ShowRegionSpeed(speed, moveSlider: !fromSlider);
+        StatusLabel.Text = $"Speed set to {speed:0.##}×."; UpdateExportHint(); UpdateSummary();
     }
     private void SlowRemove_Click(object sender, RoutedEventArgs e) { int i = Timeline.SelectedSlow; SlowPopup.IsOpen = false; SlowRemoved(i); }
     private void SlowRemoved(int index)
@@ -194,10 +213,10 @@ public partial class TrimWindow
         if (index < 0 || index >= Timeline.SlowRegions.Count) return;
         Snapshot();
         Timeline.SlowRegions = Timeline.SlowRegions.Where((_, n) => n != index).ToArray();
-        StatusLabel.Text = "Slow motion removed."; UpdateExportHint(); UpdateSummary();
+        StatusLabel.Text = "Speed change removed."; UpdateExportHint(); UpdateSummary();
     }
     private void SlowPopup_Closed(object? sender, EventArgs e) => Timeline.SelectedSlow = -1;
-    // The preview plays slow-motion parts slowed down too.
+    // The preview plays speed parts at their speed too.
     private double RegionSpeedAt(double time) => Timeline.SlowRegions.FirstOrDefault(r => time >= r.Start && time < r.End)?.Speed ?? 1;
     private bool LaneMuted(int lane) => media.HasSeparateTracks && (lane == 0 ? DesktopMix.Value : MicrophoneMix.Value) < .5;
     private void LaneToggled(int lane)
@@ -261,7 +280,7 @@ public partial class TrimWindow
         if (source.Length == 0 || exportCancellation != null) return;
         KeepSection[] ranges;
         try { ranges = ExportRanges(); } catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
-        // Slow motion makes the result longer, so the same size gets a smaller bitrate.
+        // Speed parts change the length, so the same size gets a different bitrate.
         double seconds = OutputLength(ranges);
         double budget = limit * 1_000_000 * .92 * 8 / seconds - 128000;
         if (budget < 400_000) { StatusLabel.Text = $"That's too long to fit under {limit:0} MB. Keep it under about {limit * 1_000_000 * .92 * 8 / 528000:0} seconds."; return; }

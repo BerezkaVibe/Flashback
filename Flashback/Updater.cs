@@ -17,8 +17,9 @@ internal sealed record UpdateInfo(Version Version, string DownloadUrl, long Size
 internal static class Updater
 {
     internal const string Repository = "BerezkaVibe/Flashback";
-    private static readonly HttpClient http = CreateClient();
     internal static Version Current { get; } = Trim(typeof(Updater).Assembly.GetName().Version ?? new Version(0, 0, 0));
+    // Declared after Current: static fields initialize in order, and the User-Agent needs the version.
+    private static readonly HttpClient http = CreateClient();
     private static Version Trim(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build));
     private static HttpClient CreateClient()
     {
@@ -29,7 +30,9 @@ internal static class Updater
     }
     // Returns null when this version is current. Throws when GitHub cannot be reached
     // or the repository is private (its releases are then not visible).
-    internal static async Task<UpdateInfo?> CheckAsync(CancellationToken token)
+    internal static Task<UpdateInfo?> CheckAsync(CancellationToken token) => CheckAsync(token, Current);
+    // The version to compare against can be supplied for tests.
+    internal static async Task<UpdateInfo?> CheckAsync(CancellationToken token, Version current)
     {
         using var response = await http.GetAsync($"https://api.github.com/repos/{Repository}/releases/latest", token);
         if (response.StatusCode == HttpStatusCode.NotFound) throw new InvalidOperationException("No public release was found on GitHub.");
@@ -38,7 +41,7 @@ internal static class Updater
         var root = json.RootElement;
         if (!Version.TryParse(root.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out var latest)) return null;
         latest = Trim(latest);
-        if (latest <= Current) return null;
+        if (latest <= current) return null;
         string prefix = $"https://github.com/{Repository}/releases/download/";
         foreach (var asset in root.GetProperty("assets").EnumerateArray())
         {

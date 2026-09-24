@@ -72,14 +72,15 @@
    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
     <StackPanel x:Name="ListControls" Orientation="Horizontal">
      <Button x:Name="AddSectionButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE710;" Click="Add_Click" Foreground="{DynamicResource Accent}" AutomationProperties.Name="Add section"/>
-     <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time" AutomationProperties.Name="Cut out tool"/>
-     <Button x:Name="SlowToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE916;" Click="SlowTool_Click" ToolTip="Slow motion: click two spots to slow that part down" AutomationProperties.Name="Slow motion tool"/>
+     <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time · X" AutomationProperties.Name="Cut out tool"/>
+     <Button x:Name="SlowToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE916;" Click="SlowTool_Click" ToolTip="Speed: click two spots to slow down or speed up that part · R" AutomationProperties.Name="Slow motion tool"/>
      <Popup x:Name="SlowPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True" Closed="SlowPopup_Closed">
       <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
        <StackPanel>
-        <TextBlock Text="Slow motion" FontSize="12" FontWeight="SemiBold" Margin="2,0,0,8"/>
+        <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+        <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.302585" Maximum="1.386294" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
         <UniformGrid x:Name="SlowChoices" Rows="1"/>
-        <Button Style="{StaticResource TrimButton}" Content="Remove slow motion" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
+        <Button Style="{StaticResource TrimButton}" Content="Remove speed change" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
        </StackPanel>
       </Border>
      </Popup>     <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>

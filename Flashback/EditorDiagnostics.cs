@@ -80,6 +80,36 @@ internal static class EditorDiagnostics
         await ExportServices.PreciseAsync(source, splitSlow, new[] { new KeepSection(1, 2), new KeepSection(3, 4) }, null, CancellationToken.None, true,
             new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(1.5, 3.5, .25) } });
         Check(Math.Abs(ClipMedia.Read(splitSlow).Duration - (1 + 1 * 4)) < .4, "Slow motion applies only where it overlaps the kept sections");
+        // Faster parts: 4 s kept with 2-4 s at 2x becomes 3 s; very slow and fast audio chain tempo stages.
+        var fastPart = Path.Combine(folder, "Fast part.mp4");
+        await ExportServices.PreciseAsync(source, fastPart, new[] { new KeepSection(1, 5) }, null, CancellationToken.None, true, new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(2, 4, 2) } });
+        Check(Math.Abs(ClipMedia.Read(fastPart).Duration - 3) < .3 && ClipMedia.Read(fastPart).HasAudio, "A 2x speed part shortens only that stretch");
+        Check(ShareExportOptions.AudioTempo(4) == "atempo=2,atempo=2" && ShareExportOptions.AudioTempo(.1).StartsWith("atempo=0.5,atempo=0.5,atempo=0.5"), "Audio tempo chains stages below 0.5x and above 2x");
+        // Zoom: curve math, then a real export compared frame by frame against the source.
+        var ramp = ZoomPreset.BuiltIns[0].Curve;
+        Check(ramp.At(0) == 0 && ramp.At(ramp.Length) == 1 && Enumerable.Range(1, 40).All(i => ramp.At(ramp.Length * i / 40) >= ramp.At(ramp.Length * (i - 1) / 40) - 1e-9), "Zoom curves rise from 0 to 1 without dipping");
+        var zoomRegion = new ZoomRegion(1, 3, .5, .5, 2, ZoomPreset.BuiltIns[1].Curve);
+        Check(zoomRegion.ZoomAt(.9) == 1 && Math.Abs(zoomRegion.ZoomAt(2.5) - 2) < 1e-6 && zoomRegion.ZoomAt(3) == 1, "Zoom is 1x outside, max on the plateau, and cuts back at the end");
+        var zoomOut = zoomRegion with { ZoomOut = true };
+        Check(zoomOut.ZoomAt(2.99) < 1.1 && Math.Abs(zoomOut.ZoomAt(2) - 2) < 1e-6, "Zoom-out eases back down before the end");
+        Check(new ZoomRegion(1, 1.2, .5, .5, 3, ZoomPreset.BuiltIns[3].Curve, true).ZoomAt(1.1) > 1, "Ramps longer than a short zoom are squeezed to fit");
+        var detailed = Path.Combine(folder, "Detailed.mp4");
+        await Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4", "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=48000:duration=4",
+            "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", detailed);
+        var zoomed = Path.Combine(folder, "Zoomed.mp4");
+        await ExportServices.PreciseAsync(detailed, zoomed, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { ZoomRegions = new[] { zoomRegion } });
+        Check(Math.Abs(ClipMedia.Read(zoomed).Duration - 4) < .2 && ClipMedia.Read(zoomed).Width == 640 && ClipMedia.Read(zoomed).HasAudio, "Zoom keeps the clip's length, size and sound");
+        async Task<byte[]> Frame(string file, double at, string filter = "")
+        {
+            var raw = Path.Combine(folder, $"frame-{Guid.NewGuid():N}.raw");
+            await Ffmpeg("-y", "-ss", ExportServices.Number(at), "-i", file, "-frames:v", "1", "-vf", filter + "scale=64:36,format=gray", "-f", "rawvideo", raw);
+            var bytes = File.ReadAllBytes(raw); File.Delete(raw); return bytes;
+        }
+        double Diff(byte[] a, byte[] b) => a.Zip(b).Average(p => Math.Abs(p.First - p.Second));
+        double outside = Diff(await Frame(detailed, .5), await Frame(zoomed, .5));
+        double plateau = Diff(await Frame(detailed, 2.5, "crop=320:180:160:90,"), await Frame(zoomed, 2.5));
+        double unzoomed = Diff(await Frame(detailed, 2.5), await Frame(zoomed, 2.5));
+        Check(outside < 8 && plateau < 12 && unzoomed > plateau + 5, $"Zoomed frames match a 2x crop of the target (outside {outside:0.0}, plateau {plateau:0.0}, versus unzoomed {unzoomed:0.0})");
         var slowGif = Path.Combine(folder, "Slow.gif");
         await ExportServices.PreciseAsync(source, slowGif, new[] { new KeepSection(1, 2) }, null, CancellationToken.None, true, ShareExportOptions.For(ExportFormat.Gif) with { Speed = .5, Crop = new CropRect(0, 0, 320, 180) });
         Check(new FileInfo(slowGif).Length > 1000, "Slow motion also works for cropped GIFs");

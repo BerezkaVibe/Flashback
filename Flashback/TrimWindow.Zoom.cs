@@ -10,7 +10,7 @@ using System.Windows.Media;
 namespace Flashback;
 
 // Zoom: sections of the clip that zoom in on a target, with an editable ramp curve and presets.
-// Zoom may overlap cuts and slow motion; zoom sections don't overlap each other.
+// Zoom may overlap cuts and speed parts; zoom sections don't overlap each other.
 public partial class TrimWindow
 {
     private List<ZoomPreset> savedZoomPresets = new();
@@ -29,7 +29,7 @@ public partial class TrimWindow
         if (source.Length == 0 || exportCancellation != null) return;
         Timeline.ZoomMode = !Timeline.ZoomMode; ShowCutTool(); SlowPopup.IsOpen = false;
         StatusLabel.Text = !Timeline.ZoomMode ? "Zoom tool off."
-            : "Click two spots to zoom in on that part; the marker locks onto the playhead and slow-motion edges. Esc cancels.";
+            : "Click two spots to zoom in on that part; the marker locks onto the playhead and speed-part edges. Click a zoom's tag to edit it · Esc leaves the tool.";
     }
     private ZoomRegion? SelectedZoomRegion => Timeline.SelectedZoom >= 0 && Timeline.SelectedZoom < Timeline.ZoomRegions.Count ? Timeline.ZoomRegions[Timeline.SelectedZoom] : null;
     private ZoomPreset CurrentPreset => (ZoomPresetBox.SelectedItem as ComboBoxItem)?.Tag as ZoomPreset ?? ZoomPreset.BuiltIns[0];
@@ -195,11 +195,14 @@ public partial class TrimWindow
         if (SelectedZoomRegion is { } selected)
             ZoomGraph.Marker = playhead < selected.Start || playhead >= selected.End ? double.NaN
                 : editingZoomOut ? selected.End - playhead : playhead - selected.Start;
-        if (z <= 1.0001 || media.Width <= 0) { if (Player.RenderTransform != Transform.Identity) Player.RenderTransform = Transform.Identity; return; }
+        if (z <= 1.0001 || media.Width <= 0) { if (Player.RenderTransform != Transform.Identity) { Player.RenderTransform = Transform.Identity; Player.Clip = null; } return; }
         double scale = Math.Min(Player.ActualWidth / media.Width, Player.ActualHeight / media.Height);
         double w = media.Width * scale, h = media.Height * scale, vx = (Player.ActualWidth - w) / 2, vy = (Player.ActualHeight - h) / 2;
         var (left, top) = zoom!.ViewAt(z);
         double x0 = vx + left * w, y0 = vy + top * h;
         Player.RenderTransform = new MatrixTransform(z, 0, 0, z, vx - x0 * z, vy - y0 * z);
+        // Clip to the part being shown (in the player's own coordinates), so the zoomed picture stays
+        // inside the video's frame instead of spilling over the letterbox bars.
+        Player.Clip = new RectangleGeometry(new Rect(x0, y0, w / z, h / z));
     }
 }

@@ -53,10 +53,10 @@ internal sealed class TrimTimeline : FrameworkElement
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
     internal bool CutMode { get => cutMode; set { cutMode = value; if (value) { slowMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    // Slow-motion tool: the same two clicks mark a stretch that plays slower (video and audio together).
+    // Speed tool: the same two clicks mark a stretch that plays slower or faster (video and audio together).
     internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) { cutMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    // Zoom tool: the same two clicks mark a zoomed stretch. It may overlap cuts and slow motion,
-    // and snaps to slow-motion edges as well as the playhead.
+    // Zoom tool: the same two clicks mark a zoomed stretch. It may overlap cuts and speed parts,
+    // and snaps to speed-part edges as well as the playhead.
     internal bool ZoomMode { get => zoomMode; set { zoomMode = value; if (value) { cutMode = false; slowMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
     private bool cutMode, slowMode, zoomMode, cutPress;
     private bool Placing => cutMode || slowMode || zoomMode;
@@ -378,7 +378,7 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int ZoomTagAt(Point p) { for (int i = 0; i < zoomTags.Count; i++) if (zoomTags[i].Contains(p)) return i; return -1; }
-    // Slow-motion regions: a purple box on the video track with a small speed tag (bottom-right) that opens
+    // Speed parts: a purple box on the video track with a small speed tag (bottom-right) that opens
     // the speed choices when clicked. Tag rectangles are kept for hit-testing.
     private void DrawSlowRegions(DrawingContext dc, double dpi)
     {
@@ -397,7 +397,7 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int SlowTagAt(Point p) { for (int i = 0; i < slowTags.Count; i++) if (slowTags[i].Contains(p)) return i; return -1; }
-    // The cutter: red (purple for slow motion), or white while it is locked onto the playhead.
+    // The cutter: red (purple for speed, teal for zoom), or white while it is locked onto the playhead.
     private static readonly Pen CutterPen = new(Brush("#E5484D"), 1.5), SlowCutterPen = new(Brush("#A99BFA"), 1.5), ZoomCutterPen = new(Brush("#5EEAD4"), 1.5), LockedCutterPen = new(Brush("#EDF0F3"), 1.5);
     private void DrawCutter(DrawingContext dc, int lane, double t)
     {
@@ -409,7 +409,7 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         int band = pendingCut?.Lane ?? BandAt(p);
         if (band < -1) return;
-        if (slowMode || zoomMode) band = -1; // slow motion and zoom cover the whole picture
+        if (slowMode || zoomMode) band = -1; // speed parts and zoom cover the whole picture and sound
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
         else
@@ -496,14 +496,14 @@ internal sealed class TrimTimeline : FrameworkElement
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
         if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom"; return; }
-        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change the slow-motion speed"; return; }
+        if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
             ToolTip = zoomMode
-                ? pendingCut == null ? "Click to start a zoom; it snaps to the playhead and slow-motion edges. Right-click a zoom to remove it" : "Click to finish the zoom · Esc cancels"
+                ? pendingCut == null ? "Click to start a zoom; it snaps to the playhead and speed-part edges. Right-click a zoom to remove it" : "Click to finish the zoom · Esc leaves the tool"
                 : slowMode
-                ? pendingCut == null ? "Click to start slow motion; drag to move the playhead. Right-click a slow part to remove it" : "Click to finish the slow-motion part · Esc cancels"
+                ? pendingCut == null ? "Click to start a speed part; drag to move the playhead. Right-click a speed part to remove it" : "Click to finish the speed part · Esc leaves the tool"
                 : pendingCut == null ? "Click to start a cut; drag to move the playhead. Right-click a cut to restore it" : "Click to finish the cut · Esc cancels";
             return;
         }

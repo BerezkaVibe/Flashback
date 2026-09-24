@@ -75,6 +75,9 @@ public partial class TrimWindow
         UpdateAddButton();
 
         MarkStartKey.Text=Key(TrimAction.MarkStart); MarkStartButton.ToolTip="Set start at playhead · "+MarkStartKey.Text; AutomationProperties.SetName(MarkStartButton,"Set start, shortcut "+MarkStartKey.Text);
+        CutToolButton.ToolTip="Cut out: black out video or mute audio for part of the clip without removing time · "+Key(TrimAction.CutTool);
+        SlowToolButton.ToolTip="Speed: click two spots to slow down or speed up that part · "+Key(TrimAction.SpeedTool);
+        ZoomToolButton.ToolTip="Zoom: click two spots to zoom in on that part · "+Key(TrimAction.ZoomTool);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
         foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
             (UndoMenu,TrimAction.Undo),(RedoMenu,TrimAction.Redo),(AddSectionMenu,TrimAction.AddSection),(SplitMenu,TrimAction.Split),(RemoveMenu,TrimAction.RemoveSection),
@@ -116,6 +119,9 @@ public partial class TrimWindow
             case TrimAction.MarkedStart: SeekTo(Timeline.Start); break;
             case TrimAction.MarkedEnd: SeekTo(Timeline.End); break;
             case TrimAction.GoToTime: Timecode_Click(this,none); break;
+            case TrimAction.CutTool: CutTool_Click(this,none); break;
+            case TrimAction.SpeedTool: SlowTool_Click(this,none); break;
+            case TrimAction.ZoomTool: ZoomTool_Click(this,none); break;
             case TrimAction.MarkStart: MarkStart_Click(this,none); break;
             case TrimAction.MarkEnd: MarkEnd_Click(this,none); break;
             case TrimAction.AddSection: Add_Click(this,none); break;
