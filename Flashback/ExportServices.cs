@@ -155,10 +155,10 @@ internal static class ExportServices
     // CPU time the last exporter process used, for measurements.
     internal static TimeSpan LastProcessCpu;
 
-    internal static async Task RunAsync(IEnumerable<string> arguments, CancellationToken token, IProgress<double>? progress = null, double duration = 1)
+    internal static async Task RunAsync(IEnumerable<string> arguments, CancellationToken token, IProgress<double>? progress = null, double duration = 1, string? workingDirectory = null)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"))
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = workingDirectory ?? "" };
         foreach (var arg in new[] { "-hide_banner", "-loglevel", "error", "-nostdin", "-nostats", "-progress", "pipe:1" }.Concat(arguments)) info.ArgumentList.Add(arg);
         token.ThrowIfCancellationRequested();
         using var job = new ChildProcessJob();
@@ -205,7 +205,11 @@ internal static class ExportServices
             var inputs = new List<string>(); var filters = new List<string>(); var labels = "";
             // Pictures, masks, videos and sounds are extra inputs after the pieces.
             var extraInputs = new List<string>(); int extraCount = 0;
-            int AddInput(params string[] args) { extraInputs.AddRange(args); return pieces.Count + extraCount++; }
+            int AddInput(params string[] args) { extraInputs.AddRange(args.Select(Local)); return pieces.Count + extraCount++; }
+            // Files made for this export are named relative to its folder (ffmpeg runs there), which keeps
+            // the command short however many parts a big edit has.
+            string Local(string arg) => arg.StartsWith(overlayFolder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? arg[(overlayFolder.Length + 1)..] : arg;
+            Directory.CreateDirectory(overlayFolder);
             // Text, pictures and shapes are drawn to see-through pictures first; each piece reads the ones it shows.
             var clips = video && options.Overlays.Count > 0
                 ? await OverlayExport.RenderAsync(OverlayOrder.BackToFront(options.Overlays).Select(o => o.Validated()).ToList(), media.Width > 0 ? media.Width : 1920, media.Height > 0 ? media.Height : 1080, media.FrameRate, overlayFolder, token)
@@ -283,7 +287,7 @@ internal static class ExportServices
                                 chain.Add($"[{framed}]null{turn}{fade}{wait}[{next}p]");
                                 chain.Add($"[{label}][{next}p]overlay=x={Number(pip.CenterX)}-overlay_w/2:y={Number(pip.CenterY)}-overlay_h/2:eof_action=pass:enable='gte(t,{Number(lead)})*lt(t,{Number(lead + to - from)})'[{next}]");
                                 filters.AddRange(chain);
-                                if (audio && pip.HasSound && item.VideoVolume > 0)
+                                if (audio && pip.HasSound && item.VideoVolume > 0 && !piece.Freeze)
                                 {
                                     filters.Add($"[{input}:a:0]asetpts=PTS-STARTPTS,volume={Number(item.VideoVolume)},adelay=delays={Number(lead * 1000)}:all=1[{next}s]");
                                     pipSounds.Add($"[{next}s]");
@@ -380,12 +384,12 @@ internal static class ExportServices
             // If the graphics card can't decode this video, the export runs again decoding on the CPU.
             async Task Run(List<string> args)
             {
-                try { await RunAsync(args, token, progress, output); }
+                try { await RunAsync(args, token, progress, output, overlayFolder); }
                 catch (IOException) when (args.Contains("-hwaccel") && !token.IsCancellationRequested)
                 {
                     for (int i = args.IndexOf("-hwaccel"); i >= 0; i = args.IndexOf("-hwaccel")) args.RemoveRange(i, 2);
                     if (File.Exists(temp)) File.Delete(temp);
-                    await RunAsync(args, token, progress, output);
+                    await RunAsync(args, token, progress, output, overlayFolder);
                 }
             }
             // One bounded retry handles encoder/container overhead. Oversize output is never published as a success.
@@ -393,7 +397,9 @@ internal static class ExportServices
             {
                 var args = new List<string>();
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
-                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-filter_complex", string.Join(';',filters) });
+                // The filter graph is read from a file: a big edit's graph is longer than a command line may be.
+                File.WriteAllText(Path.Combine(overlayFolder, "graph.txt"), string.Join(';', filters));
+                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-/filter_complex", "graph.txt" });
                 if (video) args.AddRange(new[] { "-map", "[v]" });
                 if (!video) { args.AddRange(new[] { "-map", finalAudio, "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await Run(args); break; }
                 if (options.IsGif) { args.AddRange(new[] { "-loop", "0", "-f", "gif", temp }); await Run(args); break; }

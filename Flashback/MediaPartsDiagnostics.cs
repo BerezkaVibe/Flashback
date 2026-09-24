@@ -116,7 +116,10 @@ internal static class MediaPartsDiagnostics
         Check(Near(await Rgb(frozen, 1.8, 320, 180), 0, 255, 0), "Shapes and text show on the held frame");
         var pcmHold = await Pcm(frozen, 1.3, .8);
         Check(Loudness(pcmHold) < 300, "The hold is silent");
-        // Sections play in the order they're listed: 3-4 s, then 0-1 s.
+        // A freeze while an inset video (with its own sound) plays: the hold is silent, the export works.
+        var frozenInset = Path.Combine(folder, "Freeze with inset.mp4");
+        await ExportServices.PreciseAsync(source, frozenInset, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { Freezes = new[] { new FreezeFrame(2, 1) }, Overlays = new[] { pip with { Start = 0, End = 4 } } });
+        Check(Math.Abs(ClipMedia.Read(frozenInset).Duration - 5) < .2 && ClipMedia.Read(frozenInset).HasAudio, "A freeze frame works alongside an inset video with sound");        // Sections play in the order they're listed: 3-4 s, then 0-1 s.
         var swapped = Path.Combine(folder, "Swapped.mp4");
         await ExportServices.PreciseAsync(source, swapped, new[] { new KeepSection(3, 4), new KeepSection(0, 1) }, null, CancellationToken.None, true, new ShareExportOptions());
         double first = Difference(await Gray(swapped, .5, 0, 0, 640, 360), await Gray(source, 3.5, 0, 0, 640, 360)), second = Difference(await Gray(swapped, 1.5, 0, 0, 640, 360), await Gray(source, .5, 0, 0, 640, 360));
@@ -130,6 +133,13 @@ internal static class MediaPartsDiagnostics
         var mixedMedia = ClipMedia.Read(mixed);
         Check(mixedMedia.Width == 640 && mixedMedia.Height == 360 && Math.Abs(mixedMedia.Duration - 12) < .3 && Near(await Rgb(mixed, 9, 320, 180), 255, 0, 255) && !Near(await Rgb(mixed, 9, 10, 180), 255, 0, 255),
             "A clip of another size is converted to match: fitted and letterboxed");
+        // A recording with separate desktop and microphone tracks keeps them when another clip joins it.
+        var tracks = Path.Combine(folder, "Three tracks.mp4");
+        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=3", "-f", "lavfi", "-i", "sine=f=440:d=3", "-f", "lavfi", "-i", "sine=f=660:d=3", "-f", "lavfi", "-i", "sine=f=880:d=3",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", tracks);
+        var tracksJoined = await ClipJoin.JoinAsync(tracks, inset, Path.Combine(folder, "Joined tracks.mp4"), null, CancellationToken.None, syntheticEncoder: true);
+        var tracksMedia = ClipMedia.Read(tracksJoined);
+        Check(tracksMedia.HasSeparateTracks && Math.Abs(tracksMedia.Duration - 9) < .3, $"Joining keeps separate desktop and microphone tracks ({tracksMedia.AudioTracks} tracks, {tracksMedia.Duration:0.0} s)");
         // ---- Volume parts and music ----
         var quiet = Path.Combine(folder, "Volume part.mp4");
         await ExportServices.PreciseAsync(source, quiet, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { VolumeRegions = new[] { new VolumeRegion(0, 1, 2, 0) } });

@@ -144,7 +144,8 @@ public partial class TrimWindow
         CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
         Player.IsMuted = userMuted || mute;
     }
-    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.CutMode = false; Timeline.SlowMode = false; ResetZoom(); ResetOverlays(); ShowCutTool(); }
+    // A newly opened video starts clean: every part from the last one goes.
+    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.Freezes = Array.Empty<FreezeFrame>(); Timeline.VolumeRegions = Array.Empty<VolumeRegion>(); SetSounds(Array.Empty<SoundItem>()); Timeline.CutMode = false; Timeline.SlowMode = false; Timeline.VolumeMode = false; Timeline.SoundMode = false; FreezePopup.IsOpen = false; ResetZoom(); ResetOverlays(); ShowCutTool(); }
     // Lit in the accent color while the tool is on; otherwise it looks like the other icons.
     private void ShowCutTool()
     {

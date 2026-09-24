@@ -57,13 +57,14 @@ public partial class TrimWindow
     private void PastePart()
     {
         if (copiedPart is not { } part) { StatusLabel.Text = "Nothing copied yet. Click a part and press Ctrl+C."; return; }
+        // A freeze is a single moment, so it goes right at the playhead.
+        if (part is FreezeFrame copiedFreeze) { AddFreeze(playhead, copiedFreeze.Seconds); return; }
         var (from, to) = SpanOf(part);
         double start = Math.Min(playhead, Math.Max(0, media.Duration - .05)), end = Math.Min(media.Duration, start + (to - from));
         if (end - start < 1 / Math.Max(1, media.FrameRate)) { StatusLabel.Text = "There's no room after the playhead to paste it."; return; }
         bool Overlaps(double a, double b) => b > start + 1e-9 && a < end - 1e-9;
         switch (part)
         {
-            case FreezeFrame freeze: AddFreeze(start, freeze.Seconds); break;
             case CutRegion cut:
                 if (cut.Lane >= Timeline.Lanes.Count) { StatusLabel.Text = "This clip has no matching audio track for that cut-out."; return; }
                 CutAdded(cut with { Start = start, End = end }); break;
@@ -97,10 +98,26 @@ public partial class TrimWindow
     // Arrow keys move the selected text or picture a pixel at a time (Shift: ten).
     private bool Nudge(Key key, ModifierKeys modifiers)
     {
-        if (focusedKind != PartKind.Overlay || SelectedOverlayItem is null || modifiers is not (ModifierKeys.None or ModifierKeys.Shift) || key is not (Key.Left or Key.Right or Key.Up or Key.Down)) return false;
+        if (modifiers is not (ModifierKeys.None or ModifierKeys.Shift)) return false;
+        // A freeze frame steps a frame at a time (ten with Shift).
+        if (focusedKind == PartKind.Freeze && key is Key.Left or Key.Right && CurrentPart() is FreezeFrame freeze)
+        {
+            int i = Timeline.Freezes.ToList().IndexOf(freeze);
+            double at = Math.Clamp(freeze.At + (key == Key.Left ? -1 : 1) * (modifiers == ModifierKeys.Shift ? 10 : 1) * FrameStep, 0, Math.Max(0, media.Duration - FrameStep));
+            if (i < 0 || Timeline.Freezes.Where((_, n) => n != i).Any(f => Math.Abs(f.At - at) < FrameStep / 2)) return true;
+            if (lastOverlayControl != "nudgeFreeze" || System.Diagnostics.Stopwatch.GetElapsedTime(lastOverlayChange).TotalSeconds > 1.2) Snapshot();
+            lastOverlayControl = "nudgeFreeze"; lastOverlayChange = System.Diagnostics.Stopwatch.GetTimestamp();
+            var moved = freeze with { At = at };
+            Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? moved : f).OrderBy(f => f.At).ToArray();
+            FocusPart(moved); UpdateExportHint(); ProjectChanged();
+            StatusLabel.Text = $"Freeze frame at {KeepSection.TimeText(at)} · arrows move it a frame, Shift ten.";
+            return true;
+        }
+        if (focusedKind != PartKind.Overlay || SelectedOverlayItem is null || key is not (Key.Left or Key.Right or Key.Up or Key.Down)) return false;
         double step = modifiers == ModifierKeys.Shift ? 10 : 1, w = Math.Max(1, media.Width > 0 ? media.Width : 1920), h = Math.Max(1, media.Height > 0 ? media.Height : 1080);
         double dx = key == Key.Left ? -step : key == Key.Right ? step : 0, dy = key == Key.Up ? -step : key == Key.Down ? step : 0;
-        EditOverlay("nudge", o => o with { X = o.X + dx / w, Y = o.Y + dy / h });
+        // With keyframes, the nudge sets a keyframe at the playhead, like dragging does.
+        EditOverlay("nudge", o => Keyed(o, x => x with { X = x.X + dx / w, Y = x.Y + dy / h }));
         LoadOverlayUi();
         StatusLabel.Text = "Arrow keys nudge it a pixel; Shift moves ten. Click the timeline to step frames again.";
         return true;

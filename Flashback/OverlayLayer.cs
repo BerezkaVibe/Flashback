@@ -98,7 +98,9 @@ internal sealed class OverlayLayer : FrameworkElement
         drawn = showing;
         stuck.Children.Clear(); screen.Children.Clear();
         // Forget drawings for items that were edited or removed.
-        foreach (var gone in contents.Keys.Where(k => !items.Contains(k)).ToList()) contents.Remove(gone);
+        var current = new HashSet<OverlayItem>(items, ReferenceEqualityComparer.Instance);
+        foreach (var gone in contents.Keys.Where(k => !current.Contains(k)).ToList()) contents.Remove(gone);
+        foreach (var gone in built.Keys.Where(k => !current.Contains(k)).ToList()) built.Remove(gone);
         var v = Video;
         stuck.Transform = new MatrixTransform(zoom);
         stuck.Clip = new RectangleGeometry(zoomClip ?? v); screen.Clip = new RectangleGeometry(v);
@@ -110,21 +112,30 @@ internal sealed class OverlayLayer : FrameworkElement
             // entrance or exit motion. Exports are unaffected.
             var item = PerformanceOptions.PreviewEffects ? original : Plain(original);
             double local = time - item.Start;
-            Visual visual;
-            if (item.IsRegion) visual = RegionVisual(item, local, toElement);
-            else
+            var state = item.StateAt(local);
+            // An item's visual is kept until something it shows changes, so a keyframed item moving
+            // doesn't rebuild the blur, pixelation and drawings around it every frame.
+            var key = (state, item.Kind == OverlayKind.Image ? OverlayRenderer.FrameAt(item, local) : 0, item.Keys.Count > 1 ? item.Posed(local) : null,
+                toElement, item.IsRegion ? zoom : Matrix.Identity, item.IsRegion ? Source : null, PerformanceOptions.PreviewEffects);
+            if (!built.TryGetValue(original, out var cached) || !cached.Key.Equals(key))
             {
-                var state = item.StateAt(local);
-                var content = ContentFor(original, state);
-                if (item.Kind == OverlayKind.Video) content = WithVideo(item, content, PlayerFor(original));
-                var drawing = OverlayRenderer.Visual(item, local, VideoWidth, VideoHeight, content);
-                drawing.Transform = new MatrixTransform(toElement);
-                visual = drawing;
+                Visual visual;
+                if (item.IsRegion) visual = RegionVisual(item, local, toElement);
+                else
+                {
+                    var content = ContentFor(original, state);
+                    if (item.Kind == OverlayKind.Video) content = WithVideo(item, content, PlayerFor(original));
+                    var drawing = OverlayRenderer.Visual(item, local, VideoWidth, VideoHeight, content);
+                    drawing.Transform = new MatrixTransform(toElement);
+                    visual = drawing;
+                }
+                built[original] = cached = (key, visual);
             }
-            (item.StickToVideo ? stuck : screen).Children.Add(visual);
+            (item.StickToVideo ? stuck : screen).Children.Add(cached.Visual);
         }
         DrawHandles();
     }
+    private readonly Dictionary<OverlayItem, (object Key, Visual Visual)> built = new(ReferenceEqualityComparer.Instance);
 
     // ---- Blur and pixelate shapes ----
     // The preview's video, blurred or blown up into blocks, shows through the shape.

@@ -179,7 +179,7 @@ public partial class TrimWindow
         drawTool = tool; DrawToolIcon.Data = DrawIcon(tool);
         DrawToolButton.ToolTip = DrawTip(tool) + " · " + TrimShortcuts.Display(keys[TrimAction.DrawTool]) + " · the arrow picks another way";
         // An open shape switches to the new way right away.
-        if (OverlayView.Drawing != null) OverlayView.SetDrawing(tool);
+        if (OverlayView.Drawing is { } drawing && drawing != tool) OverlayView.SetDrawing(tool);
     }
     // Draw on the video for the selected shape; the drawing replaces its outline.
     private void StartDrawing(OverlayLayer.DrawTool tool)

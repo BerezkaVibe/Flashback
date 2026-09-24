@@ -28,30 +28,45 @@ internal static class OverlayExport
 
     internal static Task<List<Clip>> RenderAsync(IReadOnlyList<OverlayItem> items, int width, int height, double frameRate, string folder, CancellationToken token)
     {
+        Directory.CreateDirectory(folder);
         var done = new TaskCompletionSource<List<Clip>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        // WPF drawing needs a single-threaded apartment; this keeps the window responsive meanwhile.
-        var thread = new Thread(() =>
+        // WPF drawing needs single-threaded apartments; several draw items side by side (animated
+        // items are hundreds of pictures each) while the window stays responsive.
+        var results = new Clip?[items.Count]; int next = -1, running = 0; Exception? failure = null;
+        int threads = Math.Clamp(Math.Min(items.Count, Environment.ProcessorCount / 2), 1, 6);
+        for (int t = 0; t < threads; t++)
         {
-            try { done.SetResult(Render(items, width, height, frameRate, folder, token)); }
-            catch (Exception ex) { done.SetException(ex); }
-        }) { IsBackground = true, Name = "Overlay export" };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
+            Interlocked.Increment(ref running);
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    for (int i = Interlocked.Increment(ref next); i < items.Count && failure == null; i = Interlocked.Increment(ref next))
+                        results[i] = RenderItem(items[i], i + 1, width, height, frameRate, folder, token);
+                }
+                catch (Exception ex) { Interlocked.CompareExchange(ref failure, ex, null); }
+                finally
+                {
+                    if (Interlocked.Decrement(ref running) == 0)
+                    {
+                        if (failure != null) done.SetException(failure);
+                        else done.SetResult(results.Where(c => c != null).Select(c => c!).ToList());
+                    }
+                }
+            }) { IsBackground = true, Name = "Overlay export", Priority = ThreadPriority.BelowNormal };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
         return done.Task;
     }
 
-    private static List<Clip> Render(IReadOnlyList<OverlayItem> items, int width, int height, double frameRate, string folder, CancellationToken token)
+    private static Clip? RenderItem(OverlayItem item, int n, int width, int height, double frameRate, string folder, CancellationToken token)
     {
-        Directory.CreateDirectory(folder);
-        var clips = new List<Clip>();
         double step = 1 / Math.Clamp(frameRate, 1, 60), aspect = width / (double)Math.Max(1, height);
-        int n = 0;
-        foreach (var item in items)
         {
             token.ThrowIfCancellationRequested();
-            n++;
-            if (item.Length <= 0) continue;
-            if (item.Kind == OverlayKind.Video) { if (VideoClip(item, width, height, folder, n) is { } pip) clips.Add(pip); continue; }
+            if (item.Length <= 0) return null;
+            if (item.Kind == OverlayKind.Video) return VideoClip(item, width, height, folder, n);
             // Blur and pixelate shapes only need their outline: no shadow, just the mask.
             var drawn = item.IsRegion ? item with { Shadow = new OverlayShadow() } : item;
             // Every moment the item's look can change: through its entrance and exit, and at GIF frames.
@@ -78,12 +93,12 @@ internal static class OverlayExport
                 union.Union(OverlayRenderer.Bounds(posed, s, width, height, OverlayRenderer.Content(posed, s.Chars, t, aspect)));
             }
             union.Intersect(new Rect(0, 0, width, height));
-            if (union.IsEmpty || union.Width < 1 || union.Height < 1) continue;
+            if (union.IsEmpty || union.Width < 1 || union.Height < 1) return null;
             int x = (int)Math.Floor(union.X), y = (int)Math.Floor(union.Y);
             int right = (int)Math.Ceiling(union.Right), bottom = (int)Math.Ceiling(union.Bottom);
             // Blur and pixelate boxes line up with the video's colour samples, which come in pairs.
             if (item.IsRegion) { x &= ~1; y &= ~1; right = Math.Min(width & ~1, (right + 1) & ~1); bottom = Math.Min(height & ~1, (bottom + 1) & ~1); }
-            if (right - x < 2 || bottom - y < 2) continue;
+            if (right - x < 2 || bottom - y < 2) return null;
             var box = new Int32Rect(x, y, Math.Min(width - x, right - x), Math.Min(height - y, bottom - y));
             var frames = new List<(double, string)>();
             for (int i = 0; i < looks.Count; i++)
@@ -96,9 +111,8 @@ internal static class OverlayExport
             string blank = Path.Combine(folder, $"item{n}-blank.png");
             var empty = BitmapSource.Create(box.Width, box.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[box.Width * box.Height * 4], box.Width * 4);
             Save(empty, blank);
-            clips.Add(new Clip(item, box, frames, blank));
+            return new Clip(item, box, frames, blank);
         }
-        return clips;
     }
     // Picture-in-picture: the video itself goes through ffmpeg; here its size, crop and centre are
     // worked out, and its mask and border are drawn at that size.

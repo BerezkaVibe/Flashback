@@ -44,18 +44,35 @@ internal static class ClipJoin
                 var encoder = syntheticEncoder ? null : await VideoEncoder.SelectAsync(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"), Storage.Load(out _).Encoder, null, null, token);
                 string fps = ExportServices.Number(a.FrameRate > 0 ? a.FrameRate : 30), last = encoder?.IsAmd == true ? "format=nv12,hwupload" : "format=yuv420p";
                 string Fit(int input) => $"[{input}:v:0]scale={a.Width}:{a.Height}:force_original_aspect_ratio=decrease,pad={a.Width}:{a.Height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps},format=yuv420p[v{input}]";
-                // The combined track of each (or silence), in one shape so they join cleanly.
-                string Sound(int input, ClipMedia m) => m.HasAudio
-                    ? $"[{input}:a:0]aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a{input}]"
-                    : $"anullsrc=r=48000:cl=stereo,atrim=duration={ExportServices.Number(m.Duration)}[a{input}]";
+                // The joined file keeps the first clip's audio layout. A recording with separate desktop and
+                // microphone tracks keeps all three; a clip without them joins with its sound as the
+                // combined and desktop tracks and a silent microphone. Everything is made one shape so
+                // the pieces join cleanly.
                 bool sound = a.HasAudio || b.HasAudio;
+                int tracks = a.HasSeparateTracks ? 3 : 1;
+                string Sound(int input, ClipMedia m, int track)
+                {
+                    int from = m.HasSeparateTracks ? track : track == 1 ? 0 : track;
+                    return m.HasAudio && from < m.AudioTracks && !(track == 2 && !m.HasSeparateTracks)
+                        ? $"[{input}:a:{from}]aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a{input}t{track}]"
+                        : $"anullsrc=r=48000:cl=stereo,atrim=duration={ExportServices.Number(m.Duration)}[a{input}t{track}]";
+                }
                 var filters = new List<string> { Fit(0), Fit(1) };
-                if (sound) { filters.Add(Sound(0, a)); filters.Add(Sound(1, b)); filters.Add($"[v0][a0][v1][a1]concat=n=2:v=1:a=1[j][a]"); }
+                if (sound)
+                {
+                    for (int track = 0; track < tracks; track++) { filters.Add(Sound(0, a, track)); filters.Add(Sound(1, b, track)); }
+                    string Inputs(int input) => $"[v{input}]" + string.Concat(Enumerable.Range(0, tracks).Select(track => $"[a{input}t{track}]"));
+                    filters.Add($"{Inputs(0)}{Inputs(1)}concat=n=2:v=1:a={tracks}[j]" + string.Concat(Enumerable.Range(0, tracks).Select(track => $"[a{track}]")));
+                }
                 else filters.Add("[v0][v1]concat=n=2:v=1:a=0[j]");
                 filters.Add($"[j]{last}[v]");
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
                 args.AddRange(new[] { "-i", first, "-i", second, "-filter_complex", string.Join(';', filters), "-map", "[v]" });
-                if (sound) args.AddRange(new[] { "-map", "[a]", "-c:a", "aac", "-b:a", "192k" });
+                if (sound)
+                {
+                    for (int track = 0; track < tracks; track++) args.AddRange(new[] { "-map", $"[a{track}]" });
+                    args.AddRange(new[] { "-c:a", "aac", "-b:a", "192k" });
+                }
                 if (encoder == null) args.AddRange(new[] { "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-threads", "2" });
                 else args.AddRange(encoder.EncodingArguments(new Settings(), export: true));
                 args.AddRange(new[] { "-bf", "0", "-movflags", "+faststart", "-f", "mp4", temp });
