@@ -1,4 +1,4 @@
-# Flashback 0.7.5 for Windows
+# Flashback 0.8.0 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
@@ -6,6 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
+- **0.8.0**: Text and picture tools (T and P): captions with fonts, outlines, gradients, shadows and shapes you can reshape by their corners; pictures and GIFs with crop, flip, borders and background removal; animations in and out; layers you drag to reorder; scroll to scale, rotate or fade on the video. Delete removes the clicked timeline part. Tools in a compact block.
 - **0.7.5**: Zoom parts on the timeline (Q): aim with a box on the video, shape the zoom-in with an editable curve or a preset, save your own presets, optional zoom out; zoom parts can overlap speed parts.
 - **0.7.4**: In-app updates now work (a green download icon appears beside the title when one is ready); speed parts from 0.1× to 4× with a slider; X and R hotkeys for the cut out and speed tools; one Esc leaves a tool.
 - **0.7.3**: Faster Record (encoder check remembered, no freeze) with Record/Recording button; rename clips in place; slow-motion parts on the timeline and a slow-motion export speed; microphone noise suppression; fixed garbled Compress file names.
@@ -22,7 +23,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.7.5-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.8.0-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.
