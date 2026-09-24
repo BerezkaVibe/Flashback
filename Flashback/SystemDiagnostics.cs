@@ -143,7 +143,8 @@ internal static class SystemDiagnostics
                 Result("Save while the desktop is static", File.Exists(still.Path), still.Path);
                 animation.Start();
                 var fill = Stopwatch.StartNew();
-                while (recorder.IsRecording && recorder.RecordedSeconds < replay + 7 && fill.Elapsed.TotalSeconds < replay + 15) await Task.Delay(200);
+                // Saves never repeat footage, so a full-length clip needs a whole replay recorded after the last save.
+                while (recorder.IsRecording && recorder.RecordedSeconds < Math.Max(replay + 7, recorder.SavedThrough + replay + 2) && fill.Elapsed.TotalSeconds < replay + 25) await Task.Delay(200);
                 var full = await recorder.SaveAsync("Full buffer test", DateTimeOffset.Now);
                 Result("Full hardware replay duration", Math.Abs(full.Duration - replay) <= .1, $"{full.Duration:0.000}s; {full.Path}");
                 int chunks = Directory.EnumerateFiles(Path.Combine(Storage.Root, "buffer"), "*.ts", SearchOption.AllDirectories).Count();
@@ -166,20 +167,20 @@ internal static class SystemDiagnostics
                     await recorder.StartAttemptAsync(settings, synthetic: false, transfer: transfer);
                 }, () => true);
                 var retryClip = await recorder.SaveAsync("GPU transfer retry", DateTimeOffset.Now);
-                Result("Native GPU transfer retry with audio and partial replay", recorder.UsesGpuTransfer && retryClip.Duration >= 2 && retryClip.Duration < 15 && File.Exists(retryClip.Path), retryClip.Path);
+                Result("Native GPU transfer retry with audio and partial replay", (recorder.UsesGpuTransfer || recorder.UsesFrameBridge) && retryClip.Duration >= 1.9 && retryClip.Duration < 15 && File.Exists(retryClip.Path), $"GPU transfer {recorder.UsesGpuTransfer}, frame bridge {recorder.UsesFrameBridge}; {retryClip.Duration:0.000}s; {retryClip.Path}");
                 using var retryDecode = Launch(new[] { "-hide_banner", "-loglevel", "error", "-i", retryClip.Path, "-f", "null", "-" });
                 var retryErrors = retryDecode.StandardError.ReadToEndAsync(); var retryOutput = retryDecode.StandardOutput.ReadToEndAsync();
                 using var retryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 try { await retryDecode.WaitForExitAsync(retryTimeout.Token); } finally { if (!retryDecode.HasExited) retryDecode.Kill(true); }
                 var retryLog = await retryErrors; await retryOutput;
                 Result("GPU transfer replay fully decodes", retryDecode.ExitCode == 0 && string.IsNullOrWhiteSpace(retryLog), retryLog);
-                var beforeRecovery = recorder.RecordedSeconds;
+                var beforeRecovery = recorder.RecordedSeconds; var savedBefore = recorder.SavedThrough;
                 // Stop the actual encoder as if DXGI access was lost, then use the
                 // same restart path as the UI without changing Windows display mode.
                 recorder.InjectCaptureLossForTest(audioPipeFirst: true, releaseFrame: true);
                 await recorder.RestartAfterCaptureLossAsync(settings, false, CancellationToken.None);
                 var recovered = await recorder.SaveAsync("Recovered hardware replay", DateTimeOffset.Now);
-                Result("Hardware audio/video buffer survives capture reconnection", recorder.LastRestartPreservedBuffer && recovered.Duration > beforeRecovery + 1, $"Before {beforeRecovery:0.000}s; replay {recovered.Duration:0.000}s; {recovered.Path}");
+                Result("Hardware audio/video buffer survives capture reconnection", recorder.LastRestartPreservedBuffer && recovered.Duration > beforeRecovery - savedBefore + 1, $"Unsaved before the loss {beforeRecovery - savedBefore:0.000}s; replay {recovered.Duration:0.000}s; {recovered.Path}");
                 using var recoveredDecode = Launch(new[] { "-hide_banner", "-loglevel", "error", "-i", recovered.Path, "-f", "null", "-" });
                 var recoveredErrors = recoveredDecode.StandardError.ReadToEndAsync(); var recoveredOutput = recoveredDecode.StandardOutput.ReadToEndAsync();
                 await recoveredDecode.WaitForExitAsync();

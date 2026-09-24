@@ -46,6 +46,8 @@ public sealed class Recorder : IAsyncDisposable
     private bool stopping;
     private int saving;
     private double savedThrough;
+    // Where the last save ended: the next save starts no earlier, so clips never repeat footage.
+    internal double SavedThrough => savedThrough;
     public bool IsRecording => process != null && !process.HasExited && !stopping;
     public bool IsSaving => Volatile.Read(ref saving) != 0;
     public double BufferedSeconds { get; private set; }
@@ -55,6 +57,8 @@ public sealed class Recorder : IAsyncDisposable
     public (int Width, int Height) RecordingSize { get; private set; }
     public string LastError { get; private set; } = "";
     public bool UsesGpuTransfer { get; private set; }
+    // The native capture path hands frames straight to the encoder, so no CUDA transfer is involved.
+    internal bool UsesFrameBridge => video != null;
     private VideoEncoder? selectedEncoder;
     public string EncoderName => selectedEncoder?.Name ?? "Hardware";
     public bool UsesCompatibilityConversion => selectedEncoder is { IsAmd: true, Conversion: AmdConversion.Compatibility };

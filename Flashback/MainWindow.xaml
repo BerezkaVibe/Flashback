@@ -85,6 +85,24 @@
       <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="20"/><ColumnDefinition/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Dark palette" Style="{StaticResource Caption}"/><ComboBox x:Name="PaletteBox" SelectionChanged="Appearance_Changed"/></StackPanel><StackPanel Grid.Column="2"><TextBlock Text="Accent color" Style="{StaticResource Caption}"/><ComboBox x:Name="AccentBox" SelectionChanged="Appearance_Changed"/></StackPanel></Grid>
       <TextBlock Text="Applies immediately. Recording keeps running." Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,10,0,0"/>
      </StackPanel></ScrollViewer></TabItem>
+     <TabItem x:Name="PerformanceSettings" Header="Performance" Style="{StaticResource SideTab}"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,0,12,0">
+      <TextBlock Text="Performance" Style="{StaticResource SettingsHeading}"/>
+      <TextBlock Text="Flashback is light by default. On an older or busy PC, these help it stay out of your game's way." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+      <CheckBox x:Name="LighterModeCheck" Content="Lighter mode" Click="LighterMode_Click" ToolTip="Turns off every extra below in one go"/>
+      <TextBlock Text="Turns off thumbnails, waveforms, preview effects and animations in one go. Exports and recordings look the same." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,6"/>
+      <TextBlock Text="Recording" Style="{StaticResource Caption}" Margin="0,16,0,4"/>
+      <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Text="Recording is the biggest cost, and it's set under Video. On a weaker PC we recommend 720p at 30 FPS: it uses about half the CPU of 1080p 60 (about 11% of one core instead of 23% in our tests)."/>
+      <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" Text="The per-app audio mixer and microphone noise suppression each add about another 10% of a core, so leave them off if you don't need them."/>
+      <Button x:Name="RecommendedVideoButton" Content="Use 720p 30 FPS" Click="RecommendedVideo_Click" HorizontalAlignment="Left" Margin="0,8,0,0" ToolTip="Sets Video to 720p at 30 FPS. Click Apply settings to use it."/>
+      <TextBlock Text="Editing and browsing" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
+      <CheckBox x:Name="ThumbnailsCheck" Content="Clip thumbnails on the Clips page" Click="PerformanceToggle_Click" ToolTip="Off: clips are listed without preview pictures, which saves reading every video file"/>
+      <CheckBox x:Name="WaveformsCheck" Content="Audio waveforms in the trimmer" Click="PerformanceToggle_Click" ToolTip="Off: the audio lanes still work, without reading the whole soundtrack to draw them"/>
+      <CheckBox x:Name="PreviewEffectsCheck" Content="Shadows and animations in the trimmer preview" Click="PerformanceToggle_Click" ToolTip="Off: text and pictures show without shadows or entrance animations while editing. Exports still include them."/>
+      <CheckBox x:Name="AnimationsCheck" Content="Interface animations" Click="PerformanceToggle_Click" ToolTip="The pulsing record light, sliding audio lanes and similar touches"/>
+      <TextBlock Text="Exports" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
+      <CheckBox x:Name="GpuExportCheck" Content="GPU-accelerated export" ToolTip="Decodes your clip on the graphics card while exporting. Turn off if exports fail or look wrong."/>
+      <TextBlock Text="Exports decode on the graphics card: about 3.5× faster and a third of the CPU, even while a game is running." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,6"/>
+     </StackPanel></ScrollViewer></TabItem>
      <TabItem Header="Storage" Style="{StaticResource SideTab}"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,0,12,0">
       <TextBlock Text="Storage and startup" Style="{StaticResource SettingsHeading}"/>
       <TextBlock Text="Clips folder" Style="{StaticResource Caption}"/>
@@ -95,11 +113,7 @@
       <CheckBox x:Name="AutoBufferCheck" Content="Start the replay buffer when Flashback launches"/>
       <CheckBox x:Name="AutoGameCheck" Content="Start recording when a game opens, and stop after it closes"/>
       <TextBlock Text="External editor" Style="{StaticResource Caption}" Margin="0,18,0,7"/>
-      <TextBlock x:Name="EditorLabel" Foreground="{DynamicResource Muted}" Margin="0,0,0,10" TextWrapping="Wrap"/><Button Content="Choose app…" Click="ChooseEditor_Click" HorizontalAlignment="Left" Margin="0,0,0,12"/>
-      <TextBlock Text="Exports" Style="{StaticResource Caption}" Margin="0,18,0,0"/>
-      <CheckBox x:Name="GpuExportCheck" Content="GPU-accelerated export" ToolTip="Decodes your clip on the graphics card while exporting: about 3.5 times faster and much lighter on the CPU, even while a game is running. Turn off if exports fail or look wrong."/>
-      <TextBlock Text="Exports decode on the graphics card, about 3.5× faster and lighter on the CPU." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,6"/>
-      <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,18,0,0"/>
+      <TextBlock x:Name="EditorLabel" Foreground="{DynamicResource Muted}" Margin="0,0,0,10" TextWrapping="Wrap"/><Button Content="Choose app…" Click="ChooseEditor_Click" HorizontalAlignment="Left" Margin="0,0,0,12"/>      <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,18,0,0"/>
       <CheckBox x:Name="UpdateCheck" Content="Check for updates when Flashback starts"/>
       <StackPanel Orientation="Horizontal" Margin="0,4,0,12"><Button x:Name="CheckUpdatesButton" Content="Check now" Click="CheckUpdates_Click"/><TextBlock x:Name="UpdateStatusLabel" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/></StackPanel>
      </StackPanel></ScrollViewer></TabItem>

@@ -72,6 +72,22 @@ internal static class UiDiagnostics
         Check(window.MainTabs.SelectedIndex == 1 && window.PageTitle.Text == "Settings" && window.RecordingSettings.IsSelected && window.DisplayBox.ActualHeight > 0, "Gear opens settings on the video tab");
         window.RecordingSettings.IsSelected = true; Layout();
         Check(window.DisplayBox.ActualHeight > 0 && window.EncoderBox.ActualHeight > 0, "Display and hardware encoder choices remain accessible in settings");
+        // Performance tab: Lighter mode turns every extra off, one extra back on clears it, the
+        // recommendation fills in 720p 30 FPS without applying it, and the choices are saved.
+        var uiFlags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        Check(window.ThumbnailsCheck.IsChecked == true && window.GpuExportCheck.IsChecked == true && window.LighterModeCheck.IsChecked == false, "Performance extras and GPU export start on");
+        window.LighterModeCheck.IsChecked = true; typeof(MainWindow).GetMethod("LighterMode_Click", uiFlags)!.Invoke(window, new object[] { window, new RoutedEventArgs() });
+        Check(window.ThumbnailsCheck.IsChecked == false && window.WaveformsCheck.IsChecked == false && window.PreviewEffectsCheck.IsChecked == false && window.AnimationsCheck.IsChecked == false, "Lighter mode turns every extra off");
+        var lighter = (Settings)typeof(MainWindow).GetMethod("ReadControls", uiFlags)!.Invoke(window, null)!;
+        Check(!lighter.ShowThumbnails && !lighter.ShowWaveforms && !lighter.PreviewEffects && !lighter.UiAnimations && lighter.ExportGpuDecode, "Lighter mode is saved with the settings, leaving GPU export on");
+        window.WaveformsCheck.IsChecked = true; typeof(MainWindow).GetMethod("PerformanceToggle_Click", uiFlags)!.Invoke(window, new object[] { window, new RoutedEventArgs() });
+        Check(window.LighterModeCheck.IsChecked == false, "Turning one extra back on clears Lighter mode");
+        typeof(MainWindow).GetMethod("RecommendedVideo_Click", uiFlags)!.Invoke(window, new object[] { window, new RoutedEventArgs() });
+        Check((int)window.ResolutionBox.SelectedValue == 720 && (int)window.FpsBox.SelectedValue == 30 && Storage.Load(out _).Height != 720, "The 720p 30 FPS suggestion fills in the video settings without saving them");
+        window.PerformanceSettings.IsSelected = true; Layout(); Render("settings-performance.png");
+        window.RecordingSettings.IsSelected = true; Layout();
+        window.LighterModeCheck.IsChecked = false; typeof(MainWindow).GetMethod("LighterMode_Click", uiFlags)!.Invoke(window, new object[] { window, new RoutedEventArgs() });
+        window.ResolutionBox.SelectedValue = 1080; window.FpsBox.SelectedValue = 60;
         Check(window.LengthSlider.Value==60 && window.LengthSlider.TickFrequency==5 && window.LengthSlider.IsSnapToTickEnabled,"Replay slider shows the saved duration and snaps to five seconds");
         var header=window.RecordingSettings;
         Check(header.ActualHeight>=40 && Hits(header,header,new Point(4,4)),"Settings tab rows are clickable across their full height");

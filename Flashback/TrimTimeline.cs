@@ -190,7 +190,7 @@ internal sealed class TrimTimeline : FrameworkElement
             if (lanesExpanded == value) return;
             lanesExpanded = value;
             // Slide the lanes open or shut; skip the motion when Windows animations are off.
-            if (SystemParameters.ClientAreaAnimation && IsLoaded)
+            if (SystemParameters.ClientAreaAnimation && PerformanceOptions.Animations && IsLoaded)
                 BeginAnimation(LaneRevealProperty, new DoubleAnimation(value ? 1 : 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
             else { BeginAnimation(LaneRevealProperty, null); LaneReveal = value ? 1 : 0; }
         }

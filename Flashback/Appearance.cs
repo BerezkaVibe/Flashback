@@ -47,7 +47,7 @@ public partial class MainWindow
     {
         if (on == pulsing) return;
         pulsing = on;
-        if (!on) { RecordDot.BeginAnimation(UIElement.OpacityProperty, null); RecordDot.Opacity = 1; return; }
+        if (!on || !PerformanceOptions.Animations) { RecordDot.BeginAnimation(UIElement.OpacityProperty, null); RecordDot.Opacity = on ? .6 : 1; return; }
         RecordDot.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, .3, TimeSpan.FromMilliseconds(450))
             { AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever });
     }

@@ -125,7 +125,7 @@ public partial class MainWindow : Window
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
-        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
+        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
     private void ReplayLength_Changed(object sender,RoutedPropertyChangedEventArgs<double> e)
     {
@@ -147,7 +147,7 @@ public partial class MainWindow : Window
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
-        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
+        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath
@@ -173,7 +173,7 @@ public partial class MainWindow : Window
                 throw;
             }
             bool restart = recorder.IsRecording && next.RequiresBufferRestart(previous);
-            settings = next; if (!restart) recorder.SetAudioLive(next);
+            settings = next; PerformanceOptions.Apply(next); if (!restart) recorder.SetAudioLive(next);
             overlay.Dispose();
             if (restart) { Tell("Restarting the buffer with your settings…"); await recorder.StartAsync(settings, syntheticCapture); }
             Tell("Settings saved." + (restart ? " The replay buffer is filling again." : "") + (hotkeys.UsesSharedInput ? " Shared shortcut active; the other app may respond too." : ""));
@@ -432,7 +432,7 @@ public partial class MainWindow : Window
     }
     private async void Toggle_Click(object sender, RoutedEventArgs e) => await ToggleAsync();
     private async void Save_Click(object sender, RoutedEventArgs e) { SnapClapper(); await SaveReplayAsync(); }
-    private void SnapClapper() => ClapperTilt.BeginAnimation(RotateTransform.AngleProperty, new System.Windows.Media.Animation.DoubleAnimation(-14, 0, TimeSpan.FromMilliseconds(110)) { AutoReverse = true, BeginTime = TimeSpan.Zero });
+    private void SnapClapper() { if (PerformanceOptions.Animations) ClapperTilt.BeginAnimation(RotateTransform.AngleProperty, new System.Windows.Media.Animation.DoubleAnimation(-14, 0, TimeSpan.FromMilliseconds(110)) { AutoReverse = true, BeginTime = TimeSpan.Zero }); }
     private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenFolder();
     private void Play_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) Process.Start(new ProcessStartInfo(lastClip) { UseShellExecute = true }); } catch (Exception ex) { Tell(ex.Message, true); } }
     public void ShowWindow() { Show(); WindowState = WindowState.Normal; Activate(); if (LibraryTab.IsSelected) _ = ReloadLibraryAsync(); }

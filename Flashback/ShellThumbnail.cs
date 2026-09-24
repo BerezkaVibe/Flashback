@@ -73,7 +73,7 @@ public partial class MainWindow
     {
         image.Source = null;
         if (!image.IsVisible) return;
-        if (image.DataContext is not LibraryClip clip) return;
+        if (image.DataContext is not LibraryClip clip || !PerformanceOptions.Thumbnails) return;
         var thumbnail = await ShellThumbnail.GetAsync(clip.Path, () => image.IsVisible && ReferenceEquals(image.DataContext, clip) && Window.GetWindow(image)?.WindowState != WindowState.Minimized);
         if (image.IsLoaded && ReferenceEquals(image.DataContext, clip)) image.Source = thumbnail;
     }

@@ -74,6 +74,13 @@ internal sealed class OverlayLayer : FrameworkElement
     private readonly Dictionary<(OverlayItem, int, int, double), Drawing> looks = new();
     private static OverlayItem Look(OverlayItem o) => o with { Start = 0, End = 0, X = 0, Y = 0, Scale = 1, Rotation = 0, Opacity = 1, Layer = 0, StickToVideo = true, In = OverlayMotion.None, Out = OverlayMotion.None, InLength = 0, OutLength = 0, Shadow = NoShadow };
     private static readonly OverlayShadow NoShadow = new();
+    private readonly Dictionary<OverlayItem, OverlayItem> plain = new(ReferenceEqualityComparer.Instance);
+    private OverlayItem Plain(OverlayItem o)
+    {
+        if (plain.TryGetValue(o, out var p)) return p;
+        if (plain.Count > 64) plain.Clear();
+        return plain[o] = o with { In = OverlayMotion.None, Out = OverlayMotion.None, Shadow = NoShadow };
+    }
     // What was last drawn: each visible item with its look. Playback only redraws when this changes.
     private List<(OverlayItem, OverlayState, int)> drawn = new();
     private void Refresh(bool onlyIfChanged = false)
@@ -87,9 +94,12 @@ internal sealed class OverlayLayer : FrameworkElement
         var v = Video;
         stuck.Transform = new MatrixTransform(zoom);
         stuck.Clip = new RectangleGeometry(zoomClip ?? v); screen.Clip = new RectangleGeometry(v);
-        foreach (var item in OverlayOrder.BackToFront(items))
+        foreach (var original in OverlayOrder.BackToFront(items))
         {
-            if (!Visible(item) || ActualWidth <= 0) continue;
+            if (!Visible(original) || ActualWidth <= 0) continue;
+            // With preview effects off (Settings > Performance), items show plainly: no shadow and no
+            // entrance or exit motion. Exports are unaffected.
+            var item = PerformanceOptions.PreviewEffects ? original : Plain(original);
             double local = time - item.Start;
             var state = item.StateAt(local);
             var visual = OverlayRenderer.Visual(item, local, VideoWidth, VideoHeight, ContentFor(item, state));

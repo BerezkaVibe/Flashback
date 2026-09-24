@@ -38,6 +38,11 @@ public sealed class Settings
     public bool CheckForUpdates { get; set; } = true;
     // Exports decode the source on the graphics card (much faster, lighter on the CPU).
     public bool ExportGpuDecode { get; set; } = true;
+    // Settings > Performance: extras that can be turned off on weaker PCs.
+    public bool ShowThumbnails { get; set; } = true;
+    public bool ShowWaveforms { get; set; } = true;
+    public bool PreviewEffects { get; set; } = true;
+    public bool UiAnimations { get; set; } = true;
     public bool SeparateAudioTracks { get; set; }
     public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }

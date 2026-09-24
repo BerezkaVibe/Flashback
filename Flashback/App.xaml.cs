@@ -130,6 +130,12 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--performance-matrix-test"))
+        {
+            try { int at = Array.IndexOf(e.Args, "--only"); await PerformanceMatrixDiagnostics.RunAsync(at >= 0 ? int.Parse(e.Args[at + 1]) : -1); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--playback-cost-test"))
         {
             try { await PlaybackCostDiagnostics.RunAsync(e.Args[Array.IndexOf(e.Args, "--playback-cost-test") + 1]); Shutdown(0); }

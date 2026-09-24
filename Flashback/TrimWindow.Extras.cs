@@ -77,7 +77,7 @@ public partial class TrimWindow
     // Waveforms decode only once the audio dropdown is opened, and never on the UI thread.
     private async Task LoadWaveformsAsync(CancellationToken token)
     {
-        if (waveformsLoaded || laneTracks.Length == 0 || !previewEnabled) return;
+        if (waveformsLoaded || laneTracks.Length == 0 || !previewEnabled || !PerformanceOptions.Waveforms) return;
         waveformsLoaded = true; string path = source; var tracks = laneTracks;
         try
         {
