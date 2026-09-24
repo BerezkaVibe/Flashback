@@ -61,7 +61,10 @@ public partial class TrimWindow : Window
         Closing += (_, e) =>
         {
             if (exportCancellation != null) { closeAfterCancel = true; exportCancellation.Cancel(); e.Cancel = true; return; }
-            if(!FlushProject()) { e.Cancel=true; return; } Pause(); clock.Stop(); Player.Close();
+            if(!FlushProject()) { e.Cancel=true; return; }
+            // Write any edit still waiting on the autosave timer.
+            if (projectSaveTimer?.IsEnabled==true) { projectSaveTimer.Stop(); KeepRecovery(); }
+            Pause(); clock.Stop(); Player.Close();
         };
         // Decoded pictures and GIF frames are only needed while the trimmer is open.
         Closed += (_, _) => { closed = true; OverlayRenderer.ClearCaches(); };
@@ -70,7 +73,7 @@ public partial class TrimWindow : Window
         IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0) clock.Start(); };
     }
     internal string SourcePath => source;
-    internal bool LoadClip(string path, bool confirmChanges = true)
+    internal bool LoadClip(string path, bool confirmChanges = true, bool offerRecovery = true)
     {
         if (exportCancellation != null) { ImportError("Finish or cancel the export before opening another video."); return false; }
         // Read and validate first so a bad drop cannot erase an existing edit.
@@ -78,7 +81,7 @@ public partial class TrimWindow : Window
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
         bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
         if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current trim selection. Your original video is unchanged.","Open video")) return false;
-        if(!FlushProject()) return false; projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
+        if(!FlushProject()) return false; if (projectSaveTimer?.IsEnabled==true) KeepRecovery(); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; Player.SpeedRatio=PreviewRate;
@@ -86,6 +89,8 @@ public partial class TrimWindow : Window
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
         if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
+        // An unsaved edit of this clip from before is offered back once the window is up.
+        if (previewEnabled && offerRecovery) { if (IsLoaded) Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); else { void Once(object? s, RoutedEventArgs a) { Loaded -= Once; Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); } Loaded += Once; } }
         LoadLanes();
         return true;
     }
@@ -243,7 +248,7 @@ public partial class TrimWindow : Window
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
     private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray(), Timeline.Overlays.ToArray());
-    private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); }
+    private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); ProjectChanged(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
     private void Restore(Stack<EditState> from, Stack<EditState> to)
     {
@@ -286,6 +291,7 @@ public partial class TrimWindow : Window
         // Open and save work anywhere, including while typing a timestamp.
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
+        if (source.Length>0 && Nudge(key,modifiers)) return true;
         // Esc or Enter finishes cropping a picture.
         if (key is Key.Escape or Key.Enter && modifiers==ModifierKeys.None && (OverlayView.Cropping || OverlayView.ShapeEditing)) { OverlayView.SetCropping(false); OverlayView.SetShapeEditing(false); return true; }
         // Esc leaves the cut, speed, zoom, text or picture tool.

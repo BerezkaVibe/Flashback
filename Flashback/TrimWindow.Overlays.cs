@@ -27,7 +27,7 @@ public partial class TrimWindow
     {
         Timeline.OverlayAdded += OverlayAdded; Timeline.OverlayPicked += OpenOverlay; Timeline.OverlayRemoved += RemoveOverlay;
         Timeline.OverlayEditStarted += () => { Snapshot(); lastOverlayControl = "timeline"; };
-        Timeline.OverlayMoved += (_, _) => { OverlayView.Items = Timeline.Overlays; if (OverlayPanel.Visibility == Visibility.Visible) ShowOverlayTitle(); };
+        Timeline.OverlayMoved += (_, _) => { OverlayView.Items = Timeline.Overlays; ProjectChanged(); if (OverlayPanel.Visibility == Visibility.Visible) ShowOverlayTitle(); };
         Timeline.OverlayEditFinished += () =>
         {
             // Dragged onto a video cut-out: put it back where it was.
@@ -79,6 +79,7 @@ public partial class TrimWindow
         if (index < 0 || index >= Timeline.Overlays.Count) return;
         var list = Timeline.Overlays.ToArray(); list[index] = next; SetOverlays(list);
         if (next.Kind == OverlayKind.Text) lastTextStyle = next;
+        ProjectChanged();
         ShowOverlayTitle();
     }
     private void ResetOverlays() { Timeline.OverlayMode = null; CloseOverlay(); SetOverlays(Array.Empty<OverlayItem>()); OverlayView.VideoWidth = media.Width > 0 ? media.Width : 1920; OverlayView.VideoHeight = media.Height > 0 ? media.Height : 1080; }

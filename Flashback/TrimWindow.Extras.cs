@@ -274,6 +274,7 @@ public partial class TrimWindow
         bool cropped = CurrentCrop() != null;
         CropArea.Visibility = cropped || CropArea.Editing ? Visibility.Visible : Visibility.Collapsed;
         CropButton.SetResourceReference(Control.ForegroundProperty, cropped ? "Accent" : "Ink");
+        ProjectChanged();
         UpdateExportHint();
     }
     private CropRect? CurrentCrop()

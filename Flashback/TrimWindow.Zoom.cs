@@ -96,7 +96,7 @@ public partial class TrimWindow
         int i = Timeline.SelectedZoom;
         if (i < 0 || i >= Timeline.ZoomRegions.Count) return;
         Timeline.ZoomRegions = Timeline.ZoomRegions.Select((r, n) => n == i ? change(r) : r).ToArray();
-        ShowZoomReadout(Timeline.ZoomRegions[i]); ApplyZoomPreview();
+        ShowZoomReadout(Timeline.ZoomRegions[i]); ApplyZoomPreview(); ProjectChanged();
     }
     private void ZoomGraphChanged()
     {

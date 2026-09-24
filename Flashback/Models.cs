@@ -36,6 +36,8 @@ public sealed class Settings
     public Dictionary<string, int> AppVolumes { get; set; } = new();
     [System.Text.Json.Serialization.JsonIgnore] public bool MixerActive => AppVolumes.Any(p => p.Value != 100);
     public bool CheckForUpdates { get; set; } = true;
+    // Exports decode the source on the graphics card (much faster, lighter on the CPU).
+    public bool ExportGpuDecode { get; set; } = true;
     public bool SeparateAudioTracks { get; set; }
     public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }

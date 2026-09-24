@@ -21,15 +21,53 @@ public partial class TrimWindow
     private bool sharingEnabled;
     private int preferredPrecision=1;
 
-    private TrimProject CurrentProject() => new(1,source,sourceBytes,sourceWriteTicks,sections.ToArray(),Timeline.Start,Timeline.End,playhead,(sharingEnabled ? preferredPrecision : ExportMode.SelectedIndex)==1);
+    // Everything about the edit: sections, cut-outs, speed parts, zooms, text, pictures and crop.
+    private TrimProject CurrentProject() => new(TrimProject.CurrentVersion,source,sourceBytes,sourceWriteTicks,sections.ToArray(),Timeline.Start,Timeline.End,playhead,(sharingEnabled ? preferredPrecision : ExportMode.SelectedIndex)==1)
+    {
+        Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(),
+        Crop=CropArea.Crop is { } c && CurrentCrop()!=null ? new[] { c.X,c.Y,c.Width,c.Height } : null,
+    };
+    // Called after any edit. Half a second later the named project (if autosaving) and the
+    // recovery copy are written, so a closed or crashed trimmer can pick up where it left off.
     private void ProjectChanged()
     {
-        if (restoringProject || projectPath==null || AutoSaveProject?.IsChecked!=true) return;
+        if (restoringProject || source.Length==0 || !previewEnabled && projectPath==null) return;
         projectSaveTimer ??= new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(500) };
         projectSaveTimer.Tick -= ProjectSave_Tick; projectSaveTimer.Tick += ProjectSave_Tick;
         projectSaveTimer.Stop(); projectSaveTimer.Start();
     }
-    private void ProjectSave_Tick(object? sender,EventArgs e) => FlushProject();
+    private void ProjectSave_Tick(object? sender,EventArgs e) { FlushProject(); KeepRecovery(); }
+    private void KeepRecovery()
+    {
+        if (source.Length==0 || restoringProject) return;
+        var project=CurrentProject();
+        if (project.HasEdits(media.Duration)) TrimRecovery.Keep(project); else TrimRecovery.Forget(source);
+    }
+    // Puts a saved edit back: from a project file, or the recovery copy.
+    internal void ApplyProject(TrimProject project)
+    {
+        restoringProject=true;
+        try
+        {
+            sections.Clear(); foreach(var section in project.Sections.OrderBy(s=>s.Start)) sections.Add(section);
+            Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
+            CloseOverlay(); CloseZoom(); SetOverlays(OverlayOrder.Compact(project.Overlays ?? Array.Empty<OverlayItem>()));
+            ResetCrop();
+            if (project.Crop is { } c && media.Width>0) { CropArea.VideoWidth=media.Width; CropArea.VideoHeight=media.Height; CropArea.Crop=new Rect(c[0],c[1],c[2],c[3]); RefreshCropState(); }
+            SetRange(project.Start,project.End); SeekTo(project.Position); Timeline.Fit(); Timeline.Reveal(project.Position);
+            ExportMode.SelectedIndex=project.RoughCut ? 1 : 0; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
+        }
+        finally { restoringProject=false; }
+    }
+    // Offered once when a clip with an unsaved edit is opened again.
+    private void OfferRecovery()
+    {
+        if (closed || source.Length==0 || TrimRecovery.Find(source) is not { } saved || !saved.HasEdits(media.Duration)) return;
+        string when=saved.Saved is { } at ? (DateTime.Now-at).TotalMinutes<1 ? "a moment ago" : DateTime.Now-at<TimeSpan.FromHours(1) ? $"{(int)(DateTime.Now-at).TotalMinutes} min ago" : at.Date==DateTime.Today ? "earlier today at "+at.ToString("t") : "on "+at.ToString("g") : "earlier";
+        if (ThemedDialog.Confirm(this,"Pick up where you left off?",$"You were editing this clip {when}. Restore that edit, with its sections, cut-outs, speed, zoom, text and pictures?","Restore edit"))
+        { Snapshot(); ApplyProject(saved); StatusLabel.Text="Your last edit is back. Undo returns to a fresh start."; }
+        else TrimRecovery.Forget(source);
+    }
     private bool FlushProject()
     {
         projectSaveTimer?.Stop();
@@ -40,7 +78,7 @@ public partial class TrimWindow
     internal void SaveProject(string path)
     {
         var project=CurrentProject();
-        bool unchanged=projectPath==path && savedProject!=null && project.Source==savedProject.Source && project.Start==savedProject.Start && project.End==savedProject.End && project.Position==savedProject.Position && project.RoughCut==savedProject.RoughCut && project.Sections.SequenceEqual(savedProject.Sections);
+        bool unchanged=projectPath==path && savedProject!=null && project.Serialize()==savedProject.Serialize();
         project.Validate();
         if(!unchanged) project.Save(path);
         projectPath=path; savedProject=project;
@@ -50,20 +88,13 @@ public partial class TrimWindow
     {
         if (exportCancellation!=null) return false;
         var project=TrimProject.Read(path); // Validate everything before replacing the current edit.
-        if (source.Equals(project.Source,StringComparison.OrdinalIgnoreCase) && confirm && (sections.Count>0 || Timeline.Start>0 || Timeline.End<media.Duration)
+        if (source.Equals(project.Source,StringComparison.OrdinalIgnoreCase) && confirm && CurrentProject().HasEdits(media.Duration)
             && !ThemedDialog.Confirm(this,"Open project?","This replaces your current trim selection.","Open project")) return false;
-        if (!LoadClip(project.Source,confirm)) return false;
+        if (!LoadClip(project.Source,confirm,offerRecovery:false)) return false;
         if(!string.Equals(projectPath,path,StringComparison.OrdinalIgnoreCase) && !FlushProject()) return false;
-        restoringProject=true;
-        try
-        {
-            projectSaveTimer?.Stop(); sections.Clear(); undo.Clear(); redo.Clear();
-            foreach(var section in project.Sections.OrderBy(s=>s.Start)) sections.Add(section);
-            SetRange(project.Start,project.End); SeekTo(project.Position); Timeline.Fit(); Timeline.Reveal(project.Position);
-            ExportMode.SelectedIndex=project.RoughCut ? 1 : 0; projectPath=path; savedProject=project;
-            StatusLabel.Text="Opened project: "+Path.GetFileName(path); return true;
-        }
-        finally { restoringProject=false; }
+        projectSaveTimer?.Stop(); undo.Clear(); redo.Clear();
+        ApplyProject(project); projectPath=path; savedProject=project;
+        StatusLabel.Text="Opened project: "+Path.GetFileName(path); return true;
     }
     private void SaveProject_Click(object sender,RoutedEventArgs e)
     {

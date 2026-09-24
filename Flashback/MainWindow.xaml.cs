@@ -125,7 +125,7 @@ public partial class MainWindow : Window
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
-        UpdateCheck.IsChecked = settings.CheckForUpdates; SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
+        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
     private void ReplayLength_Changed(object sender,RoutedPropertyChangedEventArgs<double> e)
     {
@@ -147,7 +147,7 @@ public partial class MainWindow : Window
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
-        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
+        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath

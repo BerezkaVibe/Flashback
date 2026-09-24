@@ -130,6 +130,18 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--playback-cost-test"))
+        {
+            try { await PlaybackCostDiagnostics.RunAsync(e.Args[Array.IndexOf(e.Args, "--playback-cost-test") + 1]); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--export-decode-test"))
+        {
+            try { await ExportDecodeDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--trim-perf-test"))
         {
             try { await TrimPerformanceDiagnostics.RunAsync(); Shutdown(0); }

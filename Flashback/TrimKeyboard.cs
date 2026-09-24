@@ -126,6 +126,8 @@ public partial class TrimWindow
             case TrimAction.ZoomTool: ZoomTool_Click(this,none); break;
             case TrimAction.TextTool: TextTool_Click(this,none); break;
             case TrimAction.ImageTool: ImageTool_Click(this,none); break;
+            case TrimAction.CopyPart: CopyPart(); break;
+            case TrimAction.PastePart: PastePart(); break;
             case TrimAction.MarkStart: MarkStart_Click(this,none); break;
             case TrimAction.MarkEnd: MarkEnd_Click(this,none); break;
             case TrimAction.AddSection: Add_Click(this,none); break;

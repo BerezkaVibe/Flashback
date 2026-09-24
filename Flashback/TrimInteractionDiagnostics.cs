@@ -214,6 +214,28 @@ internal static class TrimInteractionDiagnostics
             Check(!ov.Cropping,"Esc finishes cropping");
             trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             Check(tl.Overlays.Count==0 && trim.OverlayPanel.Visibility!=Visibility.Visible,"Undo removes the dropped picture and closes its editor");
+            // Copy and paste, and arrow nudging, for text.
+            var addOverlay=typeof(TrimWindow).GetMethod("AddOverlay",flags)!;
+            addOverlay.Invoke(trim,new object[]{OverlayItem.NewText(6.5,7.5,null) with { Text="Copy me" }});
+            trim.HandleKey(Key.C,ModifierKeys.Control,true); trim.SeekTo(10); trim.HandleKey(Key.V,ModifierKeys.Control,true);
+            Check(tl.Overlays.Count==2 && Math.Abs(tl.Overlays[1].Start-10)<.01 && Math.Abs(tl.Overlays[1].Length-1)<.01 && tl.Overlays[1].Text=="Copy me","Ctrl+C and Ctrl+V copy text to the playhead");
+            double xBefore=tl.Overlays[1].X;
+            trim.HandleKey(Key.Right,ModifierKeys.None,true); trim.HandleKey(Key.Right,ModifierKeys.Shift,true);
+            Check(Math.Abs(tl.Overlays[1].X-(xBefore+11.0/640))<1e-9,"Arrow keys nudge the selected text by a pixel, Shift by ten");
+            // Projects and the recovery copy keep every kind of part.
+            string projectFile=Path.Combine(Storage.Root,"round trip.flashtrim");
+            trim.SaveProject(projectFile);
+            int overlaysSaved=tl.Overlays.Count, zoomsSaved=tl.ZoomRegions.Count, slowSaved=tl.SlowRegions.Count, cutsSaved=tl.Cuts.Count;
+            typeof(TrimWindow).GetMethod("ApplyProject",flags)!.Invoke(trim,new object[]{TrimProject.Create(path,Array.Empty<KeepSection>(),0,12,0,false)});
+            Check(tl.Overlays.Count==0 && tl.Cuts.Count==0,"Applying a blank project clears the edit");
+            trim.OpenProject(projectFile,false);
+            Check(tl.Overlays.Count==overlaysSaved && tl.ZoomRegions.Count==zoomsSaved && tl.SlowRegions.Count==slowSaved && tl.Cuts.Count==cutsSaved && tl.Overlays.Any(o=>o.Text=="Copy me"),"Trim projects save and reopen cut-outs, speed parts, zooms, text and pictures");
+            var recovered=TrimProject.Read(projectFile);
+            TrimRecovery.Keep(recovered);
+            Check(TrimRecovery.Find(path) is { } back && back.Overlays?.Length==overlaysSaved && back.HasEdits(12),"The recovery copy keeps an unsaved edit for next time");
+            TrimRecovery.Forget(path);
+            Check(TrimRecovery.Find(path)==null,"Starting fresh forgets the recovery copy");
+            typeof(TrimWindow).GetMethod("SetOverlays",flags)!.Invoke(trim,new object[]{Array.Empty<OverlayItem>()});
             trim.Timeline.SelectedSection=-1;
             double spanBefore=trim.Timeline.VisibleDuration;
             trim.Timeline.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice,0,120){RoutedEvent=UIElement.MouseWheelEvent});
