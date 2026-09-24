@@ -299,7 +299,7 @@ public partial class TrimWindow
         // Never spend more than ~24 Mbps: beyond that a bigger file looks no better than the recording.
         double target = Math.Min(limit, Math.Ceiling(seconds * (24_000_000 + 128000) / 8 / 1_000_000 / .92));
         ShareExportOptions options;
-        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions, ZoomRegions = Timeline.ZoomRegions }; options.Validate(); }
+        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions, ZoomRegions = Timeline.ZoomRegions, Overlays = Timeline.Overlays }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
         string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" — {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");
@@ -389,7 +389,7 @@ public partial class TrimWindow
         RangeControls.Visibility = RangeFields.Visibility == Visibility.Visible || SectionsRow.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
 
     private void SetEditingEnabled(bool enabled) =>
-        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = ExportMenuButton.IsEnabled = AddSectionButton.IsEnabled = enabled;
+        Timeline.IsEnabled = ExportMode.IsEnabled = SharePreset.IsEnabled = SizeLimit.IsEnabled = RangeControls.IsEnabled = ListControls.IsEnabled = SectionsList.IsEnabled = TrackMixPanel.IsEnabled = CompressButton.IsEnabled = CopyButton.IsEnabled = ExportMenuButton.IsEnabled = AddSectionButton.IsEnabled = OverlayView.IsEnabled = OverlayPanel.IsEnabled = ZoomPanel.IsEnabled = ZoomTarget.IsEnabled = CropArea.IsEnabled = enabled;
 
     // Preview speed: a log-scale slider from 0.1x to 4x (so 1x sits near the middle) plus quick presets.
     private bool syncingSpeed;

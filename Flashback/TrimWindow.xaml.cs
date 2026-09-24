@@ -63,7 +63,10 @@ public partial class TrimWindow : Window
             if (exportCancellation != null) { closeAfterCancel = true; exportCancellation.Cancel(); e.Cancel = true; return; }
             if(!FlushProject()) { e.Cancel=true; return; } Pause(); clock.Stop(); Player.Close();
         };
-        Closed += (_, _) => closed = true;
+        // Decoded pictures and GIF frames are only needed while the trimmer is open.
+        Closed += (_, _) => { closed = true; OverlayRenderer.ClearCaches(); };
+        // The font list takes a moment to gather; have it ready before the first text is added.
+        _ = Task.Run(FontChoices);
         IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0) clock.Start(); };
     }
     internal string SourcePath => source;

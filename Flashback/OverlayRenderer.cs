@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -284,9 +285,8 @@ internal static class OverlayRenderer
         }
         group.Freeze(); return group;
     }
-    // A picture fits a 540-pixel square at scale 1 (half the height of a 1080p frame).
-    internal static Size ImageSize(double w, double h) { double f = ImageBox / Math.Max(1, Math.Max(w, h)); return new Size(w * f, h * f); }
-    // Reference pixels per picture pixel: the whole (uncropped) picture fits the 540-pixel square.
+    // Reference pixels per picture pixel: at scale 1 the whole (uncropped) picture fits a 540-pixel
+    // square, half the height of a 1080p frame.
     internal static double ImageScale(OverlayItem item) => Load(item.ImagePath) is { } s ? ImageBox / Math.Max(1, Math.Max(s.Frames[0].PixelWidth, s.Frames[0].PixelHeight)) : 1;
     // The whole picture (flipped and keyed, not cropped) and where it sits around the item's centre.
     internal static (BitmapSource? Picture, Rect Full) Uncropped(OverlayItem item, double t)
@@ -301,20 +301,29 @@ internal static class OverlayRenderer
 
     private sealed record Source(BitmapSource[] Frames, double[] Starts, double Length);
     private static readonly Dictionary<string, (DateTime Stamp, Source? Source)> sources = new(StringComparer.OrdinalIgnoreCase);
+    // When each file was last checked on disk; lookups in between trust the cache (they run every frame).
+    private static readonly Dictionary<string, long> checkedAt = new(StringComparer.OrdinalIgnoreCase);
+    // Frees decoded pictures, e.g. when the trimmer closes.
+    internal static void ClearCaches() { lock (sources) { sources.Clear(); checkedAt.Clear(); } lock (processed) { processed.Clear(); processedBytes = 0; } }
     private static readonly Dictionary<(string, int, OverlayKey, string, double, bool, bool, double, double, double, double), BitmapSource> processed = new();
+    private static long processedBytes;
+    private const long ProcessedBudget = 160L * 1024 * 1024;
     // Loads a picture or animated GIF once; GIF frames are composited into full frames.
     private static Source? Load(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
+        lock (sources)
+            if (sources.TryGetValue(path, out var recent) && checkedAt.TryGetValue(path, out long at) && Stopwatch.GetElapsedTime(at).TotalSeconds < 2) return recent.Source;
         DateTime stamp;
-        try { stamp = File.GetLastWriteTimeUtc(path); if (!File.Exists(path)) return null; } catch { return null; }
+        try { stamp = File.GetLastWriteTimeUtc(path); if (!File.Exists(path)) { lock (sources) { sources.Remove(path); checkedAt.Remove(path); } return null; } } catch { return null; }
         lock (sources)
         {
+            checkedAt[path] = Stopwatch.GetTimestamp();
             if (sources.TryGetValue(path, out var hit) && hit.Stamp == stamp) return hit.Source;
             Source? loaded;
             try { loaded = Path.GetExtension(path).Equals(".gif", StringComparison.OrdinalIgnoreCase) ? GifFrames.Load(path) is { } gif ? new Source(gif.Frames, gif.Starts, gif.Length) : null : Still(path); }
             catch { loaded = null; }
-            if (sources.Count > 24) { sources.Clear(); lock (processed) processed.Clear(); }
+            if (sources.Count > 24) { sources.Clear(); lock (processed) { processed.Clear(); processedBytes = 0; } }
             sources[path] = (stamp, loaded);
             return loaded;
         }
@@ -332,8 +341,6 @@ internal static class OverlayRenderer
         }
         return new Source(new[] { frame }, new[] { 0.0 }, 0);
     }
-    internal static bool IsAnimated(OverlayItem item) => item.Kind == OverlayKind.Image && Load(item.ImagePath) is { Frames.Length: > 1 };
-    internal static bool Exists(OverlayItem item) => Load(item.ImagePath) != null;
     // Which GIF frame shows t seconds into the item, and the times its frames change.
     internal static int FrameAt(OverlayItem item, double t)
     {
@@ -359,8 +366,10 @@ internal static class OverlayRenderer
         {
             if (processed.TryGetValue(key, out var hit)) return hit;
             var result = Process(s.Frames[index], item);
-            if (processed.Count > 600) processed.Clear();
-            processed[key] = result;
+            // Keep edited pictures within a memory budget; slider drags make a new one each step.
+            long bytes = (long)result.PixelWidth * result.PixelHeight * 4;
+            if (processedBytes + bytes > ProcessedBudget) { processed.Clear(); processedBytes = 0; }
+            processed[key] = result; processedBytes += bytes;
             return result;
         }
     }
@@ -455,6 +464,9 @@ internal static class GifFrames
         int height = Meta<ushort>(decoder.Metadata, "/logscrdesc/Height") is ushort lh and > 0 ? lh : decoder.Frames[0].PixelHeight;
         int stride = width * 4;
         var canvas = new byte[stride * height];
+        // Long or large GIFs are kept at a lower resolution so they stay within about 256 MB.
+        int count = Math.Min(1000, decoder.Frames.Count);
+        double shrink = Math.Min(1, Math.Sqrt(256.0 * 1024 * 1024 / Math.Max(1.0, (double)stride * height * count)));
         var frames = new List<BitmapSource>(); var starts = new List<double>(); double time = 0;
         foreach (var frame in decoder.Frames.Take(1000))
         {
@@ -475,7 +487,9 @@ internal static class GifFrames
                     Buffer.BlockCopy(pixels, s, canvas, cy * stride + cx * 4, 4);
                 }
             }
-            var snapshot = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, canvas, stride); snapshot.Freeze();
+            BitmapSource snapshot = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, canvas, stride);
+            if (shrink < .999) snapshot = new WriteableBitmap(new TransformedBitmap(snapshot, new ScaleTransform(shrink, shrink)));
+            snapshot.Freeze();
             frames.Add(snapshot); starts.Add(time);
             // Browsers treat very short delays as 100 ms.
             time += (delay < 2 ? 10 : delay) / 100.0;

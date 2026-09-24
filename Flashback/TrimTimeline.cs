@@ -66,7 +66,17 @@ internal sealed class TrimTimeline : FrameworkElement
     // Parts that cover the whole picture and sound, and snap to other parts' edges.
     private bool WholeClipTool => slowMode || zoomMode || overlayMode != null;
     private IReadOnlyList<ZoomRegion> zoomRegions = Array.Empty<ZoomRegion>();
-    internal IReadOnlyList<ZoomRegion> ZoomRegions { get => zoomRegions; set { zoomRegions = value; zoomVersion++; InvalidateVisual(); } }
+    internal IReadOnlyList<ZoomRegion> ZoomRegions
+    {
+        get => zoomRegions;
+        set
+        {
+            // Aiming or reshaping a zoom leaves its timeline box and tag alone; only redraw when those change.
+            bool same = value.Count == zoomRegions.Count && value.Zip(zoomRegions).All(p => p.First.Start == p.Second.Start && p.First.End == p.Second.End && Math.Abs(p.First.MaxZoom - p.Second.MaxZoom) < .05);
+            zoomRegions = value;
+            if (!same) { zoomVersion++; InvalidateVisual(); }
+        }
+    }
     private int zoomVersion;
     internal int SelectedZoom { get => selectedZoom; set { selectedZoom = value; zoomVersion++; InvalidateVisual(); } }
     private int selectedZoom = -1;
@@ -106,7 +116,18 @@ internal sealed class TrimTimeline : FrameworkElement
 
     // Text and image items sit on slim layers above the video track; the top row is in front.
     private IReadOnlyList<OverlayItem> overlays = Array.Empty<OverlayItem>();
-    internal IReadOnlyList<OverlayItem> Overlays { get => overlays; set { overlays = value; overlayVersion++; Height = PreferredHeight; InvalidateVisual(); } }
+    internal IReadOnlyList<OverlayItem> Overlays
+    {
+        get => overlays;
+        set
+        {
+            // Style edits (color, size, rotation…) don't change the timeline, so it isn't redrawn for them.
+            bool same = value.Count == overlays.Count && value.Zip(overlays).All(p => ReferenceEquals(p.First, p.Second) || (p.First.Start == p.Second.Start && p.First.End == p.Second.End && p.First.Layer == p.Second.Layer && p.First.Kind == p.Second.Kind && p.First.Label == p.Second.Label));
+            overlays = value;
+            if (same) return;
+            overlayVersion++; Height = PreferredHeight; InvalidateVisual();
+        }
+    }
     private int overlayVersion;
     internal int SelectedOverlay { get => selectedOverlay; set { selectedOverlay = value; overlayVersion++; InvalidateVisual(); } }
     private int selectedOverlay = -1;
@@ -347,11 +368,15 @@ internal sealed class TrimTimeline : FrameworkElement
     }
     private FormattedText Text(string text, double size, Brush brush, double dpi) =>
         new(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), size, brush, dpi);
+    private readonly Dictionary<string, ((float[], double, double, double, double) Key, StreamGeometry Geometry)> waveCache = new();
     private void DrawLane(DrawingContext dc, AudioLane lane, double top, double width, double dpi)
     {
         dc.DrawRoundedRectangle(LaneFill, null, new Rect(Inset, top, width, LaneHeight), 4, 4);
         var peaks = lane.Peaks; double mid = top + LaneHeight / 2;
-        if (peaks.Length > 0)
+        // The outline only changes with the view, so edits elsewhere on the timeline reuse it.
+        var waveKey = (peaks, ViewStart, Span, width, top);
+        if (peaks.Length > 0 && waveCache.TryGetValue(lane.Name, out var cached) && cached.Key.Equals(waveKey)) dc.DrawGeometry(lane.Muted ? WaveMuted : Wave, null, cached.Geometry);
+        else if (peaks.Length > 0)
         {
             // One filled outline (loudest peak per pixel column) rather than a stroke per column:
             // a single fill is far cheaper for WPF to rasterize than thousands of thin lines.
@@ -371,6 +396,7 @@ internal sealed class TrimTimeline : FrameworkElement
                 g.PolyLineTo(upper, false, false); g.PolyLineTo(lower, false, false);
             }
             geometry.Freeze();
+            waveCache[lane.Name] = (waveKey, geometry);
             dc.DrawGeometry(lane.Muted ? WaveMuted : Wave, null, geometry);
         }
         // A single mixed track needs no name; separate tracks get a small tag to tell them apart.

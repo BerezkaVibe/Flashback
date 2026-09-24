@@ -116,6 +116,8 @@ internal static class ScrubDiagnostics
                     .OrderByDescending(t => t.Ms).Take(4).Select(t => $"{t.Ms / plain.Elapsed.TotalMilliseconds * 100:0}%");
                 report.Add($"[{label}] plain drag CPU {plainCpu:0}% of one core; busiest threads {string.Join(", ", busiest)}; timeline {tl.ActualWidth:0}x{tl.ActualHeight:0}");
                 cpu = Process.GetCurrentProcess().TotalProcessorTime;
+                // Frame gaps count from here, not from before the plain pass above.
+                last = Stopwatch.GetTimestamp();
                 CompositionTarget.Rendering += tick;
                 string shown = Hash(trim.Player); int changes = 0; var sweep = Stopwatch.StartNew();
                 while (sweep.Elapsed.TotalSeconds < 4)

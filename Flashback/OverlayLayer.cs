@@ -60,10 +60,20 @@ internal sealed class OverlayLayer : FrameworkElement
         double local = time - item.Start, aspect = VideoWidth / Math.Max(1, VideoHeight);
         int frame = item.Kind == OverlayKind.Image ? OverlayRenderer.FrameAt(item, local) : 0;
         if (contents.TryGetValue(item, out var hit) && hit.Chars == state.Chars && hit.Frame == frame && hit.Aspect == aspect) return hit.Content;
-        var content = OverlayRenderer.Content(item, state.Chars, local, aspect);
+        // Moving, scaling, rotating, fading or retiming an item doesn't change its drawing, so reuse it.
+        var look = Look(item);
+        if (!looks.TryGetValue((look, state.Chars, frame, aspect), out var content))
+        {
+            content = OverlayRenderer.Content(item, state.Chars, local, aspect);
+            if (looks.Count > 96) looks.Clear();
+            looks[(look, state.Chars, frame, aspect)] = content;
+        }
         contents[item] = (state.Chars, frame, aspect, content);
         return content;
     }
+    private readonly Dictionary<(OverlayItem, int, int, double), Drawing> looks = new();
+    private static OverlayItem Look(OverlayItem o) => o with { Start = 0, End = 0, X = 0, Y = 0, Scale = 1, Rotation = 0, Opacity = 1, Layer = 0, StickToVideo = true, In = OverlayMotion.None, Out = OverlayMotion.None, InLength = 0, OutLength = 0, Shadow = NoShadow };
+    private static readonly OverlayShadow NoShadow = new();
     // What was last drawn: each visible item with its look. Playback only redraws when this changes.
     private List<(OverlayItem, OverlayState, int)> drawn = new();
     private void Refresh(bool onlyIfChanged = false)
