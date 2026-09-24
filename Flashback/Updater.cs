@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -39,7 +40,12 @@ internal static class Updater
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
         var root = json.RootElement;
-        if (!Version.TryParse(root.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out var latest)) return null;
+        // The version comes from the tag (v0.7.4); if the tag isn't a version, from the release title,
+        // then from the installer's file name (Flashback-0.7.4-Setup.exe).
+        var names = new List<string?> { root.GetProperty("tag_name").GetString(), root.TryGetProperty("name", out var title) ? title.GetString() : null };
+        foreach (var a in root.GetProperty("assets").EnumerateArray()) names.Add(a.GetProperty("name").GetString());
+        var latest = names.Select(VersionIn).FirstOrDefault(v => v != null);
+        if (latest == null) return null;
         latest = Trim(latest);
         if (latest <= current) return null;
         string prefix = $"https://github.com/{Repository}/releases/download/";
@@ -52,6 +58,12 @@ internal static class Updater
             return new UpdateInfo(latest, url, asset.GetProperty("size").GetInt64(), digest, notes);
         }
         throw new InvalidOperationException($"Flashback {latest} is on GitHub, but its release has no Setup.exe attached yet.");
+    }
+    // The first dotted version number in a tag, title or file name, like 0.7.4 in "Flashback v0.7.4".
+    internal static Version? VersionIn(string? text)
+    {
+        var match = text == null ? null : System.Text.RegularExpressions.Regex.Match(text, @"(?<![\d.])(\d+\.\d+(?:\.\d+)?)(?!\.?\d)");
+        return match is { Success: true } && Version.TryParse(match.Groups[1].Value, out var v) ? v : null;
     }
     internal static async Task<string> DownloadAsync(UpdateInfo update, IProgress<double> progress, CancellationToken token)
     {
