@@ -4,9 +4,13 @@ using System.Linq;
 
 namespace Flashback;
 
-internal enum OverlayKind { Text, Image }
-// What sits behind the words: nothing, a bar behind each line, or one shape around all of them.
-internal enum OverlayShape { None, Lines, Box, Pill, Ellipse, Bubble, Arrow, Custom }
+internal enum OverlayKind { Text, Image, Shape, Video }
+// Text highlights (None, Lines, Box) and the shapes of the Shapes tool, which also mask pictures and videos.
+internal enum OverlayShape { None, Lines, Box, Pill, Ellipse, Bubble, Arrow, Custom, Star, Heart, Burst, Hexagon, Diamond, Triangle, Ring, Check, Cross }
+// A shape is drawn in its colour, or blurs or pixelates the video inside it.
+internal enum OverlayRegion { Solid, Blur, Pixelate }
+// Position, size, turn and opacity at a moment in the item (T seconds from its start).
+internal sealed record OverlayKeyframe(double T, double X, double Y, double Scale, double Rotation, double Opacity);
 internal enum OverlayMotion { None, Fade, Pop, SlideUp, SlideDown, SlideLeft, SlideRight, Typewriter }
 internal enum OverlayAlign { Left, Center, Right }
 // Background removal for images: a solid color turns see-through.
@@ -88,15 +92,89 @@ internal sealed record OverlayItem
     public OverlayKey Key { get; init; }
     public string KeyColor { get; init; } = "#00FF00";
     public double KeyTolerance { get; init; } = .3;
+    // Pictures and videos can be cut to a shape (Box keeps the rectangle, with ImageCorner rounding).
+    public OverlayShape Mask { get; init; } = OverlayShape.Box;
+
+    // Shapes: size in reference pixels (before scale), and whether they're a coloured shape or a
+    // blurred or pixelated window onto the video. Strength is the blur radius or the pixel size.
+    public double ShapeWidth { get; init; } = 420;
+    public double ShapeHeight { get; init; } = 260;
+    public OverlayRegion Region { get; init; }
+    public double RegionStrength { get; init; } = 24;
+
+    // Picture-in-picture video: the file, where in it to start, and how loud its sound is (0 mutes it).
+    public string VideoPath { get; init; } = "";
+    public double VideoOffset { get; init; }
+    public double VideoVolume { get; init; } = 1;
+    public int VideoWidth { get; init; }
+    public int VideoHeight { get; init; }
+
+    // Keyframes: when there are any, position, size, turn and opacity glide between them.
+    public IReadOnlyList<OverlayKeyframe> Keys { get; init; } = Array.Empty<OverlayKeyframe>();
 
     internal double Length => End - Start;
     internal string DisplayText => Caps ? Text.ToUpperInvariant() : Text;
-    internal string Label => Kind == OverlayKind.Image ? System.IO.Path.GetFileName(ImagePath) : (Text.Replace('\n', ' ').Trim() is { Length: > 0 } t ? t : "Text");
+    internal bool IsRegion => Kind == OverlayKind.Shape && Region != OverlayRegion.Solid;
+    internal string Label => Kind switch
+    {
+        OverlayKind.Image => System.IO.Path.GetFileName(ImagePath),
+        OverlayKind.Video => System.IO.Path.GetFileName(VideoPath),
+        OverlayKind.Shape => (Region switch { OverlayRegion.Blur => "Blur · ", OverlayRegion.Pixelate => "Pixelate · ", _ => "" }) + ShapeName(Shape),
+        _ => Text.Replace('\n', ' ').Trim() is { Length: > 0 } t ? t : "Text"
+    };
+    internal static string ShapeName(OverlayShape s) => s switch
+    {
+        OverlayShape.Box => "Rectangle", OverlayShape.Bubble => "Speech bubble", OverlayShape.Custom => "Custom shape", OverlayShape.Burst => "Burst", OverlayShape.Ring => "Circle outline",
+        OverlayShape.Check => "Tick", OverlayShape.Cross => "Cross", _ => s.ToString()
+    };
 
     internal static OverlayItem NewText(double start, double end, OverlayItem? style) =>
-        (style is { Kind: OverlayKind.Text } s ? s with { Rotation = 0, Scale = 1, X = .5, Y = .5, Layer = 0 } : new OverlayItem()) with { Kind = OverlayKind.Text, Start = start, End = end, Text = "Your text", Y = .82 };
+        (style is { Kind: OverlayKind.Text } s ? s with { Rotation = 0, Scale = 1, X = .5, Y = .5, Layer = 0, Keys = Array.Empty<OverlayKeyframe>() } : new OverlayItem()) with { Kind = OverlayKind.Text, Start = start, End = end, Text = "Your text", Y = .82 };
     internal static OverlayItem NewImage(double start, double end, string path) =>
         new() { Kind = OverlayKind.Image, Start = start, End = end, ImagePath = path, Caps = false, OutlineWidth = 0 };
+    internal static OverlayItem NewShape(double start, double end, OverlayItem? style) =>
+        (style is { Kind: OverlayKind.Shape } s ? s with { Rotation = 0, Scale = 1, X = .5, Y = .5, Layer = 0, Keys = Array.Empty<OverlayKeyframe>(), ShapeCorners = NoCorners, Points = DefaultPoints }
+            : new OverlayItem { Shape = OverlayShape.Box, ShapeColor = "#CCFF3B30", Corner = 18, OutlineWidth = 0, Caps = false })
+        with { Kind = OverlayKind.Shape, Start = start, End = end };
+    internal static OverlayItem NewVideo(double start, double end, string path, int width, int height) =>
+        new() { Kind = OverlayKind.Video, Start = start, End = end, VideoPath = path, VideoWidth = width, VideoHeight = height, Caps = false, OutlineWidth = 0, X = .8, Y = .25, Scale = .6, ImageCorner = 8 };
+
+    // The item as it looks t seconds in: with keyframes, its position, size, turn and opacity are
+    // eased from one keyframe to the next (held before the first and after the last).
+    internal OverlayItem Posed(double t)
+    {
+        if (Keys.Count == 0) return this;
+        var keys = Keys;
+        if (t <= keys[0].T) return Apply(keys[0]);
+        if (t >= keys[^1].T) return Apply(keys[^1]);
+        int i = 0; while (i < keys.Count - 2 && t > keys[i + 1].T) i++;
+        var a = keys[i]; var b = keys[i + 1];
+        double p = Math.Clamp((t - a.T) / Math.Max(1e-6, b.T - a.T), 0, 1), e = p * p * (3 - 2 * p);
+        double L(double x, double y) => x + (y - x) * e;
+        return this with { X = L(a.X, b.X), Y = L(a.Y, b.Y), Scale = L(a.Scale, b.Scale), Rotation = L(a.Rotation, b.Rotation), Opacity = L(a.Opacity, b.Opacity) };
+        OverlayItem Apply(OverlayKeyframe k) => this with { X = k.X, Y = k.Y, Scale = k.Scale, Rotation = k.Rotation, Opacity = k.Opacity };
+    }
+    // Sets (or adds) the keyframe at t from this item's current look; keeps them in time order.
+    internal OverlayItem WithKeyAt(double t, OverlayItem look)
+    {
+        var key = new OverlayKeyframe(Math.Clamp(t, 0, Length), look.X, look.Y, look.Scale, look.Rotation, look.Opacity);
+        double frame = 1 / 120.0;
+        var keys = Keys.Where(k => Math.Abs(k.T - key.T) > frame).Append(key).OrderBy(k => k.T).ToArray();
+        return this with { Keys = keys };
+    }
+    // Applies a change to how the item looks at t: without keyframes it's the item itself; with them,
+    // the position, size, turn and opacity go into a keyframe at t and everything else changes as usual.
+    internal OverlayItem Adjusted(double t, Func<OverlayItem, OverlayItem> change)
+    {
+        if (Keys.Count == 0) return change(this);
+        var changed = change(Posed(t));
+        return (changed with { X = X, Y = Y, Scale = Scale, Rotation = Rotation, Opacity = Opacity, Keys = Keys }).WithKeyAt(t, changed);
+    }
+    // Moves the item and every keyframe by the same amount.
+    internal OverlayItem Shifted(double dx, double dy) => this with
+    {
+        X = X + dx, Y = Y + dy, Keys = Keys.Select(k => k with { X = k.X + dx, Y = k.Y + dy }).ToArray()
+    };
 
     // Keeps every value in range; used when loading and before export.
     internal OverlayItem Validated() => this with
@@ -116,6 +194,12 @@ internal sealed record OverlayItem
         CropBottom = Math.Clamp(Finite(CropBottom, 0), 0, .9 - Math.Clamp(Finite(CropTop, 0), 0, .9)),
         Points = Points is { Count: >= 3 } ? Points : DefaultPoints,
         ShapeCorners = ShapeCorners is { Count: 4 } && ShapeCorners.All(c => double.IsFinite(c.X) && double.IsFinite(c.Y)) ? ShapeCorners : NoCorners,
+        ShapeWidth = Math.Clamp(Finite(ShapeWidth, 420), 10, 4000), ShapeHeight = Math.Clamp(Finite(ShapeHeight, 260), 10, 4000),
+        RegionStrength = Math.Clamp(Finite(RegionStrength, 24), 2, 200),
+        VideoOffset = Math.Max(0, Finite(VideoOffset, 0)), VideoVolume = Math.Clamp(Finite(VideoVolume, 1), 0, 2),
+        Keys = (Keys ?? Array.Empty<OverlayKeyframe>()).Where(k => k != null && new[] { k.T, k.X, k.Y, k.Scale, k.Rotation, k.Opacity }.All(double.IsFinite))
+            .Select(k => k with { T = Math.Clamp(k.T, 0, Math.Max(0, End - Start)), Scale = Math.Clamp(k.Scale, MinScale, MaxScale), Opacity = Math.Clamp(k.Opacity, 0, 1), X = Math.Clamp(k.X, -.5, 1.5), Y = Math.Clamp(k.Y, -.5, 1.5) })
+            .OrderBy(k => k.T).ToArray(),
     };
     private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
 
@@ -166,6 +250,8 @@ internal sealed record OverlayItem
         double squeeze = Math.Min(1, length / Math.Max(1e-6, (In != OverlayMotion.None ? InLength : 0) + (Out != OverlayMotion.None ? OutLength : 0)));
         if (In != OverlayMotion.None) yield return (0, Math.Min(length, InLength * squeeze));
         if (Out != OverlayMotion.None) yield return (Math.Max(0, length - OutLength * squeeze), length);
+        // Keyframed motion changes every frame between the first and last keyframe.
+        if (Keys.Count >= 2) yield return (Math.Max(0, Keys[0].T), Math.Min(length, Keys[^1].T));
     }
 }
 

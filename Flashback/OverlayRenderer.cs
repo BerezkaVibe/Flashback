@@ -28,6 +28,8 @@ internal static class OverlayRenderer
     // A visual in frame pixels, ready to show over the video or render to a picture.
     internal static DrawingVisual Visual(OverlayItem item, double t, double frameW, double frameH, Drawing? content = null)
     {
+        // Keyframes set where the item is at this moment.
+        item = item.Posed(t);
         var state = item.StateAt(t);
         content ??= Content(item, state.Chars, t, frameW / frameH);
         var visual = new DrawingVisual { Opacity = Math.Clamp(state.Opacity, 0, 1) };
@@ -60,8 +62,81 @@ internal static class OverlayRenderer
         return r;
     }
 
-    internal static Drawing Content(OverlayItem item, int chars, double t, double aspect) =>
-        item.Kind == OverlayKind.Image ? ImageContent(item, t) : TextContent(item, chars, aspect);
+    internal static Drawing Content(OverlayItem item, int chars, double t, double aspect) => item.Kind switch
+    {
+        OverlayKind.Image => ImageContent(item, t),
+        OverlayKind.Shape => ShapeContent(item),
+        OverlayKind.Video => VideoFrame(item),
+        _ => TextContent(item, chars, aspect)
+    };
+
+    // ---- Shapes ----
+    // A solid shape in its colour with its border. A blur or pixelate shape is drawn as a white
+    // mask: the preview fills it with the treated video, and the export uses it to cut the effect.
+    private static Drawing ShapeContent(OverlayItem item)
+    {
+        var group = new DrawingGroup();
+        var geometry = ShapeIn(item.Shape, ShapeBox(item), item);
+        using (var dc = group.Open())
+        {
+            if (item.IsRegion) dc.DrawGeometry(Brushes.White, null, geometry);
+            else
+            {
+                var pen = item.ShapeBorderWidth > 0 ? new Pen(Brush(item.ShapeBorderColor), item.ShapeBorderWidth) { LineJoin = PenLineJoin.Round } : null;
+                dc.DrawGeometry(Brush(item.ShapeColor), pen, geometry);
+            }
+        }
+        group.Freeze(); return group;
+    }
+    internal static Geometry ShapeGeometryOf(OverlayItem item) => ShapeIn(item.Shape, ShapeBox(item), item);
+
+    // ---- Picture masks ----
+    // Pictures and videos are cut to a shape; Box is the rectangle with rounded corners.
+    internal static Geometry MaskGeometry(OverlayItem item, Rect rect)
+    {
+        if (item.Mask is OverlayShape.Box or OverlayShape.None)
+        {
+            double radius = item.ImageCorner / 100 * Math.Min(rect.Width, rect.Height);
+            var box = new RectangleGeometry(rect, radius, radius); box.Freeze(); return box;
+        }
+        return ShapeIn(item.Mask, rect, item with { ShapeCorners = OverlayItem.NoCorners });
+    }
+    internal static void DrawBorder(DrawingContext dc, OverlayItem item, Geometry mask)
+    {
+        if (item.BorderWidth <= 0) return;
+        // The border hugs the outside of the shape.
+        var pen = new Pen(Brush(item.BorderColor), item.BorderWidth * 2) { LineJoin = PenLineJoin.Round };
+        var outside = new CombinedGeometry(GeometryCombineMode.Exclude, mask.GetWidenedPathGeometry(pen), mask);
+        dc.DrawGeometry(Brush(item.BorderColor), null, outside);
+    }
+
+    // ---- Picture-in-picture video ----
+    // The video's size on a 1080-line frame at scale 1 (fits a 540-pixel square), before cropping.
+    internal static Rect VideoRect(OverlayItem item)
+    {
+        double w = Math.Max(16, item.VideoWidth > 0 ? item.VideoWidth : 1920), h = Math.Max(16, item.VideoHeight > 0 ? item.VideoHeight : 1080);
+        double f = ImageBox / Math.Max(w, h);
+        double cw = w * f * (1 - item.CropLeft - item.CropRight), ch = h * f * (1 - item.CropTop - item.CropBottom);
+        return new Rect(-cw / 2, -ch / 2, cw, ch);
+    }
+    // The whole (uncropped) video frame around the item's centre, which sits in the middle of the kept part.
+    internal static Rect VideoFullRect(OverlayItem item)
+    {
+        double w = Math.Max(16, item.VideoWidth > 0 ? item.VideoWidth : 1920), h = Math.Max(16, item.VideoHeight > 0 ? item.VideoHeight : 1080);
+        double f = ImageBox / Math.Max(w, h), fw = w * f, fh = h * f;
+        double cx = ((item.CropLeft + 1 - item.CropRight) / 2 - .5) * fw, cy = ((item.CropTop + 1 - item.CropBottom) / 2 - .5) * fh;
+        return new Rect(-cx - fw / 2, -cy - fh / 2, fw, fh);
+    }
+    // The uncropped frame of a picture or video, for cropping on the preview.
+    internal static Rect FullRect(OverlayItem item, double t) => item.Kind == OverlayKind.Video ? VideoFullRect(item) : Uncropped(item, t).Full;
+    // The video's outline and border; the preview draws the playing video inside it, the export uses ffmpeg.
+    private static Drawing VideoFrame(OverlayItem item)
+    {
+        var group = new DrawingGroup();
+        var rect = VideoRect(item); var mask = MaskGeometry(item, rect);
+        using (var dc = group.Open()) { dc.DrawGeometry(Brushes.Transparent, null, mask); DrawBorder(dc, item, mask); }
+        group.Freeze(); return group;
+    }
 
     // ---- Text ----
     internal sealed record TextLayout(List<(string Text, double X, double Y, double Width, double Height)> Lines, Rect Block, Typeface Face, double Size);
@@ -162,11 +237,73 @@ internal static class OverlayRenderer
     }
     // The padded rectangle around the text block.
     internal static Rect Padded(OverlayItem item, Rect block) => Rect.Inflate(block, item.Padding, item.Padding * .6);
-    internal static Geometry ShapeGeometry(OverlayItem item, Rect block, IReadOnlyList<(double X, double Y, double Width, double Height)> lines)
+    // A text item's highlight around its (padded) words.
+    internal static Geometry ShapeGeometry(OverlayItem item, Rect block, IReadOnlyList<(double X, double Y, double Width, double Height)> lines) =>
+        ShapeIn(item.Shape, Padded(item, block), item, lines, aroundText: true);
+    // A shape item's own box, centred on the item.
+    internal static Rect ShapeBox(OverlayItem item) => new(-item.ShapeWidth / 2, -item.ShapeHeight / 2, item.ShapeWidth, item.ShapeHeight);
+    // The outline of a shape filling box. Shapes around text grow a little (an ellipse must clear the
+    // words); shapes on their own fit the box exactly.
+    internal static Geometry ShapeIn(OverlayShape shape, Rect box, OverlayItem item, IReadOnlyList<(double X, double Y, double Width, double Height)>? lines = null, bool aroundText = false)
     {
-        var box = Padded(item, block);
         Geometry g;
-        switch (item.Shape)
+        var c = new Point(box.X + box.Width / 2, box.Y + box.Height / 2);
+        double rx = box.Width / 2, ry = box.Height / 2;
+        Point On(double angle, double r) => new(c.X + Math.Cos(angle) * rx * r, c.Y + Math.Sin(angle) * ry * r);
+        Point[] Spikes(int points, double inner, double start = -Math.PI / 2) =>
+            Enumerable.Range(0, points * 2).Select(i => On(start + i * Math.PI / points, i % 2 == 0 ? 1 : inner)).ToArray();
+        switch (shape)
+        {
+            case OverlayShape.Star: g = Polygon(Spikes(5, .45)); break;
+            case OverlayShape.Burst: g = Polygon(Spikes(12, .72)); break;
+            case OverlayShape.Hexagon: g = Polygon(Enumerable.Range(0, 6).Select(i => On(i * Math.PI / 3, 1)).ToArray()); break;
+            case OverlayShape.Diamond: g = Polygon(new[] { new Point(c.X, box.Top), new Point(box.Right, c.Y), new Point(c.X, box.Bottom), new Point(box.Left, c.Y) }); break;
+            case OverlayShape.Triangle: g = Polygon(new[] { new Point(c.X, box.Top), new Point(box.Right, box.Bottom), new Point(box.Left, box.Bottom) }); break;
+            case OverlayShape.Ring:
+            {
+                double thick = Math.Max(4, Math.Min(box.Width, box.Height) * .12);
+                var ring = new GeometryGroup { FillRule = FillRule.EvenOdd };
+                ring.Children.Add(new EllipseGeometry(c, rx, ry)); ring.Children.Add(new EllipseGeometry(c, Math.Max(1, rx - thick), Math.Max(1, ry - thick)));
+                g = ring; break;
+            }
+            case OverlayShape.Heart:
+            {
+                // Two lobes meeting at a point, drawn in a unit box and stretched to fit.
+                var heart = new StreamGeometry();
+                Point U(double x, double y) => new(box.X + x * box.Width, box.Y + y * box.Height);
+                using (var h = heart.Open())
+                {
+                    h.BeginFigure(U(.5, .28), true, true);
+                    h.BezierTo(U(.5, .02), U(0, .02), U(0, .32), true, true);
+                    h.BezierTo(U(0, .62), U(.35, .78), U(.5, 1), true, true);
+                    h.BezierTo(U(.65, .78), U(1, .62), U(1, .32), true, true);
+                    h.BezierTo(U(1, .02), U(.5, .02), U(.5, .28), true, true);
+                }
+                g = heart; break;
+            }
+            case OverlayShape.Check:
+            {
+                Point U(double x, double y) => new(box.X + x * box.Width, box.Y + y * box.Height);
+                g = Polygon(new[] { U(0, .55), U(.14, .41), U(.38, .64), U(.86, .08), U(1, .22), U(.38, .92) });
+                break;
+            }
+            case OverlayShape.Cross:
+            {
+                Point U(double x, double y) => new(box.X + x * box.Width, box.Y + y * box.Height);
+                g = Polygon(new[] { U(.14, 0), U(.5, .36), U(.86, 0), U(1, .14), U(.64, .5), U(1, .86), U(.86, 1), U(.5, .64), U(.14, 1), U(0, .86), U(.36, .5), U(0, .14) });
+                break;
+            }
+            case OverlayShape.Ellipse when !aroundText: g = new EllipseGeometry(c, rx, ry); break;
+            default: g = TextShape(item, shape, box, lines ?? Array.Empty<(double, double, double, double)>()); break;
+        }
+        if (item.CornersMoved && shape != OverlayShape.Custom && shape != OverlayShape.Bubble) g = Warp(g, box, item.ShapeCorners);
+        if (!g.IsFrozen) g.Freeze();
+        return g;
+    }
+    private static Geometry TextShape(OverlayItem item, OverlayShape shape, Rect box, IReadOnlyList<(double X, double Y, double Width, double Height)> lines)
+    {
+        Geometry g;
+        switch (shape)
         {
             case OverlayShape.Lines:
             {
@@ -199,8 +336,7 @@ internal static class OverlayRenderer
                 break;
             default: g = new RectangleGeometry(box, item.Corner, item.Corner); break;
         }
-        if (item.CornersMoved && item.Shape != OverlayShape.Custom) g = Warp(g, box, item.ShapeCorners);
-        g.Freeze(); return g;
+        return g;
     }
     // Where the shape's four corners are after dragging (top-left, top-right, bottom-right, bottom-left).
     internal static Point[] ShapeCornerPoints(OverlayItem item, Rect box) => new[]
@@ -269,19 +405,13 @@ internal static class OverlayRenderer
         // Sized from the whole picture, so cropping trims the edges rather than enlarging what's left.
         double f = ImageScale(item);
         var rect = new Rect(-picture.PixelWidth * f / 2, -picture.PixelHeight * f / 2, picture.PixelWidth * f, picture.PixelHeight * f);
-        double radius = item.ImageCorner / 100 * Math.Min(rect.Width, rect.Height);
         using (var dc = group.Open())
         {
-            var clip = new RectangleGeometry(rect, radius, radius);
+            var clip = MaskGeometry(item, rect);
             dc.PushClip(clip);
             dc.DrawImage(picture, rect);
             dc.Pop();
-            if (item.BorderWidth > 0)
-            {
-                // The border sits outside the picture's edge.
-                var outer = Rect.Inflate(rect, item.BorderWidth / 2, item.BorderWidth / 2);
-                dc.DrawRoundedRectangle(null, new Pen(Brush(item.BorderColor), item.BorderWidth), outer, radius + item.BorderWidth / 2, radius + item.BorderWidth / 2);
-            }
+            DrawBorder(dc, item, clip);
         }
         group.Freeze(); return group;
     }

@@ -79,7 +79,10 @@ public partial class TrimWindow
         SlowToolButton.ToolTip="Speed: click two spots to slow down or speed up that part · "+Key(TrimAction.SpeedTool);
         ZoomToolButton.ToolTip="Zoom: click two spots to zoom in on that part · "+Key(TrimAction.ZoomTool);
         TextToolButton.ToolTip="Text: click two spots to add a caption for that part · "+Key(TrimAction.TextTool);
-        ImageToolButton.ToolTip="Picture: click two spots to add a picture or GIF for that part · "+Key(TrimAction.ImageTool);
+        ImageToolButton.ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part · "+Key(TrimAction.ImageTool);
+        ShapeToolButton.ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area · "+Key(TrimAction.ShapeTool);
+        VolumeToolButton.ToolTip="Volume: click two spots on an audio lane to make that part louder or quieter · "+Key(TrimAction.VolumeTool);
+        SoundToolButton.ToolTip="Sound: click two spots to add music or a sound file · "+Key(TrimAction.SoundTool);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
         foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
             (UndoMenu,TrimAction.Undo),(RedoMenu,TrimAction.Redo),(AddSectionMenu,TrimAction.AddSection),(SplitMenu,TrimAction.Split),(RemoveMenu,TrimAction.RemoveSection),
@@ -126,6 +129,9 @@ public partial class TrimWindow
             case TrimAction.ZoomTool: ZoomTool_Click(this,none); break;
             case TrimAction.TextTool: TextTool_Click(this,none); break;
             case TrimAction.ImageTool: ImageTool_Click(this,none); break;
+            case TrimAction.ShapeTool: ShapeTool_Click(this,none); break;
+            case TrimAction.VolumeTool: VolumeTool_Click(this,none); break;
+            case TrimAction.SoundTool: SoundTool_Click(this,none); break;
             case TrimAction.CopyPart: CopyPart(); break;
             case TrimAction.PastePart: PastePart(); break;
             case TrimAction.MarkStart: MarkStart_Click(this,none); break;

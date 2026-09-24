@@ -35,7 +35,7 @@ public partial class TrimWindow
     }
     private static (double Start, double End) SpanOf(object part) => part switch
     {
-        CutRegion c => (c.Start, c.End), SpeedRegion s => (s.Start, s.End), ZoomRegion z => (z.Start, z.End), OverlayItem o => (o.Start, o.End), _ => (0, 0)
+        CutRegion c => (c.Start, c.End), SpeedRegion s => (s.Start, s.End), ZoomRegion z => (z.Start, z.End), OverlayItem o => (o.Start, o.End), VolumeRegion v => (v.Start, v.End), SoundItem d => (d.Start, d.End), _ => (0, 0)
     };
     // The part as it is in the lists now (records are replaced on every edit).
     private object? CurrentVersion(object part) => part switch
@@ -44,6 +44,8 @@ public partial class TrimWindow
         SpeedRegion s => Timeline.SlowRegions.FirstOrDefault(r => r.Start == s.Start && r.End == s.End),
         ZoomRegion z => Timeline.ZoomRegions.FirstOrDefault(r => r.Start == z.Start && r.End == z.End),
         OverlayItem o => Timeline.Overlays.Contains(o) ? o : null,
+        VolumeRegion v => Timeline.VolumeRegions.Contains(v) ? v : null,
+        SoundItem s => Timeline.Sounds.FirstOrDefault(x => x.Start == s.Start && x.End == s.End && x.Row == s.Row && x.Path == s.Path),
         _ => null
     };
     // Moves a part to start..end if the rules allow; otherwise explains why not.
@@ -83,6 +85,17 @@ public partial class TrimWindow
                 var newItem = item with { Start = start, End = end };
                 ReplaceOverlay(index, newItem);
                 next = newItem; break;
+            case VolumeRegion volume:
+                if (Timeline.VolumeRegions.Any(o => o != volume && o.Lane == volume.Lane && Hits(o.Start, o.End))) { error = "It would overlap another volume change on that lane."; return false; }
+                var newVolume = volume with { Start = start, End = end };
+                Timeline.VolumeRegions = Timeline.VolumeRegions.Select(o => o == volume ? newVolume : o).ToArray();
+                if (popupVolume == volume) popupVolume = newVolume;
+                next = newVolume; break;
+            case SoundItem sound:
+                if (Timeline.Sounds.Any(o => o != sound && o.Row == sound.Row && Hits(o.Start, o.End))) { error = "It would overlap another sound on its row."; return false; }
+                var newSound = sound with { Start = start, End = end };
+                ReplaceSound(sound, newSound);
+                next = newSound; break;
             default: return false;
         }
         FocusPart(next);
@@ -91,7 +104,7 @@ public partial class TrimWindow
     private void AfterRetime()
     {
         UpdateExportHint(); UpdateSummary(); ProjectChanged();
-        zoomTiming?.Invoke(); slowTiming?.Invoke(); cutTiming?.Invoke();
+        zoomTiming?.Invoke(); slowTiming?.Invoke(); cutTiming?.Invoke(); volumeTiming?.Invoke();
         if (ZoomPanel.Visibility == Visibility.Visible) LoadZoomUi();
         if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi();
     }
@@ -163,7 +176,7 @@ public partial class TrimWindow
     private void PickPartTime(object? part, bool isStart)
     {
         if (part == null) return;
-        SlowPopup.IsOpen = false; CutPopup.IsOpen = false;
+        SlowPopup.IsOpen = false; CutPopup.IsOpen = false; VolumePopup.IsOpen = false; SoundPopup.IsOpen = false;
         Timeline.PickTime = t => { Timeline.PickTime = null; SetPartTime(part, isStart, t); };
         Timeline.Focus();
         StatusLabel.Text = $"Click the timeline where it should {(isStart ? "start" : "end")}. It locks onto the playhead and other parts' edges · Esc cancels.";

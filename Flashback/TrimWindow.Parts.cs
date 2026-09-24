@@ -10,7 +10,7 @@ namespace Flashback;
 // section, hands Delete back to removing the selected section.
 public partial class TrimWindow
 {
-    private enum PartKind { None, Cut, Speed, Zoom, Overlay }
+    private enum PartKind { None, Cut, Speed, Zoom, Overlay, Volume, Sound }
     private PartKind focusedKind;
     private void InitParts()
     {
@@ -28,7 +28,7 @@ public partial class TrimWindow
     }
     private void FocusPart(object? part)
     {
-        focusedKind = part switch { CutRegion => PartKind.Cut, SpeedRegion => PartKind.Speed, ZoomRegion => PartKind.Zoom, OverlayItem => PartKind.Overlay, _ => PartKind.None };
+        focusedKind = part switch { CutRegion => PartKind.Cut, SpeedRegion => PartKind.Speed, ZoomRegion => PartKind.Zoom, OverlayItem => PartKind.Overlay, VolumeRegion => PartKind.Volume, SoundItem => PartKind.Sound, _ => PartKind.None };
         Timeline.FocusedPart = part;
     }
     // The part being edited or last clicked, in its current form.
@@ -39,6 +39,8 @@ public partial class TrimWindow
         PartKind.Speed => Timeline.SelectedSlow >= 0 && Timeline.SelectedSlow < Timeline.SlowRegions.Count ? Timeline.SlowRegions[Timeline.SelectedSlow]
             : Timeline.FocusedPart is SpeedRegion s ? Timeline.SlowRegions.FirstOrDefault(r => r.Start == s.Start && r.End == s.End) : null,
         PartKind.Cut => Timeline.FocusedPart is CutRegion c && Timeline.Cuts.Contains(c) ? c : null,
+        PartKind.Volume => Timeline.FocusedPart is VolumeRegion v && Timeline.VolumeRegions.Contains(v) ? v : null,
+        PartKind.Sound => Timeline.FocusedPart is SoundItem s ? CurrentVersion(s) : null,
         _ => null
     };
     // Copy and paste: Ctrl+C copies the clicked part (kept while Flashback runs, even across clips);
@@ -50,11 +52,11 @@ public partial class TrimWindow
         copiedPart = part;
         StatusLabel.Text = $"Copied the {PartName(part)}. Ctrl+V pastes it at the playhead.";
     }
-    private static string PartName(object part) => part switch { CutRegion { Lane: < 0 } => "video cut-out", CutRegion => "audio cut-out", SpeedRegion => "speed part", ZoomRegion => "zoom", OverlayItem { Kind: OverlayKind.Image } => "picture", _ => "text" };
+    private static string PartName(object part) => part switch { CutRegion { Lane: < 0 } => "video cut-out", CutRegion => "audio cut-out", SpeedRegion => "speed part", ZoomRegion => "zoom", VolumeRegion => "volume change", SoundItem => "sound", OverlayItem { Kind: OverlayKind.Image } => "picture", OverlayItem { Kind: OverlayKind.Video } => "video", OverlayItem { Kind: OverlayKind.Shape } => "shape", _ => "text" };
     private void PastePart()
     {
         if (copiedPart is not { } part) { StatusLabel.Text = "Nothing copied yet. Click a part and press Ctrl+C."; return; }
-        var (from, to) = part switch { CutRegion c => (c.Start, c.End), SpeedRegion s => (s.Start, s.End), ZoomRegion z => (z.Start, z.End), OverlayItem o => (o.Start, o.End), _ => (0.0, 0.0) };
+        var (from, to) = SpanOf(part);
         double start = Math.Min(playhead, Math.Max(0, media.Duration - .05)), end = Math.Min(media.Duration, start + (to - from));
         if (end - start < 1 / Math.Max(1, media.FrameRate)) { StatusLabel.Text = "There's no room after the playhead to paste it."; return; }
         bool Overlaps(double a, double b) => b > start + 1e-9 && a < end - 1e-9;
@@ -76,6 +78,14 @@ public partial class TrimWindow
                 var pasted = zoom with { Start = start, End = end };
                 Timeline.ZoomRegions = Timeline.ZoomRegions.Append(pasted).OrderBy(r => r.Start).ToArray();
                 UpdateExportHint(); OpenZoom(Timeline.ZoomRegions.ToList().IndexOf(pasted)); StatusLabel.Text = "Pasted the zoom."; break;
+            case VolumeRegion volume:
+                if (volume.Lane >= Timeline.Lanes.Count) { StatusLabel.Text = "This clip has no matching audio lane for that volume change."; return; }
+                if (Timeline.VolumeRegions.Any(v => v.Lane == volume.Lane && Overlaps(v.Start, v.End))) { StatusLabel.Text = "It would overlap another volume change on that lane."; return; }
+                Snapshot(); Timeline.VolumeRegions = Timeline.VolumeRegions.Append(volume with { Start = start, End = end }).ToArray();
+                UpdateExportHint(); ProjectChanged(); StatusLabel.Text = "Pasted the volume change."; break;
+            case SoundItem sound:
+                Snapshot(); SetSounds(Timeline.Sounds.Append(sound with { Start = start, End = end, Row = FreeSoundRow(Timeline.Sounds, start, end) }).ToArray());
+                UpdateExportHint(); ProjectChanged(); StatusLabel.Text = "Pasted the sound."; break;
             case OverlayItem item:
                 AddOverlay(item with { Start = start, End = end, Layer = 0 });
                 if (Timeline.Overlays.Count > 0 && ReferenceEquals(SelectedOverlayItem, Timeline.Overlays[^1])) StatusLabel.Text = $"Pasted the {PartName(item)}.";
@@ -116,8 +126,11 @@ public partial class TrimWindow
                 if (i < 0) return true;
                 RemoveZoom(i); return true;
             }
-            case PartKind.Overlay:
-            {
+            case PartKind.Volume when part is VolumeRegion volume:
+                if (Timeline.VolumeRegions.Contains(volume)) RemoveVolume(volume); return true;
+            case PartKind.Sound when part is SoundItem sound:
+                if (CurrentVersion(sound) is SoundItem now) RemoveSound(now); return true;
+            case PartKind.Overlay:            {
                 int i = Timeline.SelectedOverlay >= 0 ? Timeline.SelectedOverlay : Timeline.Overlays.ToList().FindIndex(o => ReferenceEquals(o, part));
                 if (i < 0) return true;
                 RemoveOverlay(i); return true;

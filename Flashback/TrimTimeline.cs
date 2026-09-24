@@ -13,7 +13,11 @@ internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool To
 // A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
 internal sealed record CutRegion(int Lane, double Start, double End);
 // A stretch played back slower (video and audio together), in source time.
-internal sealed record SpeedRegion(double Start, double End, double Speed);
+// Speed 0 is a freeze frame: the part shows its first frame for its whole length, with or without its sound.
+internal sealed record SpeedRegion(double Start, double End, double Speed, bool FreezeSound = true)
+{
+    internal bool Freeze => Speed == 0;
+}
 
 internal sealed class TrimTimeline : FrameworkElement
 {
@@ -52,19 +56,24 @@ internal sealed class TrimTimeline : FrameworkElement
     // Cut tool: a thin cutter line follows the pointer over the video track or an audio lane.
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
-    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) { slowMode = false; zoomMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool CutMode { get => cutMode; set { ClearTools(); cutMode = value; } }
     // Speed tool: the same two clicks mark a stretch that plays slower or faster (video and audio together).
-    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) { cutMode = false; zoomMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool SlowMode { get => slowMode; set { ClearTools(); slowMode = value; } }
     // Zoom tool: the same two clicks mark a zoomed stretch. It may overlap cuts and speed parts,
     // and snaps to speed-part edges as well as the playhead.
-    internal bool ZoomMode { get => zoomMode; set { zoomMode = value; if (value) { cutMode = false; slowMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
-    // Text and image tools: the same two clicks add an item on the lowest free layer above the video.
-    internal OverlayKind? OverlayMode { get => overlayMode; set { overlayMode = value; if (value != null) { cutMode = false; slowMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool ZoomMode { get => zoomMode; set { ClearTools(); zoomMode = value; } }
+    // Text, picture/video and shape tools: the same two clicks add an item on the lowest free layer above the video.
+    internal OverlayKind? OverlayMode { get => overlayMode; set { ClearTools(); overlayMode = value; } }
+    // Volume tool: two clicks on an audio lane make that stretch louder or quieter.
+    internal bool VolumeMode { get => volumeMode; set { ClearTools(); volumeMode = value; } }
+    // Sound tool: two clicks mark where a music or sound file plays.
+    internal bool SoundMode { get => soundMode; set { ClearTools(); soundMode = value; } }
+    private void ClearTools() { cutMode = slowMode = zoomMode = volumeMode = soundMode = false; overlayMode = null; pendingCut = null; cutHover = null; InvalidateVisual(); }
     private OverlayKind? overlayMode;
-    private bool cutMode, slowMode, zoomMode, cutPress;
-    private bool Placing => cutMode || slowMode || zoomMode || overlayMode != null;
+    private bool cutMode, slowMode, zoomMode, volumeMode, soundMode, cutPress;
+    private bool Placing => cutMode || slowMode || zoomMode || volumeMode || soundMode || overlayMode != null;
     // Parts that cover the whole picture and sound, and snap to other parts' edges.
-    private bool WholeClipTool => slowMode || zoomMode || overlayMode != null;
+    private bool WholeClipTool => slowMode || zoomMode || soundMode || overlayMode != null;
     private IReadOnlyList<ZoomRegion> zoomRegions = Array.Empty<ZoomRegion>();
     internal IReadOnlyList<ZoomRegion> ZoomRegions
     {
@@ -98,6 +107,24 @@ internal sealed class TrimTimeline : FrameworkElement
     private IReadOnlyList<CutRegion> cuts = Array.Empty<CutRegion>();
     internal IReadOnlyList<CutRegion> Cuts { get => cuts; set { cuts = value; cutsVersion++; InvalidateVisual(); } }
     private int cutsVersion;
+    // Volume parts sit on the audio lanes; sounds (music, effects) on their own rows under the lanes.
+    private IReadOnlyList<VolumeRegion> volumeRegions = Array.Empty<VolumeRegion>();
+    internal IReadOnlyList<VolumeRegion> VolumeRegions { get => volumeRegions; set { volumeRegions = value; cutsVersion++; InvalidateVisual(); } }
+    private IReadOnlyList<SoundItem> sounds = Array.Empty<SoundItem>();
+    internal IReadOnlyList<SoundItem> Sounds { get => sounds; set { sounds = value; lanesVersion++; Height = PreferredHeight; InvalidateVisual(); } }
+    internal event Action<int, double, double>? VolumeAdded;
+    internal event Action<double, double>? SoundAdded;
+    internal event Action<VolumeRegion>? VolumeTagClicked, VolumeRemoved;
+    internal event Action<SoundItem>? SoundPicked, SoundRemoved;
+    // Dragging a sound: started (for undo), each change, and done.
+    internal event Action? SoundEditStarted, SoundEditFinished;
+    internal event Action<SoundItem, SoundItem>? SoundMoved;
+    private readonly List<(Rect Tag, VolumeRegion Part)> volumeTags = new();
+    private const double SoundHeight = 18;
+    private int SoundRows => sounds.Count == 0 ? 0 : sounds.Max(s => s.Row) + 1;
+    private double SoundTop(int row) => LanesTop + lanes.Count * (LaneHeight + LaneGap) + row * (SoundHeight + LaneGap);
+    private Rect SoundRect(SoundItem s) { double x = XAt(s.Start); return new Rect(x, SoundTop(s.Row), Math.Max(3, XAt(s.End) - x), SoundHeight); }
+    private SoundItem? SoundAt(Point p) => lanesExpanded ? sounds.LastOrDefault(s => s.End >= ViewStart && s.Start <= ViewStart + Span && Rect.Inflate(SoundRect(s), 2, 1).Contains(p)) : null;
     internal bool HasPendingCut => pendingCut != null;
     internal void CancelPendingCut() { pendingCut = null; InvalidateVisual(); }
     private double CutTimeAt(double x)
@@ -175,6 +202,8 @@ internal sealed class TrimTimeline : FrameworkElement
         CutRegion c when cuts.Contains(c) && (c.Lane < 0 || (lanesExpanded && c.Lane < lanes.Count)) => (c.Start, c.End, Band(c.Lane)),
         SpeedRegion s => slowRegions.FirstOrDefault(r => r.Start == s.Start && r.End == s.End) is { } r ? (r.Start, r.End, Band(-1)) : null,
         ZoomRegion z => zoomRegions.FirstOrDefault(r => r.Start == z.Start && r.End == z.End) is { } r ? (r.Start, r.End, Band(-1)) : null,
+        VolumeRegion v when volumeRegions.Contains(v) && lanesExpanded && v.Lane < lanes.Count => (v.Start, v.End, Band(v.Lane)),
+        SoundItem s when lanesExpanded && sounds.FirstOrDefault(x => x.Start == s.Start && x.End == s.End && x.Row == s.Row) is { } now => (now.Start, now.End, SoundRect(now) with { X = Inset, Width = ActualWidth - 2 * Inset }),
         _ => null
     };
     // Which end of the selected part is under the pointer: true for the start, false for the end.
@@ -200,6 +229,8 @@ internal sealed class TrimTimeline : FrameworkElement
         SpeedRegion s => part is SpeedRegion p && Math.Abs(p.Start - s.Start) < 1e-9 && Math.Abs(p.End - s.End) < 1e-9,
         ZoomRegion z => part is ZoomRegion p && Math.Abs(p.Start - z.Start) < 1e-9 && Math.Abs(p.End - z.End) < 1e-9,
         OverlayItem o => part is OverlayItem p && ReferenceEquals(p, o),
+        VolumeRegion v => part is VolumeRegion p && p == v,
+        SoundItem s => part is SoundItem p && p.Start == s.Start && p.End == s.End && p.Row == s.Row,
         _ => false
     };
     // The part under a point: on the video track the zoom, then speed part, then cut; on a lane its cut.
@@ -215,13 +246,18 @@ internal sealed class TrimTimeline : FrameworkElement
             if (slowRegions.FirstOrDefault(r => t >= r.Start && t < r.End) is { } s) under.Add(s);
             if (cuts.FirstOrDefault(c => c.Lane < 0 && t >= c.Start && t < c.End) is { } c) under.Add(c);
         }
-        else if (band >= 0 && cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t < c.End) is { } laneCut) under.Add(laneCut);
+        else if (band >= 0)
+        {
+            if (cuts.FirstOrDefault(c => c.Lane == band && t >= c.Start && t < c.End) is { } laneCut) under.Add(laneCut);
+            if (volumeRegions.FirstOrDefault(v => v.Lane == band && t >= v.Start && t < v.End) is { } volume) under.Add(volume);
+        }
         StackedAtLastClick = under.Count;
         if (under.Count == 0) return null;
         int current = under.FindIndex(IsFocused);
         return under[(current + 1) % under.Count];
     }
-    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge }
+    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd }
+    private SoundItem? soundOriginal, soundCurrent; private bool soundDragMoved;
     private Drag drag;
     private double grabOffset;
     // The item being dragged: its index, its state before the drag and whether it has moved yet.
@@ -236,7 +272,7 @@ internal sealed class TrimTimeline : FrameworkElement
         set
         {
             if (lanesExpanded == value) return;
-            lanesExpanded = value;
+            lanesExpanded = value; LanesExpandedChanged?.Invoke();
             // Slide the lanes open or shut; skip the motion when Windows animations are off.
             if (SystemParameters.ClientAreaAnimation && PerformanceOptions.Animations && IsLoaded)
                 BeginAnimation(LaneRevealProperty, new DoubleAnimation(value ? 1 : 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
@@ -248,9 +284,11 @@ internal sealed class TrimTimeline : FrameworkElement
         new PropertyMetadata(0.0, (d, _) => { var t = (TrimTimeline)d; t.lanesVersion++; t.Height = t.PreferredHeight; t.InvalidateVisual(); }));
     // 0 folded, 1 open; in between while the lanes slide.
     private double LaneReveal { get => (double)GetValue(LaneRevealProperty); set => SetValue(LaneRevealProperty, value); }
-    internal event Action? LanesToggleRequested;
+    internal event Action? LanesToggleRequested, LanesExpandedChanged;
     private double LaneTop(int i) => LanesTop + i * (LaneHeight + LaneGap);
-    private double LanesSpan => lanes.Count * (LaneHeight + LaneGap);
+    private double LanesSpan => lanes.Count * (LaneHeight + LaneGap) + SoundRows * (SoundHeight + LaneGap);
+    // The fold-away audio area holds the recorded lanes and any added sounds.
+    private bool HasAudioArea => lanes.Count > 0 || sounds.Count > 0;
     private double ScrollTop => LanesTop + LanesSpan * LaneReveal + 2;
     internal double PreferredHeight => Math.Max(56, ScrollTop + ScrollHeight + 4);
     private static readonly Brush Track = Brush("#252D36"), Kept = Brush("#456D5D"), Accent = Brush("#9CE2C1"), Ink = Brush("#EDF0F3"), Muted = Brush("#9DA6B1");
@@ -357,13 +395,15 @@ internal sealed class TrimTimeline : FrameworkElement
         DrawZoomRegions(dc, dpi);
         DrawOverlayRows(dc, dpi);
         DrawFocusGrips(dc);
-        if (LaneReveal > 0 && lanes.Count > 0)
+        if (LaneReveal > 0 && HasAudioArea)
         {
             // Lanes slide out from under the video track and fade in as they open.
             dc.PushClip(new RectangleGeometry(new Rect(0, LanesTop, ActualWidth, LanesSpan * LaneReveal)));
             dc.PushOpacity(LaneReveal);
             for (int i = 0; i < lanes.Count; i++) { DrawLane(dc, lanes[i], LaneTop(i), width, dpi); DimOutsideKept(dc, new Rect(Inset, LaneTop(i), width, LaneHeight), 4); }
             foreach (var cut in cuts) if (cut.Lane >= 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi, focused: IsFocused(cut), cut: cut);
+            DrawVolumes(dc, dpi);
+            DrawSounds(dc, width, dpi);
             dc.Pop(); dc.Pop();
         }
         if (ZoomFactor > 1.001)
@@ -474,7 +514,7 @@ internal sealed class TrimTimeline : FrameworkElement
     // Just a chevron that turns down as the lanes open; a small red dot marks muted audio while folded.
     private void DrawLaneToggle(DrawingContext dc, double dpi)
     {
-        if (lanes.Count == 0) return;
+        if (!HasAudioArea) return;
         var strong = lanesExpanded || toggleHover ? Ink : Muted;
         var chevron = new FormattedText("", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyphs, 9, strong, dpi);
         var center = new Point((Inset - 7) / 2, TrackTop + TrackHeight / 2);
@@ -495,6 +535,7 @@ internal sealed class TrimTimeline : FrameworkElement
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
         if (preview && overlayMode != null && lane < 0) { dc.DrawRoundedRectangle(OverlayWash, new Pen(OverlayFill, 1), area, 3, 3); return; }
+        if (preview && (volumeMode || soundMode)) { dc.DrawRoundedRectangle(SoundFill, new Pen(SoundEdge, 1), area, 3, 3); return; }
         dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(focused ? Ink : zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, focused ? 1.5 : 1), area, 3, 3);
         if (cut != null && w >= 20)
         {
@@ -504,6 +545,42 @@ internal sealed class TrimTimeline : FrameworkElement
             dc.DrawText(icon, new Point(tag.X + 4, tag.Y + (tag.Height - icon.Height) / 2));
             cutTags.Add((tag, cut));
         }
+    }
+    // Volume parts: green on their audio lane, with a tag showing the level (click it to change it).
+    private static readonly Brush SoundFill = Brush("#5A4ADE80"), SoundEdge = Brush("#4ADE80"), SoundInk = Brush("#0A1F12"), SoundRow = Brush("#161B21");
+    private void DrawVolumes(DrawingContext dc, double dpi)
+    {
+        volumeTags.Clear();
+        foreach (var v in volumeRegions)
+        {
+            if (v.Lane >= lanes.Count || v.End < ViewStart || v.Start > ViewStart + Span) continue;
+            var band = Band(v.Lane); double x = XAt(v.Start), w = Math.Max(2, XAt(v.End) - x);
+            bool focused = IsFocused(v);
+            dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1) { DashStyle = focused ? null : DashStyles.Dash }, new Rect(x, band.Top, w, band.Height), 3, 3);
+            var label = Text($"{v.Gain * 100:0}%", 10, SoundInk, dpi);
+            var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), band.Bottom - 15, label.Width + 8, 13);
+            dc.DrawRoundedRectangle(SoundEdge, null, tag, 3, 3);
+            dc.DrawText(label, new Point(tag.X + 4, tag.Y + (tag.Height - label.Height) / 2));
+            volumeTags.Add((tag, v));
+        }
+    }
+    // Sounds: green bars on their own rows under the lanes, with fade-in and fade-out wedges.
+    private void DrawSounds(DrawingContext dc, double width, double dpi)
+    {
+        for (int r = 0; r < SoundRows; r++) dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, SoundTop(r), width, SoundHeight), 4, 4);
+        foreach (var s in sounds)
+        {
+            if (s.End < ViewStart || s.Start > ViewStart + Span) continue;
+            var rect = SoundRect(s); bool focused = IsFocused(s);
+            dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1), rect, 4, 4);
+            double pps = rect.Width / Math.Max(1e-6, s.Length);
+            if (s.FadeIn > 0) dc.DrawGeometry(SoundEdge, null, Wedge(new Point(rect.Left, rect.Bottom), new Point(rect.Left + Math.Min(rect.Width, s.FadeIn * pps), rect.Top), new Point(rect.Left, rect.Top)));
+            if (s.FadeOut > 0) dc.DrawGeometry(SoundEdge, null, Wedge(new Point(rect.Right, rect.Bottom), new Point(rect.Right - Math.Min(rect.Width, s.FadeOut * pps), rect.Top), new Point(rect.Right, rect.Top)));
+            var label = Text("♪ " + s.Label + (s.Duck ? " · ducks" : ""), 10, Ink, dpi);
+            label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
+            if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
+        }
+        static Geometry Wedge(Point a, Point b, Point c) { var g = new StreamGeometry(); using (var x = g.Open()) { x.BeginFigure(a, true, true); x.LineTo(b, false, false); x.LineTo(c, false, false); } g.Freeze(); return g; }
     }
     // Small handles on the ends of the selected part show they can be dragged.
     private void DrawFocusGrips(DrawingContext dc)
@@ -538,6 +615,9 @@ internal sealed class TrimTimeline : FrameworkElement
     // blending with the speed and zoom colors; the items themselves sit on the rows above.
     private static readonly Brush OverlayFill = Brush("#F59E0B"), OverlayDim = Brush("#B7791F"), OverlayWash = Brush("#40F59E0B"), OverlayInk = Brush("#2A1A02"), RowFill = Brush("#161B21");
     private static readonly Pen OverlayCutterPen = new(Brush("#FBBF24"), 1.5);
+    private static readonly Pen SoundCutterPen = new(Brush("#4ADE80"), 1.5);
+    private static readonly Brush MediaFill = Brush("#60A5FA"), MediaDim = Brush("#3B72B8"), ShapeFillBrush = Brush("#F472B6"), ShapeDim = Brush("#B04C86");
+    private bool InSoundRows(Point p) => lanesExpanded && SoundRows > 0 && p.Y >= SoundTop(0) - 2 && p.Y <= SoundTop(SoundRows) + 2;
     private void DrawOverlayWash(DrawingContext dc)
     {
         // Merge the spans first so overlapping items don't darken the wash.
@@ -565,9 +645,20 @@ internal sealed class TrimTimeline : FrameworkElement
             var o = overlays[i];
             if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
             var rect = OverlayRect(o); bool selected = i == selectedOverlay || IsFocused(o);
-            dc.DrawRoundedRectangle(selected ? OverlayFill : OverlayDim, selected ? new Pen(Ink, 1.2) : null, rect, 3, 3);
+            // Colour by kind: text amber, pictures and videos blue, shapes pink.
+            var (fill, dim) = o.Kind switch { OverlayKind.Image or OverlayKind.Video => (MediaFill, MediaDim), OverlayKind.Shape => (ShapeFillBrush, ShapeDim), _ => (OverlayFill, OverlayDim) };
+            dc.DrawRoundedRectangle(selected ? fill : dim, selected ? new Pen(Ink, 1.2) : null, rect, 3, 3);
+            // Keyframes show as small diamonds.
+            foreach (var key in o.Keys)
+            {
+                double kx = XAt(o.Start + key.T); if (kx < rect.Left - 1 || kx > rect.Right + 1) continue;
+                var diamond = new StreamGeometry();
+                using (var g = diamond.Open()) { g.BeginFigure(new Point(kx, rect.Top + 2), true, true); g.PolyLineTo(new[] { new Point(kx + 4, rect.Top + RowHeight / 2), new Point(kx, rect.Bottom - 2), new Point(kx - 4, rect.Top + RowHeight / 2) }, false, false); }
+                diamond.Freeze(); dc.DrawGeometry(Ink, new Pen(OverlayInk, .8), diamond);
+            }
             if (rect.Width < 16) continue;
-            var icon = new FormattedText(o.Kind == OverlayKind.Image ? "" : "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, OverlayInk, dpi);
+            string glyph = o.Kind switch { OverlayKind.Image => "\uE8B9", OverlayKind.Video => "\uE714", OverlayKind.Shape => "\uE739", _ => "\uE8D2" };
+            var icon = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, OverlayInk, dpi);
             dc.DrawText(icon, new Point(rect.X + 4, rect.Y + (RowHeight - icon.Height) / 2));
             var label = Text(o.Label, 9, OverlayInk, dpi);
             label.MaxTextWidth = Math.Max(1, rect.Width - icon.Width - 11); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
@@ -586,7 +677,7 @@ internal sealed class TrimTimeline : FrameworkElement
             if (r.End < ViewStart || r.Start > ViewStart + Span) { slowTags.Add(Rect.Empty); continue; }
             double x = XAt(r.Start), w = Math.Max(2, XAt(r.End) - x);
             dc.DrawRoundedRectangle(SlowFill, new Pen(i == selectedSlow || IsFocused(r) ? Ink : SlowEdge, i == selectedSlow || IsFocused(r) ? 1.5 : 1), new Rect(x, TrackTop, w, TrackHeight), 3, 3);
-            var label = Text(r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
+            var label = Text(r.Freeze ? "Freeze" : r.Speed.ToString("0.##", CultureInfo.InvariantCulture) + "×", 10, SlowInk, dpi);
             var tag = new Rect(Math.Max(x + 1, x + w - label.Width - 11), TrackTop + TrackHeight - 15, label.Width + 8, 13);
             dc.DrawRoundedRectangle(SlowEdge, null, tag, 3, 3);
             dc.DrawText(label, new Point(tag.X + 4, tag.Y + (tag.Height - label.Height) / 2));
@@ -602,12 +693,14 @@ internal sealed class TrimTimeline : FrameworkElement
         var band = Band(lane); double x = XAt(t);
         // Text and image markers reach up through the layer rows too.
         double top = overlayMode != null && lane < 0 ? 4 : band.Top - 3;
-        dc.DrawLine(LockedAt(t) ? LockedCutterPen : overlayMode != null ? OverlayCutterPen : zoomMode ? ZoomCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, top), new Point(x, band.Bottom + 3));
+        dc.DrawLine(LockedAt(t) ? LockedCutterPen : volumeMode || soundMode ? SoundCutterPen : overlayMode != null ? OverlayCutterPen : zoomMode ? ZoomCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, top), new Point(x, band.Bottom + 3));
     }
     private void PlaceCutPoint(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
-        if (band < -1) return;
+        if (band < -1 && !(soundMode && InSoundRows(p))) return;
+        // Volume parts go on an audio lane; sounds can be placed from anywhere on the timeline.
+        if (volumeMode && (band < 0 || band >= lanes.Count)) return;
         if (WholeClipTool) band = -1; // speed parts, zoom, text and images cover the whole picture and sound
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
@@ -617,7 +710,9 @@ internal sealed class TrimTimeline : FrameworkElement
             double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
             if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9)
             {
-                if (overlayMode is { } kind) OverlayAdded?.Invoke(a, b, kind);
+                if (volumeMode) VolumeAdded?.Invoke(from.Lane, a, b);
+                else if (soundMode) SoundAdded?.Invoke(a, b);
+                else if (overlayMode is { } kind) OverlayAdded?.Invoke(a, b, kind);
                 else if (zoomMode) ZoomAdded?.Invoke(a, b);
                 else if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
             }
@@ -627,7 +722,9 @@ internal sealed class TrimTimeline : FrameworkElement
     private void UpdateCutHover(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
-        (int, double)? next = Placing && band > -2 ? (WholeClipTool ? -1 : band, CutTimeAt(p.X)) : null;
+        if (soundMode && band < -1 && InSoundRows(p)) band = -1;
+        bool fits = band > -2 && (!volumeMode || (band >= 0 && band < lanes.Count));
+        (int, double)? next = Placing && fits ? (WholeClipTool ? -1 : band, CutTimeAt(p.X)) : null;
         if (!Equals(next, cutHover)) { cutHover = next; InvalidateVisual(); }
     }
     private int LaneAt(Point p)
@@ -646,13 +743,22 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (pickTime != null) { var pick = pickTime; PickTime = null; pick(LockedTime(point.X)); e.Handled = true; return; }
-        if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
+        if (HasAudioArea && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
         if (!Placing && pendingCut == null && FocusedEdgeAt(point) is bool atStart && FocusedSpan() is { } span)
         {
             drag = Drag.PartEdge; resizing = focusedPart; resizingStart = atStart; resizeStart = span.Start; resizeEnd = span.End;
             pressPoint = point; overlayDragMoved = false; CaptureMouse(); e.Handled = true; return;
         }
         if (pendingCut == null && cutTags.FindIndex(t => t.Tag.Contains(point)) is int cutTag and >= 0) { CutTagClicked?.Invoke(cutTags[cutTag].Cut); e.Handled = true; return; }
+        if (pendingCut == null && lanesExpanded && volumeTags.FindIndex(t => t.Tag.Contains(point)) is int volumeTag and >= 0) { VolumeTagClicked?.Invoke(volumeTags[volumeTag].Part); e.Handled = true; return; }
+        if (pendingCut == null && SoundAt(point) is { } sound)
+        {
+            // Press on a sound: a click opens it, a drag moves it (or its ends) and between rows.
+            var rect = SoundRect(sound);
+            drag = point.X - rect.Left <= 5 && rect.Width > 14 ? Drag.SoundStart : rect.Right - point.X <= 5 && rect.Width > 14 ? Drag.SoundEnd : Drag.SoundMove;
+            soundOriginal = soundCurrent = sound; soundDragMoved = false; pressPoint = point;
+            CaptureMouse(); e.Handled = true; return;
+        }
         if (pendingCut == null && OverlayAt(point) is int item and >= 0)
         {
             // Press on an item: a click opens it, a drag moves it (or its edges) and changes its layer.
@@ -696,6 +802,43 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseMove(e);
         var p=e.GetPosition(this);
+        if (IsMouseCaptured && drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd && soundOriginal is { } original && soundCurrent is { } current)
+        {
+            if (!soundDragMoved && (p - pressPoint).Length <= 3) return;
+            if (!soundDragMoved) { soundDragMoved = true; SoundEditStarted?.Invoke(); }
+            double shift = (p.X - pressPoint.X) * Span / Math.Max(1, ActualWidth - 2 * Inset), frame = 1 / Math.Max(1, FrameRate);
+            var others = sounds.Where(s => s != current).ToList();
+            bool Free(int row, double a, double b) => !others.Any(s => s.Row == row && s.End > a + 1e-9 && s.Start < b - 1e-9);
+            SoundItem next;
+            if (drag == Drag.SoundMove)
+            {
+                double length = original.Length, start = Math.Clamp(original.Start + shift, 0, Math.Max(0, Duration - length));
+                double a = LockedTime(XAt(start)), b = LockedTime(XAt(start + length)) - length;
+                start = Math.Clamp(Math.Abs(a - start) <= Math.Abs(b - start) ? a : b, 0, Math.Max(0, Duration - length));
+                int row = (int)Math.Floor((p.Y - SoundTop(0)) / (SoundHeight + LaneGap));
+                row = Math.Clamp(row, 0, SoundRows);
+                if (!Free(row, start, start + length)) row = Free(original.Row, start, start + length) ? original.Row : Enumerable.Range(0, sounds.Count + 1).First(r => Free(r, start, start + length));
+                next = original with { Start = start, End = start + length, Row = row };
+            }
+            else
+            {
+                var sameRow = others.Where(s => s.Row == original.Row).ToList();
+                if (drag == Drag.SoundStart)
+                {
+                    double limit = sameRow.Where(s => s.End <= original.Start + 1e-9).Select(s => s.End).DefaultIfEmpty(0).Max();
+                    double start = Math.Clamp(LockedTime(XAt(original.Start + shift), original.Start, original.End), limit, original.End - frame);
+                    // Trimming the front skips into the file by the same amount, so the sound stays in place.
+                    next = original with { Start = start, Offset = Math.Max(0, original.Offset + (start - original.Start)) };
+                }
+                else
+                {
+                    double limit = sameRow.Where(s => s.Start >= original.End - 1e-9).Select(s => s.Start).DefaultIfEmpty(Duration).Min();
+                    next = original with { End = Math.Clamp(LockedTime(XAt(original.End + shift), original.Start, original.End), original.Start + frame, limit) };
+                }
+            }
+            if (next != current) { SoundMoved?.Invoke(current, next); soundCurrent = next; }
+            return;
+        }
         if (IsMouseCaptured && drag == Drag.PartEdge && resizing != null)
         {
             if (!overlayDragMoved && (p - pressPoint).Length <= 2) return;
@@ -723,12 +866,20 @@ internal sealed class TrimTimeline : FrameworkElement
             return;
         }
         UpdateCutHover(p);
-        bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
+        bool hover = HasAudioArea && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
         if (pickTime != null) { Cursor = Cursors.Cross; ToolTip = "Click where it should go · Esc cancels"; return; }
         if (!Placing && pendingCut == null && FocusedEdgeAt(p) is bool edge) { Cursor = Cursors.SizeWE; ToolTip = edge ? "Drag to change when it starts" : "Drag to change when it ends"; return; }
         if (pendingCut == null && cutTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this cut-out's times, or restore it"; return; }
+        if (pendingCut == null && lanesExpanded && volumeTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this part's volume · also selects it, so you can drag its ends"; return; }
+        if (pendingCut == null && SoundAt(p) is { } hoverSound)
+        {
+            var rect = SoundRect(hoverSound);
+            Cursor = rect.Width > 14 && (p.X - rect.Left <= 5 || rect.Right - p.X <= 5) ? Cursors.SizeWE : Cursors.SizeAll;
+            ToolTip = $"{hoverSound.Label} · click for volume and fades, drag to move, drag an end to trim · right-click removes";
+            return;
+        }
         if (pendingCut == null && OverlayAt(p) is int hoverItem and >= 0)
         {
             var rect = OverlayRect(overlays[hoverItem]);
@@ -765,6 +916,12 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseRightButtonDown(e);
         if (pendingCut == null && OverlayAt(e.GetPosition(this)) is int item and >= 0) { OverlayRemoved?.Invoke(item); e.Handled = true; return; }
+        if (pendingCut == null && SoundAt(e.GetPosition(this)) is { } sound) { SoundRemoved?.Invoke(sound); e.Handled = true; return; }
+        if (volumeMode && pendingCut == null)
+        {
+            var at = e.GetPosition(this); int lane = BandAt(at); double when = TimeAt(at.X);
+            if (volumeRegions.FirstOrDefault(v => v.Lane == lane && when >= v.Start && when <= v.End) is { } volume) { VolumeRemoved?.Invoke(volume); e.Handled = true; return; }
+        }
         if (!Placing) return;
         // Right-click cancels a half-placed cut, or restores the cut (or slow part) under the pointer.
         if (pendingCut != null) { CancelPendingCut(); e.Handled = true; return; }
@@ -788,6 +945,13 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseLeftButtonUp(e);
         if (!IsMouseCaptured) return;
+        if (drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd)
+        {
+            var clicked = soundOriginal; bool moved = soundDragMoved;
+            ReleaseMouseCapture(); e.Handled = true;
+            if (!moved && clicked != null) SoundPicked?.Invoke(clicked);
+            return;
+        }
         if (drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
         {
             int picked = dragOverlay; bool moved = overlayDragMoved;
@@ -804,6 +968,12 @@ internal sealed class TrimTimeline : FrameworkElement
     internal void EndDrag()
     {
         if (drag == Drag.None) return;
+        if (drag is Drag.SoundMove or Drag.SoundStart or Drag.SoundEnd)
+        {
+            drag = Drag.None; soundOriginal = soundCurrent = null;
+            if (soundDragMoved) { soundDragMoved = false; SoundEditFinished?.Invoke(); }
+            return;
+        }
         if (drag == Drag.PartEdge)
         {
             drag = Drag.None; resizing = null;

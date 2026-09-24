@@ -208,7 +208,11 @@ public partial class TrimWindow
         // Clip to the part being shown (in the player's own coordinates), so the zoomed picture stays
         // inside the video's frame instead of spilling over the letterbox bars.
         Player.Clip = new RectangleGeometry(new Rect(x0, y0, w / z, h / z));
-        // Text and pictures stuck to the video zoom along with it.
-        OverlayView.SetZoom(((MatrixTransform)Player.RenderTransform).Matrix, new Rect(x0, y0, w / z, h / z));
+        // Everything stuck to the video zooms along with it. The player can sit inside the letterbox, so
+        // its zoom is moved into the overlay layer's coordinates.
+        var at = (Vector)PreviewFrame.TranslatePoint(new Point(0, 0), OverlayView) + VisualTreeHelper.GetOffset(Player);
+        var toView = Matrix.Identity; toView.Translate(-at.X, -at.Y);
+        toView *= ((MatrixTransform)Player.RenderTransform).Matrix; toView.Translate(at.X, at.Y);
+        OverlayView.SetZoom(toView, new Rect(x0 + at.X, y0 + at.Y, w / z, h / z));
     }
 }

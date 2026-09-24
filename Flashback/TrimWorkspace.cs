@@ -24,7 +24,7 @@ public partial class TrimWindow
     // Everything about the edit: sections, cut-outs, speed parts, zooms, text, pictures and crop.
     private TrimProject CurrentProject() => new(TrimProject.CurrentVersion,source,sourceBytes,sourceWriteTicks,sections.ToArray(),Timeline.Start,Timeline.End,playhead,(sharingEnabled ? preferredPrecision : ExportMode.SelectedIndex)==1)
     {
-        Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(),
+        Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(), Volumes=Timeline.VolumeRegions.ToArray(), Sounds=Timeline.Sounds.ToArray(),
         Crop=CropArea.Crop is { } c && CurrentCrop()!=null ? new[] { c.X,c.Y,c.Width,c.Height } : null,
     };
     // Called after any edit. Half a second later the named project (if autosaving) and the
@@ -52,6 +52,7 @@ public partial class TrimWindow
             sections.Clear(); foreach(var section in project.Sections.OrderBy(s=>s.Start)) sections.Add(section);
             Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
             CloseOverlay(); CloseZoom(); SetOverlays(OverlayOrder.Compact(project.Overlays ?? Array.Empty<OverlayItem>()));
+            Timeline.VolumeRegions=project.Volumes ?? Array.Empty<VolumeRegion>(); SetSounds(project.Sounds ?? Array.Empty<SoundItem>());
             ResetCrop();
             if (project.Crop is { } c && media.Width>0) { CropArea.VideoWidth=media.Width; CropArea.VideoHeight=media.Height; CropArea.Crop=new Rect(c[0],c[1],c[2],c[3]); RefreshCropState(); }
             SetRange(project.Start,project.End); SeekTo(project.Position); Timeline.Fit(); Timeline.Reveal(project.Position);
@@ -141,7 +142,7 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays };
+        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds };
         options.Validate(); return options;
     }
     // What the export keeps, before validation: the sections, or the marked range.
@@ -152,7 +153,7 @@ public partial class TrimWindow
     private void ExportSpeed_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     // Anything beyond copying the original MP4 streams needs a re-encode.
     private bool NeedsReencode(ShareExportOptions options) =>
-        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0 || options.ZoomRegions.Count>0 || options.Overlays.Count>0;
+        options.Format!=ExportFormat.Mp4 || options.TargetMb>0 || options.Crop!=null || options.Cuts.Count>0 || (media.HasSeparateTracks && options.CustomMix) || options.Speed!=1 || options.SlowRegions.Count>0 || options.ZoomRegions.Count>0 || options.Overlays.Count>0 || options.VolumeRegions.Count>0 || options.Sounds.Count>0;
     private void Share_Changed(object sender,SelectionChangedEventArgs e) => UpdateExportHint();
     private void SizeLimit_Changed(object sender,TextChangedEventArgs e) => UpdateExportHint();
     private void UpdateExportHint()

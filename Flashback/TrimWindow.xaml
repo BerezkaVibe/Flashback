@@ -100,7 +100,22 @@
         </StackPanel>
        </Border>
       </Popup>
-      <Popup x:Name="CutPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
+      <Popup x:Name="VolumePopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
+      <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10" Width="290">
+       <StackPanel>
+        <DockPanel Margin="2,0,2,6"><TextBlock x:Name="VolumeLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock x:Name="VolumePopupTitle" Text="Volume" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="200" TickFrequency="5" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True" Margin="0,2,0,6" ValueChanged="VolumeSlider_Changed" AutomationProperties.Name="Volume of this part"/>
+        <UniformGrid x:Name="VolumeChoices" Rows="1" Margin="0,0,0,8"/>
+        <StackPanel x:Name="VolumeTimingHost" Margin="2,0,2,4"/>
+        <Button Style="{StaticResource TrimButton}" Content="Remove volume change" Click="VolumeRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,4,0,0" HorizontalAlignment="Stretch"/>
+       </StackPanel>
+      </Border>
+     </Popup>
+     <Popup x:Name="SoundPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
+      <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="12,10" Width="310">
+       <StackPanel x:Name="SoundControls"/>
+      </Border>
+     </Popup>     <Popup x:Name="CutPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
       <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10" Width="290">
        <StackPanel>
         <TextBlock x:Name="CutPopupTitle" Text="Cut-out" FontSize="12" FontWeight="SemiBold" Margin="2,0,2,8"/>
@@ -111,7 +126,8 @@
      </Popup>
      <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
       <Button x:Name="TextToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D2;" Click="TextTool_Click" ToolTip="Text: click two spots to add a caption for that part" AutomationProperties.Name="Text tool"/>
-      <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture: click two spots to add a picture or GIF for that part" AutomationProperties.Name="Picture tool"/>
+      <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part" AutomationProperties.Name="Picture or video tool"/>
+      <Button x:Name="ShapeToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xEB3C;" Click="ShapeTool_Click" ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area" AutomationProperties.Name="Shape tool"/>
       <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
      </StackPanel>
      <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
@@ -121,6 +137,13 @@
       <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
       <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A6;" Click="Redo_Click" ToolTip="Redo" AutomationProperties.Name="Redo"/>
       <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE768;" Click="Preview_Click" ToolTip="Play only the kept sections" AutomationProperties.Name="Preview sections" Foreground="{DynamicResource Accent}"/>
+      <!-- Audio tools slide in only while the audio lanes are unfolded. -->
+      <StackPanel x:Name="AudioTools" Orientation="Horizontal">
+       <StackPanel.LayoutTransform><ScaleTransform x:Name="AudioToolsScale" ScaleX="0"/></StackPanel.LayoutTransform>
+       <Border Width="1" Height="18" Margin="3,0" Background="{DynamicResource Outline}" VerticalAlignment="Center"/>
+       <Button x:Name="VolumeToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE9E9;" Click="VolumeTool_Click" ToolTip="Volume: click two spots on an audio lane to make that part louder or quieter" AutomationProperties.Name="Volume tool"/>
+       <Button x:Name="SoundToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D6;" Click="SoundTool_Click" ToolTip="Sound: click two spots to add music or a sound file for that part" AutomationProperties.Name="Sound tool"/>
+      </StackPanel>
      </StackPanel>
     </StackPanel>
    </Border>
