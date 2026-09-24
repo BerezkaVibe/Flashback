@@ -224,7 +224,9 @@ internal static class MediaPartsDiagnostics
         var h = new System.Windows.Interop.WindowInteropHelper(w).Handle;
         SystemTestNative.GetWindowRect(h, out var r);
         using var bmp = new System.Drawing.Bitmap(r.Right - r.Left, r.Bottom - r.Top);
-        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+        // Without a visible desktop (a locked or background session) there is nothing to grab.
+        try { using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size); }
+        catch (System.ComponentModel.Win32Exception) { return; }
         bmp.Save(Path.Combine(Storage.Root, name), System.Drawing.Imaging.ImageFormat.Png);
     }
     private static async Task Shot(Window w, string name)
