@@ -18,10 +18,13 @@ namespace Flashback;
 internal static class OverlayExport
 {
     // Region clips are white masks for a blur or pixelate effect; Pip clips carry a video instead of frames.
-    internal sealed record Clip(OverlayItem Item, Int32Rect Box, IReadOnlyList<(double Time, string File)> Frames, string Blank, Pip? Video = null)
+    internal sealed record Clip(OverlayItem Item, Int32Rect Box, IReadOnlyList<(double Time, string File)> Frames, string Blank, Pip? Video = null, Motion? Move = null)
     {
         internal bool Region => Item.IsRegion;
     }
+    // A keyframed item that only moves: one picture, carried along its keyframes by ffmpeg. Dx and Dy
+    // are from the item's centre to the picture's corner, in frame pixels.
+    internal sealed record Motion(IReadOnlyList<OverlayKeyframe> Keys, double Dx, double Dy);
     // A picture-in-picture video: its crop in the source, its size and centre on the frame, and the
     // mask (and border) pictures drawn at that size.
     internal sealed record Pip(int CropX, int CropY, int CropW, int CropH, int Width, int Height, double CenterX, double CenterY, string Mask, string? Border, int Pad, bool HasSound);
@@ -30,10 +33,32 @@ internal static class OverlayExport
     {
         Directory.CreateDirectory(folder);
         var done = new TaskCompletionSource<List<Clip>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        // WPF drawing needs single-threaded apartments; several draw items side by side (animated
-        // items are hundreds of pictures each) while the window stays responsive.
-        var results = new Clip?[items.Count]; int next = -1, running = 0; Exception? failure = null;
-        int threads = Math.Clamp(Math.Min(items.Count, Environment.ProcessorCount / 2), 1, 6);
+        // Still items that sit next to each other in the layer order become one picture, redrawn only
+        // when one of them comes or goes: fewer pictures to draw and far fewer layers for ffmpeg.
+        var units = new List<Func<int, Clip?>>(); var run = new List<OverlayItem>();
+        void Flush()
+        {
+            if (run.Count == 1) { var only = run[0]; units.Add(n => Cached(new[] { only }, width, height, frameRate, dir => RenderItem(only, 1, width, height, frameRate, dir, token))); }
+            else if (run.Count > 1) { var group = run.ToList(); units.Add(n => Cached(group, width, height, frameRate, dir => RenderGroup(group, 1, width, height, dir, token))); }
+            run.Clear();
+        }
+        foreach (var item in items)
+        {
+            if (item.Length <= 0) continue;
+            // Up to six to a group, so changing one item redraws only a small group.
+            if (IsStill(item) && run.Count < 6 && (run.Count == 0 || run[0].StickToVideo == item.StickToVideo)) { run.Add(item); continue; }
+            Flush();
+            if (IsStill(item)) run.Add(item);
+            else if (item.Kind == OverlayKind.Video) { var video = item; units.Add(n => RenderItem(video, n, width, height, frameRate, folder, token)); }
+            else { var single = item; units.Add(n => Cached(new[] { single }, width, height, frameRate, dir => RenderItem(single, 1, width, height, frameRate, dir, token))); }
+        }
+        Flush();
+        TrimCacheSoon();
+        // WPF drawing needs single-threaded apartments; several draw side by side (animated items are
+        // hundreds of pictures each) while the window stays responsive.
+        var results = new Clip?[units.Count]; int next = -1, running = 0; Exception? failure = null;
+        int threads = Math.Clamp(Math.Min(units.Count, Environment.ProcessorCount / 2), 1, 6);
+        if (units.Count == 0) { done.SetResult(new List<Clip>()); return done.Task; }
         for (int t = 0; t < threads; t++)
         {
             Interlocked.Increment(ref running);
@@ -41,8 +66,8 @@ internal static class OverlayExport
             {
                 try
                 {
-                    for (int i = Interlocked.Increment(ref next); i < items.Count && failure == null; i = Interlocked.Increment(ref next))
-                        results[i] = RenderItem(items[i], i + 1, width, height, frameRate, folder, token);
+                    for (int i = Interlocked.Increment(ref next); i < units.Count && failure == null; i = Interlocked.Increment(ref next))
+                        results[i] = units[i](i + 1);
                 }
                 catch (Exception ex) { Interlocked.CompareExchange(ref failure, ex, null); }
                 finally
@@ -60,6 +85,105 @@ internal static class OverlayExport
         return done.Task;
     }
 
+    // ---- Remembered pictures ----
+    // Pictures drawn for an export are kept, named by exactly what they show (the items, relative to where
+    // they start, the frame size and rate, and the picture files' dates). The next export of the same
+    // edit (or one where only a few things changed, or things only moved along the timeline) reuses them.
+    private static readonly string CacheRoot = Path.Combine(Path.GetTempPath(), "Flashback-overlay-cache");
+    private static readonly System.Text.Json.JsonSerializerOptions CacheJson = new() { IncludeFields = true };
+    private sealed record Saved(Int32Rect Box, List<(double Time, string File)> Frames, string Blank, Motion? Move);
+    private static Clip? Cached(IReadOnlyList<OverlayItem> members, int width, int height, double frameRate, Func<string, Clip?> render)
+    {
+        double origin = members.Min(m => m.Start), end = members.Max(m => m.End);
+        var relative = members.Select(m => m with { Start = m.Start - origin, End = m.End - origin, Layer = 0 }).ToList();
+        string pictures = string.Join("|", members.Where(m => m.Kind == OverlayKind.Image).Select(m => { try { return m.ImagePath + "@" + File.GetLastWriteTimeUtc(m.ImagePath).Ticks; } catch { return m.ImagePath; } }));
+        string json = System.Text.Json.JsonSerializer.Serialize(new { Version = 1, width, height, frameRate, relative, pictures }, CacheJson);
+        string key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(json)))[..32];
+        string dir = Path.Combine(CacheRoot, key), manifest = Path.Combine(dir, "clip.json");
+        Clip Rebuild(Saved saved, string at)
+        {
+            var stand = members.Count == 1 ? members[0] : new OverlayItem { Kind = OverlayKind.Shape, Shape = OverlayShape.Box, Start = origin, End = end, StickToVideo = members[0].StickToVideo };
+            return new Clip(stand, saved.Box, saved.Frames.Select(f => (f.Time, Path.Combine(at, f.File))).ToList(), Path.Combine(at, saved.Blank), Move: saved.Move == null ? null : saved.Move with { Keys = members[0].Keys });
+        }
+        try
+        {
+            if (File.Exists(manifest) && System.Text.Json.JsonSerializer.Deserialize<Saved>(File.ReadAllText(manifest), CacheJson) is { } found
+                && found.Frames.All(f => File.Exists(Path.Combine(dir, f.File))) && File.Exists(Path.Combine(dir, found.Blank)))
+            {
+                try { Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow); } catch { }
+                return Rebuild(found, dir);
+            }
+        }
+        catch { }
+        string work = dir + "." + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(work);
+        var clip = render(work);
+        if (clip == null) { try { Directory.Delete(work, true); } catch { } return null; }
+        var saved = new Saved(clip.Box, clip.Frames.Select(f => (f.Time, Path.GetFileName(f.File))).ToList(), Path.GetFileName(clip.Blank), clip.Move);
+        File.WriteAllText(Path.Combine(work, "clip.json"), System.Text.Json.JsonSerializer.Serialize(saved, CacheJson));
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); Directory.Move(work, dir); return Rebuild(saved, dir); }
+        catch { return Rebuild(saved, work); }
+    }
+    // Keeps the remembered pictures under about 2 GB, dropping the longest unused first.
+    private static void TrimCacheSoon() => Task.Run(() =>
+    {
+        try
+        {
+            if (!Directory.Exists(CacheRoot)) return;
+            var folders = new DirectoryInfo(CacheRoot).GetDirectories().Select(d => (Dir: d, Bytes: d.EnumerateFiles().Sum(f => f.Length))).OrderBy(d => d.Dir.LastWriteTimeUtc).ToList();
+            long total = folders.Sum(d => d.Bytes);
+            foreach (var (d, bytes) in folders)
+            {
+                if (total <= 2L << 30) break;
+                if (DateTime.UtcNow - d.LastWriteTimeUtc < TimeSpan.FromMinutes(10)) continue;
+                try { d.Delete(true); total -= bytes; } catch { }
+            }
+        }
+        catch { }
+    });
+
+    // Looks the same for its whole stretch: no entrance or exit, no keyframed motion, no GIF frames.
+    private static bool IsStill(OverlayItem item) => !item.IsRegion && item.Kind != OverlayKind.Video && !item.Animated().Any() && !OverlayRenderer.FrameChanges(item).Any();
+    // Moves between keyframes without changing size, turn or opacity, and has no entrance or exit.
+    private static bool OnlyMoves(OverlayItem item) => item.Keys.Count >= 2 && !item.IsRegion && item.Kind != OverlayKind.Video && item.In == OverlayMotion.None && item.Out == OverlayMotion.None
+        && !OverlayRenderer.FrameChanges(item).Any() && item.Keys.All(k => Math.Abs(k.Scale - item.Keys[0].Scale) < 1e-6 && Math.Abs(k.Rotation - item.Keys[0].Rotation) < 1e-6 && Math.Abs(k.Opacity - item.Keys[0].Opacity) < 1e-6);
+
+    private static Clip? RenderGroup(List<OverlayItem> members, int n, int width, int height, string folder, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        double aspect = width / (double)Math.Max(1, height), start = members.Min(m => m.Start), end = members.Max(m => m.End);
+        var union = Rect.Empty;
+        foreach (var m in members) { var posed = m.Posed(0); var s = posed.StateAt(0); union.Union(OverlayRenderer.Bounds(posed, s, width, height, OverlayRenderer.Content(posed, s.Chars, 0, aspect))); }
+        union.Intersect(new Rect(0, 0, width, height));
+        if (union.IsEmpty || union.Width < 1 || union.Height < 1) return null;
+        int x = (int)Math.Floor(union.X), y = (int)Math.Floor(union.Y), right = (int)Math.Ceiling(union.Right), bottom = (int)Math.Ceiling(union.Bottom);
+        if (right - x < 2 || bottom - y < 2) return null;
+        var box = new Int32Rect(x, y, Math.Min(width - x, right - x), Math.Min(height - y, bottom - y));
+        string blank = Path.Combine(folder, $"item{n}-blank.png");
+        FastPng.Save(BitmapSource.Create(box.Width, box.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[box.Width * box.Height * 4], box.Width * 4), blank);
+        // A new picture wherever the set of items showing changes.
+        var changes = members.SelectMany(m => new[] { m.Start, m.End }).Where(t => t >= start - 1e-9 && t < end - 1e-6).Distinct().OrderBy(t => t).ToList();
+        var frames = new List<(double, string)>(); string? shown = null;
+        foreach (double t in changes)
+        {
+            token.ThrowIfCancellationRequested();
+            var visible = members.Where(m => m.Start <= t + 1e-9 && m.End > t + 1e-9).ToList();
+            string key = string.Join(",", visible.Select(m => members.IndexOf(m)));
+            if (key == shown) continue;
+            shown = key;
+            if (visible.Count == 0) { frames.Add((t - start, blank)); continue; }
+            var host = new System.Windows.Media.ContainerVisual { Transform = new System.Windows.Media.TranslateTransform(-box.X, -box.Y) };
+            foreach (var m in visible) host.Children.Add(OverlayRenderer.Visual(m, t - m.Start, width, height));
+            var bitmap = new RenderTargetBitmap(box.Width, box.Height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(host);
+            string file = Path.Combine(folder, $"item{n}-{frames.Count}.png");
+            FastPng.Save(bitmap, file);
+            frames.Add((t - start, file));
+        }
+        var stand = new OverlayItem { Kind = OverlayKind.Shape, Shape = OverlayShape.Box, Start = start, End = end, StickToVideo = members[0].StickToVideo };
+        return new Clip(stand, box, frames, blank);
+    }
+
     private static Clip? RenderItem(OverlayItem item, int n, int width, int height, double frameRate, string folder, CancellationToken token)
     {
         double step = 1 / Math.Clamp(frameRate, 1, 60), aspect = width / (double)Math.Max(1, height);
@@ -67,6 +191,19 @@ internal static class OverlayExport
             token.ThrowIfCancellationRequested();
             if (item.Length <= 0) return null;
             if (item.Kind == OverlayKind.Video) return VideoClip(item, width, height, folder, n);
+            if (OnlyMoves(item))
+            {
+                // One picture where the first keyframe puts it; ffmpeg moves it between keyframes.
+                var first = item.Posed(item.Keys[0].T); var s0 = first.StateAt(0);
+                var bounds = OverlayRenderer.Bounds(first, s0, width, height, OverlayRenderer.Content(first, s0.Chars, 0, aspect));
+                if (bounds.IsEmpty || bounds.Width < 1 || bounds.Height < 1) return null;
+                int bx = (int)Math.Floor(bounds.X), by = (int)Math.Floor(bounds.Y);
+                var moving = new Int32Rect(bx, by, (int)Math.Ceiling(bounds.Right) - bx, (int)Math.Ceiling(bounds.Bottom) - by);
+                string still = Path.Combine(folder, $"item{n}-0.png"), none = Path.Combine(folder, $"item{n}-blank.png");
+                FastPng.Save(OverlayRenderer.Render(item, item.Keys[0].T, width, height, moving), still);
+                FastPng.Save(BitmapSource.Create(moving.Width, moving.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[moving.Width * moving.Height * 4], moving.Width * 4), none);
+                return new Clip(item, moving, new[] { (0.0, still) }, none, Move: new Motion(item.Keys, bx - first.X * width, by - first.Y * height));
+            }
             // Blur and pixelate shapes only need their outline: no shadow, just the mask.
             var drawn = item.IsRegion ? item with { Shadow = new OverlayShadow() } : item;
             // Every moment the item's look can change: through its entrance and exit, and at GIF frames.
@@ -105,12 +242,12 @@ internal static class OverlayExport
             {
                 token.ThrowIfCancellationRequested();
                 string file = Path.Combine(folder, $"item{n}-{i}.png");
-                Save(OverlayRenderer.Render(drawn, looks[i].Time, width, height, box), file);
+                FastPng.Save(OverlayRenderer.Render(drawn, looks[i].Time, width, height, box), file);
                 frames.Add((looks[i].Time, file));
             }
             string blank = Path.Combine(folder, $"item{n}-blank.png");
             var empty = BitmapSource.Create(box.Width, box.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[box.Width * box.Height * 4], box.Width * 4);
-            Save(empty, blank);
+            FastPng.Save(empty, blank);
             return new Clip(item, box, frames, blank);
         }
     }
@@ -138,7 +275,7 @@ internal static class OverlayExport
             var bitmap = new RenderTargetBitmap(canvasW, canvasH, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
             bitmap.Render(visual);
             string path = Path.Combine(folder, $"video{n}-{name}.png");
-            Save(new FormatConvertedBitmap(bitmap, System.Windows.Media.PixelFormats.Bgra32, null, 0), path);
+            FastPng.Save(bitmap, path);
             return path;
         }
         string mask = Draw("mask", w, h, 0, dc => dc.DrawGeometry(System.Windows.Media.Brushes.White, null, shape));
@@ -158,6 +295,27 @@ internal static class OverlayExport
         using var file = File.Create(path); encoder.Save(file);
     }
 
+    // Where a moving picture's corner is at each moment of a piece (t runs from the piece's start):
+    // eased from keyframe to keyframe the way the preview eases them, held before the first and after the last.
+    internal static (string X, string Y) MoveExpressions(Clip clip, double pieceStart, int width, int height)
+    {
+        var move = clip.Move!; var keys = move.Keys;
+        string N(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
+        string T = $"(t+{N(pieceStart - clip.Item.Start)})";
+        string Build(Func<OverlayKeyframe, double> value, double size, double offset)
+        {
+            double At(OverlayKeyframe k) => value(k) * size + offset;
+            string expr = N(At(keys[^1]));
+            for (int i = keys.Count - 2; i >= 0; i--)
+            {
+                var a = keys[i]; var b = keys[i + 1];
+                string p = $"clip(({T}-{N(a.T)})/{N(Math.Max(1e-6, b.T - a.T))},0,1)";
+                expr = $"if(lt({T},{N(b.T)}),{N(At(a))}+({N(At(b) - At(a))})*{p}*{p}*(3-2*{p}),{expr})";
+            }
+            return expr;
+        }
+        return (Build(k => k.X, width, move.Dx), Build(k => k.Y, height, move.Dy));
+    }
     // A concat list that plays the item's pictures over one exported piece (source time
     // pieceStart to pieceEnd), and the stretch of the piece where the item shows. Null when the
     // item isn't in this piece.

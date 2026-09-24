@@ -33,6 +33,30 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--export-threads-test"))
+        {
+            try { await StressDiagnostics.ThreadsAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--export-matrix-test"))
+        {
+            try { await StressDiagnostics.ExportMatrixAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--scrub-latency-test"))
+        {
+            try { await StressDiagnostics.ScrubLatencyAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--stress-big-test"))
+        {
+            try { await StressDiagnostics.RunBigAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--stress-test"))
         {
             try { await StressDiagnostics.RunAsync(); Shutdown(0); }

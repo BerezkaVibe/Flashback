@@ -102,6 +102,18 @@ internal static class MediaPartsDiagnostics
                 int x = (int)(640 * (stuck ? .7 : .6));
                 Check(Near(await Rgb(output, 2, x, 180), color.Item1, color.Item2, color.Item3), $"{(item.Kind == OverlayKind.Video ? "Videos" : "Shapes")} {(stuck ? "stuck to the video follow a zoom" : "fixed on screen ignore a zoom")}");
             }
+        // Still items next to each other in the layer order are drawn together, redrawn only as items
+        // come and go: red 0-4 s, green 1-3 s, blue 2-4 s.
+        OverlayItem Square(double from, double to, double x, string color, int layer) => OverlayItem.NewShape(from, to, null) with { ShapeColor = color, ShapeWidth = 90, ShapeHeight = 90, Corner = 0, X = x, Y = .5, Layer = layer };
+        var grouped = Path.Combine(folder, "Grouped stills.mp4");
+        await ExportServices.PreciseAsync(source, grouped, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { Overlays = new[] { Square(0, 4, .25, "#FFFF0000", 0), Square(1, 3, .5, "#FF00FF00", 1), Square(2, 4, .75, "#FF0000FF", 2) } });
+        bool Shows(byte[] rgb, int r, int g, int b) => Near(rgb, r, g, b);
+        var at05 = (await Rgb(grouped, .5, 160, 180), await Rgb(grouped, .5, 320, 180), await Rgb(grouped, .5, 480, 180));
+        var at25 = (await Rgb(grouped, 2.5, 160, 180), await Rgb(grouped, 2.5, 320, 180), await Rgb(grouped, 2.5, 480, 180));
+        var at35 = (await Rgb(grouped, 3.5, 160, 180), await Rgb(grouped, 3.5, 320, 180), await Rgb(grouped, 3.5, 480, 180));
+        Check(Shows(at05.Item1, 255, 0, 0) && !Shows(at05.Item2, 0, 255, 0) && !Shows(at05.Item3, 0, 0, 255)
+            && Shows(at25.Item1, 255, 0, 0) && Shows(at25.Item2, 0, 255, 0) && Shows(at25.Item3, 0, 0, 255)
+            && Shows(at35.Item1, 255, 0, 0) && !Shows(at35.Item2, 0, 255, 0) && Shows(at35.Item3, 0, 0, 255), "Still items drawn together still come and go at their own times");
         // ---- Freeze frame ----
         // A freeze at 1 s holding 1.5 s: the export is 1.5 s longer, still during the hold, and after it
         // the clip carries on from 1 s, so nothing is skipped.
@@ -119,7 +131,11 @@ internal static class MediaPartsDiagnostics
         // A freeze while an inset video (with its own sound) plays: the hold is silent, the export works.
         var frozenInset = Path.Combine(folder, "Freeze with inset.mp4");
         await ExportServices.PreciseAsync(source, frozenInset, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { Freezes = new[] { new FreezeFrame(2, 1) }, Overlays = new[] { pip with { Start = 0, End = 4 } } });
-        Check(Math.Abs(ClipMedia.Read(frozenInset).Duration - 5) < .2 && ClipMedia.Read(frozenInset).HasAudio, "A freeze frame works alongside an inset video with sound");        // Sections play in the order they're listed: 3-4 s, then 0-1 s.
+        Check(Math.Abs(ClipMedia.Read(frozenInset).Duration - 5) < .2 && ClipMedia.Read(frozenInset).HasAudio, "A freeze frame works alongside an inset video with sound");        // A freeze inside a zoom holds the zoomed picture for exactly its time (it used to hold seconds too long).
+        var frozenZoom = Path.Combine(folder, "Freeze in zoom.mp4");
+        await ExportServices.PreciseAsync(source, frozenZoom, new[] { new KeepSection(0, 5) }, null, CancellationToken.None, true,
+            new ShareExportOptions { Freezes = new[] { new FreezeFrame(2.5, 1) }, ZoomRegions = new[] { new ZoomRegion(1, 4, .5, .5, 2, ZoomPreset.BuiltIns[2].Curve) } });
+        Check(Math.Abs(ClipMedia.Read(frozenZoom).Duration - 6) < .15, $"A freeze inside a zoom holds for exactly its time ({ClipMedia.Read(frozenZoom).Duration:0.00} s of 6)");        // Sections play in the order they're listed: 3-4 s, then 0-1 s.
         var swapped = Path.Combine(folder, "Swapped.mp4");
         await ExportServices.PreciseAsync(source, swapped, new[] { new KeepSection(3, 4), new KeepSection(0, 1) }, null, CancellationToken.None, true, new ShareExportOptions());
         double first = Difference(await Gray(swapped, .5, 0, 0, 640, 360), await Gray(source, 3.5, 0, 0, 640, 360)), second = Difference(await Gray(swapped, 1.5, 0, 0, 640, 360), await Gray(source, .5, 0, 0, 640, 360));

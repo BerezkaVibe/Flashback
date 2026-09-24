@@ -154,6 +154,9 @@ internal static class ExportServices
     internal static string? HardwareDecode = "d3d11va";
     // CPU time the last exporter process used, for measurements.
     internal static TimeSpan LastProcessCpu;
+    // Threads for the filter graph (overlays, zoom, scaling). Four nearly halve a busy 1440p export for
+    // about 13% more CPU in all; more add little. Exports run below normal priority, so games come first.
+    internal static int FilterThreads = Math.Clamp(Environment.ProcessorCount / 3, 1, 4);
 
     internal static async Task RunAsync(IEnumerable<string> arguments, CancellationToken token, IProgress<double>? progress = null, double duration = 1, string? workingDirectory = null)
     {
@@ -306,14 +309,20 @@ internal static class ExportServices
                                     : $"scale={Math.Max(1, (int)Math.Round(box.Width / Math.Max(2, strength)))}:{Math.Max(1, (int)Math.Round(box.Height / Math.Max(2, strength)))}:flags=area,scale={box.Width}:{box.Height}:flags=neighbor";
                                 filters.Add($"[{label}]split[{next}a][{next}c];[{next}c]crop={box.Width}:{box.Height}:{box.X}:{box.Y},{effect}[{next}e];[{frames}:v]format=rgba,alphaextract[{next}k];[{next}e][{next}k]alphamerge[{next}r];[{next}a][{next}r]overlay=x={box.X}:y={box.Y}:eof_action=pass:{when}[{next}]");
                             }
-                            else filters.Add($"[{frames}:v]format=rgba[{next}p];[{label}][{next}p]overlay=x={clip.Box.X}:y={clip.Box.Y}:eof_action=pass:{when}[{next}]");
+                            else
+                            {
+                                // A picture that only moves follows its keyframes; the rest sit at their box.
+                                var (px, py) = clip.Move != null ? OverlayExport.MoveExpressions(clip, start, frameW, frameH) : (clip.Box.X.ToString(CultureInfo.InvariantCulture), clip.Box.Y.ToString(CultureInfo.InvariantCulture));
+                                filters.Add($"[{frames}:v]format=rgba[{next}p];[{label}][{next}p]overlay=x='{px}':y='{py}':eof_action=pass:{when}[{next}]");
+                            }
                             label = next;
                         }
                     }
                     Overlay(true);
                     if (zoom.Length > 0) { filters.Add($"[{label}]{zoom[1..]}[z{i}]"); label = $"z{i}"; }
                     Overlay(false);
-                    string hold = piece.Freeze ? $",tpad=stop_mode=clone:stop_duration={Number(Math.Max(0, piece.Hold - frame))}" : "";
+                    // The held frame is restamped first: after a zoom its timestamp is off, which made holds seconds too long.
+                    string hold = piece.Freeze ? $",setpts=N/({Number(1 / frame)}*TB),tpad=stop_mode=clone:stop_duration={Number(Math.Max(0, piece.Hold - frame))}" : "";
                     string tail = hold + slowVideo;
                     filters.Add($"[{label}]{(tail.Length > 0 ? tail[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
                 }
@@ -399,7 +408,7 @@ internal static class ExportServices
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
                 // The filter graph is read from a file: a big edit's graph is longer than a command line may be.
                 File.WriteAllText(Path.Combine(overlayFolder, "graph.txt"), string.Join(';', filters));
-                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", "1", "-/filter_complex", "graph.txt" });
+                args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", FilterThreads.ToString(CultureInfo.InvariantCulture), "-/filter_complex", "graph.txt" });
                 if (video) args.AddRange(new[] { "-map", "[v]" });
                 if (!video) { args.AddRange(new[] { "-map", finalAudio, "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await Run(args); break; }
                 if (options.IsGif) { args.AddRange(new[] { "-loop", "0", "-f", "gif", temp }); await Run(args); break; }
@@ -424,7 +433,7 @@ internal static class ExportServices
             {
                 var verified = ClipMedia.Read(temp);
                 double tolerance = Math.Max(.25, pieces.Count / media.FrameRate / pieces.Min(p => p.Speed) + .05);
-                if (Math.Abs(verified.Duration - output) > tolerance || verified.HasAudio != audio) throw new IOException("Export timing or audio did not match the selected sections.");
+                if (Math.Abs(verified.Duration - output) > tolerance || verified.HasAudio != audio) throw new IOException($"Export timing or audio did not match the selected sections (it came out {verified.Duration:0.00} s, expected {output:0.00} s).");
                 duration = verified.Duration;
             }
             else if (!File.Exists(temp) || new FileInfo(temp).Length == 0) throw new IOException("The export produced an empty file.");

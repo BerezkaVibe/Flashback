@@ -180,7 +180,9 @@ public partial class TrimWindow : Window
     }
     internal void SeekTo(double time, bool defer = false)
     {
-        Pause(); SetPlayhead(time); pendingSeek = true;
+        // Pausing is only needed when something plays: a drag sends a seek for every mouse move.
+        if (playing || freezing != null) Pause();
+        SetPlayhead(time); pendingSeek = true;
         if (!defer) FlushSeek();
     }
     private void FlushSeek()

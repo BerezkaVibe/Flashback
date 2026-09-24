@@ -482,8 +482,23 @@ internal sealed class TrimTimeline : FrameworkElement
         string whole = Duration >= 3600 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"m\:ss");
         return decimals == 0 ? whole : whole + (time.TotalSeconds % 1).ToString("F" + decimals, CultureInfo.InvariantCulture)[1..];
     }
-    private FormattedText Text(string text, double size, Brush brush, double dpi) =>
-        new(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), size, brush, dpi);
+    // Labels are laid out once and reused: a timeline with a hundred layers redraws its labels on every
+    // zoom and scroll, and laying out text is the slow part. Width limits are reset on each reuse.
+    private FormattedText Text(string text, double size, Brush brush, double dpi)
+    {
+        var key = (text, size, brush, dpi);
+        if (texts.TryGetValue(key, out var cached)) { cached.MaxTextWidth = 0; cached.MaxLineCount = int.MaxValue; cached.Trimming = TextTrimming.None; return cached; }
+        if (texts.Count > 3000) texts.Clear();
+        return texts[key] = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, UiFace, size, brush, dpi);
+    }
+    private static readonly Typeface UiFace = new("Segoe UI");
+    private FormattedText GlyphText(string glyph, Brush brush, double dpi)
+    {
+        var key = (glyph, -8.0, brush, dpi);
+        if (texts.TryGetValue(key, out var cached)) return cached;
+        return texts[key] = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, brush, dpi);
+    }
+    private readonly Dictionary<(string, double, Brush, double), FormattedText> texts = new();
     private readonly Dictionary<string, ((float[], double, double, double, double) Key, StreamGeometry Geometry)> waveCache = new();
     private void DrawLane(DrawingContext dc, AudioLane lane, double top, double width, double dpi)
     {
@@ -706,7 +721,7 @@ internal sealed class TrimTimeline : FrameworkElement
             }
             if (rect.Width < 16) continue;
             string glyph = o.Kind switch { OverlayKind.Image => "\uE8B9", OverlayKind.Video => "\uE714", OverlayKind.Shape => "\uE739", _ => "\uE8D2" };
-            var icon = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, OverlayInk, dpi);
+            var icon = GlyphText(glyph, OverlayInk, dpi);
             dc.DrawText(icon, new Point(rect.X + 4, rect.Y + (RowHeight - icon.Height) / 2));
             var label = Text(o.Label, 9, OverlayInk, dpi);
             label.MaxTextWidth = Math.Max(1, rect.Width - icon.Width - 11); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
