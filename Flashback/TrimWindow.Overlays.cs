@@ -43,6 +43,7 @@ public partial class TrimWindow
         OverlayView.Changed += item => { if (Timeline.SelectedOverlay >= 0) { ReplaceOverlay(Timeline.SelectedOverlay, item.Validated()); LoadOverlayUi(); } };
         OverlayView.Source = Player;
         OverlayView.TextEditRequested += EditTextOnVideo;
+        OverlayView.Drawn += ShapeDrawn;
         OverlayView.WheelAdjusted += WheelAdjust;
         OverlayView.CroppingChanged += on => StatusLabel.Text = on ? "Cropping: drag the edges or corners, or drag inside to move the crop. Double-click or Esc when done." : "Crop done.";
         OverlayView.ShapeEditingChanged += on => StatusLabel.Text = on ? "Reshaping: drag the pink corners. Double-click or Esc when done." : "Shape done.";
@@ -65,7 +66,7 @@ public partial class TrimWindow
     private void OverlayTool(OverlayKind kind)
     {
         if (source.Length == 0 || exportCancellation != null) return;
-        Timeline.OverlayMode = Timeline.OverlayMode == kind ? null : kind; ShowCutTool(); SlowPopup.IsOpen = false;
+        Timeline.OverlayMode = Timeline.OverlayMode == kind && !drawPending ? null : kind; drawPending = false; ShowCutTool(); SlowPopup.IsOpen = false;
         string what = kind switch { OverlayKind.Text => "text", OverlayKind.Shape => "a shape (or a blurred or pixelated area)", _ => "a picture, GIF or video" };
         StatusLabel.Text = Timeline.OverlayMode == null ? "Tool off."
             : $"Click two spots to add {what} for that part; the marker locks onto the playhead and other parts' edges. Esc leaves the tool.";
@@ -94,7 +95,8 @@ public partial class TrimWindow
     {
         OverlayItem item;
         if (kind == OverlayKind.Text) item = OverlayItem.NewText(start, end, lastTextStyle);
-        else if (kind == OverlayKind.Shape) item = OverlayItem.NewShape(start, end, lastShapeStyle);
+        // The shape tool starts from the last solid shape; the draw tool from the last drawing.
+        else if (kind == OverlayKind.Shape) item = OverlayItem.NewShape(start, end, lastShapeStyle is { IsDrawn: true } == drawPending ? lastShapeStyle : null);
         else
         {
             var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Add a picture or video", Filter = "Pictures, GIFs and videos|" + string.Join(";", PictureExtensions.Concat(VideoExtensions).Select(x => "*" + x)), CheckFileExists = true };
@@ -103,6 +105,8 @@ public partial class TrimWindow
             item = added;
         }
         AddOverlay(item);
+        // With the draw tool, the new part is drawn on the video straight away.
+        if (kind == OverlayKind.Shape && drawPending && SelectedOverlayItem is { Kind: OverlayKind.Shape } fresh && ReferenceEquals(fresh, Timeline.Overlays[^1])) StartDrawing(drawTool);
     }
     // A picture or a picture-in-picture video, depending on the file.
     private OverlayItem? NewMedia(double start, double end, string path)

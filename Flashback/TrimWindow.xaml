@@ -129,6 +129,12 @@
       <Button x:Name="TextToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D2;" Click="TextTool_Click" ToolTip="Text: click two spots to add a caption for that part" AutomationProperties.Name="Text tool"/>
       <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part" AutomationProperties.Name="Picture or video tool"/>
       <Button x:Name="ShapeToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xEB3C;" Click="ShapeTool_Click" ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area" AutomationProperties.Name="Shape tool"/>
+      <Button x:Name="DrawToolButton" Style="{StaticResource IconButton}" Width="40" Height="26" MinHeight="26" Click="DrawTool_Click" AutomationProperties.Name="Draw tool">
+       <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+        <Path x:Name="DrawToolIcon" Width="14" Height="12" Stretch="Uniform" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M0,10 C3,2 6,2 8,7 S13,12 16,3" VerticalAlignment="Center"/>
+        <Border x:Name="DrawToolChoice" Background="Transparent" Padding="3,6,1,6" Margin="1,0,0,0" PreviewMouseLeftButtonDown="DrawToolChoice_Down" ToolTip="Choose how to draw" AutomationProperties.Name="Choose drawing style"><TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="7" VerticalAlignment="Center"/></Border>
+       </StackPanel>
+      </Button>
       <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
      </StackPanel>
      <StackPanel Orientation="Horizontal" Margin="0,2,0,0">

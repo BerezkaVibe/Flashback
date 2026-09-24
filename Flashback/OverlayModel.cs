@@ -6,7 +6,10 @@ namespace Flashback;
 
 internal enum OverlayKind { Text, Image, Shape, Video }
 // Text highlights (None, Lines, Box) and the shapes of the Shapes tool, which also mask pictures and videos.
-internal enum OverlayShape { None, Lines, Box, Pill, Ellipse, Bubble, Arrow, Custom, Star, Heart, Burst, Hexagon, Diamond, Triangle, Ring, Check, Cross }
+internal enum OverlayShape { None, Lines, Box, Pill, Ellipse, Bubble, Arrow, Custom, Star, Heart, Burst, Hexagon, Diamond, Triangle, Ring, Check, Cross, Freehand, Polyline }
+// Drawn lines: how each end finishes, and whether the line (or a shape's outline) is dashed or dotted.
+internal enum OverlayCap { None, Arrow, Dot }
+internal enum OverlayDash { Solid, Dashed, Dotted }
 // A shape is drawn in its colour, or blurs or pixelates the video inside it.
 internal enum OverlayRegion { Solid, Blur, Pixelate }
 // Position, size, turn and opacity at a moment in the item (T seconds from its start).
@@ -101,6 +104,13 @@ internal sealed record OverlayItem
     public double ShapeHeight { get; init; } = 260;
     public OverlayRegion Region { get; init; }
     public double RegionStrength { get; init; } = 24;
+    // Drawn shapes (freehand or clicked corners) can be open lines or closed shapes. Lines are drawn in the
+    // shape colour at LineWidth; each end can finish in an arrow or a dot. Dash also applies to outlines.
+    public bool Closed { get; init; } = true;
+    public double LineWidth { get; init; } = 10;
+    public OverlayCap StartCap { get; init; }
+    public OverlayCap EndCap { get; init; }
+    public OverlayDash Dash { get; init; }
 
     // Picture-in-picture video: the file, where in it to start, and how loud its sound is (0 mutes it).
     public string VideoPath { get; init; } = "";
@@ -114,7 +124,10 @@ internal sealed record OverlayItem
 
     internal double Length => End - Start;
     internal string DisplayText => Caps ? Text.ToUpperInvariant() : Text;
-    internal bool IsRegion => Kind == OverlayKind.Shape && Region != OverlayRegion.Solid;
+    internal bool IsDrawn => Shape is OverlayShape.Freehand or OverlayShape.Polyline;
+    // An open drawn shape is a line: no fill, no blur.
+    internal bool IsLine => Kind == OverlayKind.Shape && IsDrawn && !Closed;
+    internal bool IsRegion => Kind == OverlayKind.Shape && Region != OverlayRegion.Solid && !IsLine;
     internal string Label => Kind switch
     {
         OverlayKind.Image => System.IO.Path.GetFileName(ImagePath),
@@ -125,7 +138,7 @@ internal sealed record OverlayItem
     internal static string ShapeName(OverlayShape s) => s switch
     {
         OverlayShape.Box => "Rectangle", OverlayShape.Bubble => "Speech bubble", OverlayShape.Custom => "Custom shape", OverlayShape.Burst => "Burst", OverlayShape.Ring => "Circle outline",
-        OverlayShape.Check => "Tick", OverlayShape.Cross => "Cross", _ => s.ToString()
+        OverlayShape.Check => "Tick", OverlayShape.Cross => "Cross", OverlayShape.Freehand => "Drawing", OverlayShape.Polyline => "Lines", _ => s.ToString()
     };
 
     internal static OverlayItem NewText(double start, double end, OverlayItem? style) =>
@@ -192,7 +205,8 @@ internal sealed record OverlayItem
         CropLeft = Math.Clamp(Finite(CropLeft, 0), 0, .9), CropTop = Math.Clamp(Finite(CropTop, 0), 0, .9),
         CropRight = Math.Clamp(Finite(CropRight, 0), 0, .9 - Math.Clamp(Finite(CropLeft, 0), 0, .9)),
         CropBottom = Math.Clamp(Finite(CropBottom, 0), 0, .9 - Math.Clamp(Finite(CropTop, 0), 0, .9)),
-        Points = Points is { Count: >= 3 } ? Points : DefaultPoints,
+        Points = Points is { Count: >= 3 } || (Points is { Count: 2 } && Shape is OverlayShape.Freehand or OverlayShape.Polyline) ? Points : DefaultPoints,
+        LineWidth = Math.Clamp(Finite(LineWidth, 10), 1, 120),
         ShapeCorners = ShapeCorners is { Count: 4 } && ShapeCorners.All(c => double.IsFinite(c.X) && double.IsFinite(c.Y)) ? ShapeCorners : NoCorners,
         ShapeWidth = Math.Clamp(Finite(ShapeWidth, 420), 10, 4000), ShapeHeight = Math.Clamp(Finite(ShapeHeight, 260), 10, 4000),
         RegionStrength = Math.Clamp(Finite(RegionStrength, 24), 2, 200),

@@ -49,17 +49,59 @@ public partial class TrimWindow
             gallery.Children.Add(button);
         }
         OverlayControls.Children.Add(gallery);
+        // Or draw it: a wiggle for freehand, a straight line, and joined lines for corners clicked one by one.
+        var draw = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+        foreach (var tool in new[] { OverlayLayer.DrawTool.Freehand, OverlayLayer.DrawTool.Line, OverlayLayer.DrawTool.Corners })
+        {
+            var button = new Button { Content = DrawGlyph(tool, 18, 14), Width = 34, Height = 30, MinHeight = 30, Padding = new Thickness(0), Margin = new Thickness(0, 0, 4, 4), ToolTip = DrawTip(tool) };
+            button.SetResourceReference(StyleProperty, "IconButton");
+            AutomationProperties.SetName(button, DrawTip(tool));
+            button.Click += (_, _) => { SetDrawTool(tool); StartDrawing(tool); };
+            draw.Children.Add(button);
+        }
+        OverlayControls.Children.Add(draw);
 
-        Combo("Fill", "region", new (string, OverlayRegion)[] { ("Color", OverlayRegion.Solid), ("Blur what's under it", OverlayRegion.Blur), ("Pixelate what's under it", OverlayRegion.Pixelate) }, o => o.Region, (o, v) => o with { Region = v });
+        // Fill: a colour, see-through with just the outline, or a blur or pixelation of the video.
+        var fill = new ComboBox { MinHeight = 28, FontSize = 12 };
+        foreach (var name in new[] { "Color", "Outline only", "Blur what's under it", "Pixelate what's under it" }) fill.Items.Add(name);
+        AutomationProperties.SetName(fill, "Fill");
+        static bool SeeThrough(OverlayItem o) => OverlayRenderer.ParseColor(o.ShapeColor, Colors.Black).A == 0;
+        fill.SelectionChanged += (_, _) => EditOverlay("region", o =>
+        {
+            var c = OverlayRenderer.ParseColor(o.ShapeColor, Colors.Red); string rgb = $"{c.R:X2}{c.G:X2}{c.B:X2}";
+            return fill.SelectedIndex switch
+            {
+                // Outline only keeps the colour for the outline when there wasn't one yet.
+                1 => o with { Region = OverlayRegion.Solid, ShapeColor = "#00" + rgb, ShapeBorderWidth = Math.Max(o.ShapeBorderWidth, 8), ShapeBorderColor = o.ShapeBorderWidth > 0 || c.A == 0 ? o.ShapeBorderColor : "#FF" + rgb },
+                2 => o with { Region = OverlayRegion.Blur },
+                3 => o with { Region = OverlayRegion.Pixelate },
+                _ => o with { Region = OverlayRegion.Solid, ShapeColor = c.A == 0 ? "#CC" + rgb : o.ShapeColor },
+            };
+        });
+        overlayRefresh.Add(o => fill.SelectedIndex = o.Region switch { OverlayRegion.Blur => 2, OverlayRegion.Pixelate => 3, _ => SeeThrough(o) ? 1 : 0 });
+        When(Row("Fill", fill), o => !o.IsLine);
         When(SliderRow("Amount", "regionStrength", 2, 120, o => o.RegionStrength, (o, v) => o with { RegionStrength = Math.Round(v) }, v => $"{v:0}", tip: "How strong the blur is, or how big the blocks are"), o => o.IsRegion);
         When(Hint("Hides whatever is under the shape: faces, names, messages. Move and resize it like any other shape."), o => o.IsRegion);
-        bool Solid(OverlayItem o) => !o.IsRegion;
-        When(Row("Color", Swatch("shapeColor", o => o.ShapeColor, (o, c) => o with { ShapeColor = c }, alpha: true)), Solid);
-        When(OpacityOfColor("shapeOpacity", o => o.ShapeColor, (o, c) => o with { ShapeColor = c }), Solid);
+        bool Solid(OverlayItem o) => !o.IsRegion && !o.IsLine;
+        When(Row("Color", Swatch("shapeColor", o => o.ShapeColor, (o, c) => o with { ShapeColor = c }, alpha: true)), o => (Solid(o) && !SeeThrough(o)) || o.IsLine);
+        When(OpacityOfColor("shapeOpacity", o => o.ShapeColor, (o, c) => o with { ShapeColor = c }), o => (Solid(o) && !SeeThrough(o)) || o.IsLine);
         var borderRow = new StackPanel { Orientation = Orientation.Horizontal };
         borderRow.Children.Add(Swatch("shapeBorder", o => o.ShapeBorderColor, (o, c) => o with { ShapeBorderColor = c }));
-        When(Row("Border", borderRow), Solid);
-        When(SliderRow("Width", "shapeBorderWidth", 0, 24, o => o.ShapeBorderWidth, (o, v) => o with { ShapeBorderWidth = Math.Round(v, 1) }, v => v < .05 ? "Off" : $"{v:0.#}", tip: "Border thickness"), Solid);
+        When(Row("Outline", borderRow), Solid);
+        When(SliderRow("Width", "shapeBorderWidth", 0, 24, o => o.ShapeBorderWidth, (o, v) => o with { ShapeBorderWidth = Math.Round(v, 1) }, v => v < .05 ? "Off" : $"{v:0.#}", tip: "Outline thickness"), Solid);
+        var dashes = new (string, OverlayDash)[] { ("Solid", OverlayDash.Solid), ("Dashed", OverlayDash.Dashed), ("Dotted", OverlayDash.Dotted) };
+        When(ComboRow("Style", "dash", dashes, o => o.Dash, (o, v) => o with { Dash = v }), o => Solid(o) && o.ShapeBorderWidth > 0);
+
+        // Lines: thickness, dashes and how each end finishes.
+        var ends = new (string, OverlayCap)[] { ("Plain", OverlayCap.None), ("Arrow", OverlayCap.Arrow), ("Dot", OverlayCap.Dot) };
+        When(SliderRow("Thickness", "lineWidth", 1, 60, o => o.LineWidth, (o, v) => o with { LineWidth = Math.Round(v, 1) }, v => $"{v:0.#}"), o => o.IsLine);
+        When(ComboRow("Style", "lineDash", dashes, o => o.Dash, (o, v) => o with { Dash = v }), o => o.IsLine);
+        When(ComboRow("Start", "startCap", ends, o => o.StartCap, (o, v) => o with { StartCap = v }), o => o.IsLine);
+        When(ComboRow("End", "endCap", ends, o => o.EndCap, (o, v) => o with { EndCap = v }), o => o.IsLine);
+        var closed = new CheckBox { Content = "Close into a shape", Margin = new Thickness(0, 6, 0, 0), ToolTip = "On: the ends join and it can be filled. Off: it's a line with ends you can finish in arrows or dots." };
+        closed.Click += (_, _) => { EditOverlay("closed", o => o with { Closed = closed.IsChecked == true }); LoadOverlayUi(); };
+        overlayRefresh.Add(o => closed.IsChecked = o.Closed);
+        OverlayControls.Children.Add(closed); When(closed, o => o.IsDrawn && o.Points.Count >= 3);
         When(SliderRow("Corners", "corner", 0, 120, o => o.Corner, (o, v) => o with { Corner = Math.Round(v) }, v => $"{v:0}"), o => o.Shape is OverlayShape.Box or OverlayShape.Bubble);
 
         Header("Size");
@@ -76,6 +118,128 @@ public partial class TrimWindow
         OverlayControls.Children.Add(buttons);
         When(Hint("Double-click the shape on the video, then drag the pink corners (bubble tails drag too). Esc when done."), o => o.Shape != OverlayShape.Custom);
         When(Hint("Double-click the shape on the video, then drag the pink corners. Double-click an edge to add a corner; right-click one to remove it."), o => o.Shape == OverlayShape.Custom);
+    }
+    private Grid ComboRow<T>(string label, string control, (string Name, T Value)[] options, Func<OverlayItem, T> get, Func<OverlayItem, T, OverlayItem> set)
+    {
+        var box = new ComboBox { MinHeight = 28, FontSize = 12 };
+        foreach (var (name, _) in options) box.Items.Add(name);
+        AutomationProperties.SetName(box, label);
+        box.SelectionChanged += (_, _) => { if (box.SelectedIndex >= 0) EditOverlay(control, o => set(o, options[box.SelectedIndex].Value)); };
+        overlayRefresh.Add(o => box.SelectedIndex = Array.FindIndex(options, x => EqualityComparer<T>.Default.Equals(x.Value, get(o))));
+        return Row(label, box);
+    }
+    // Pictures of the three ways to draw: a wiggle, a straight line, and joined lines.
+    private static Geometry DrawIcon(OverlayLayer.DrawTool tool) => Geometry.Parse(tool switch
+    {
+        OverlayLayer.DrawTool.Freehand => "M0,10 C3,2 6,2 8,7 S13,12 16,3",
+        OverlayLayer.DrawTool.Line => "M1,12 L15,2",
+        _ => "M1,12 L5,3 L11,9 L15,1",
+    });
+    private static string DrawTip(OverlayLayer.DrawTool tool) => tool switch
+    {
+        OverlayLayer.DrawTool.Freehand => "Draw freehand: drag on the video; finish near the start to close it into a shape",
+        OverlayLayer.DrawTool.Line => "Straight line: drag on the video (Shift snaps the angle)",
+        _ => "Joined lines: click each corner on the video; double-click or Enter to finish, click the first corner to close",
+    };
+    private static System.Windows.Shapes.Path DrawGlyph(OverlayLayer.DrawTool tool, double width = 14, double height = 12)
+    {
+        var icon = new System.Windows.Shapes.Path { Data = DrawIcon(tool), Stretch = Stretch.Uniform, Width = width, Height = height, StrokeThickness = 1.6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round };
+        icon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Ink");
+        return icon;
+    }
+
+    // ---- The draw tool ----
+    // Like the shape tool: click two spots on the timeline for when it shows, then draw it on the video
+    // the chosen way. The arrow inside the button switches between the three ways.
+    private OverlayLayer.DrawTool drawTool = OverlayLayer.DrawTool.Freehand;
+    private bool drawPending;
+    private void DrawTool_Click(object sender, RoutedEventArgs e) => UseDrawTool(!(drawPending && Timeline.OverlayMode == OverlayKind.Shape));
+    private void UseDrawTool(bool on)
+    {
+        if (source.Length == 0 || exportCancellation != null) return;
+        Timeline.OverlayMode = on ? OverlayKind.Shape : null; drawPending = on;
+        ShowCutTool(); SlowPopup.IsOpen = false;
+        StatusLabel.Text = on ? "Click two spots on the timeline for when the drawing shows, then draw it on the video. Esc leaves the tool." : "Tool off.";
+    }
+    private void DrawToolChoice_Down(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        var menu = new ContextMenu { PlacementTarget = DrawToolButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+        foreach (var tool in new[] { OverlayLayer.DrawTool.Freehand, OverlayLayer.DrawTool.Line, OverlayLayer.DrawTool.Corners })
+        {
+            var item = new MenuItem { Header = DrawGlyph(tool, 22, 16), ToolTip = DrawTip(tool), IsChecked = tool == drawTool };
+            AutomationProperties.SetName(item, DrawTip(tool));
+            item.Click += (_, _) => { SetDrawTool(tool); UseDrawTool(true); };
+            menu.Items.Add(item);
+        }
+        menu.IsOpen = true;
+    }
+    private void SetDrawTool(OverlayLayer.DrawTool tool)
+    {
+        drawTool = tool; DrawToolIcon.Data = DrawIcon(tool);
+        DrawToolButton.ToolTip = DrawTip(tool) + " · " + TrimShortcuts.Display(keys[TrimAction.DrawTool]) + " · the arrow picks another way";
+        // An open shape switches to the new way right away.
+        if (OverlayView.Drawing != null) OverlayView.SetDrawing(tool);
+    }
+    // Draw on the video for the selected shape; the drawing replaces its outline.
+    private void StartDrawing(OverlayLayer.DrawTool tool)
+    {
+        if (SelectedOverlayItem is not { Kind: OverlayKind.Shape } o) return;
+        if (playhead < o.Start || playhead >= o.End) OpenOverlay(Timeline.SelectedOverlay);
+        Pause(); OverlayView.SetDrawing(tool);
+        StatusLabel.Text = tool switch
+        {
+            OverlayLayer.DrawTool.Freehand => "Drag on the video to draw. Finish near where you started to close it into a shape. Esc cancels.",
+            OverlayLayer.DrawTool.Line => "Drag on the video to draw a line; hold Shift to keep it at neat angles. Esc cancels.",
+            _ => "Click each corner on the video. Double-click or Enter to finish, click the first corner to close it, right-click takes a corner back.",
+        };
+    }
+    // A finished drawing (in frame pixels) becomes the shape: its box, its points within the box, and
+    // whether it closes. Freehand strokes are thinned to the points that shape them.
+    private void ShapeDrawn(OverlayLayer.DrawTool tool, IReadOnlyList<Point> drawn, bool closed)
+    {
+        if (SelectedOverlayItem is not { Kind: OverlayKind.Shape } || drawn.Count < 2) return;
+        double frameW = OverlayView.VideoWidth, frameH = OverlayView.VideoHeight, k = OverlayItem.Reference / frameH;
+        var pts = tool == OverlayLayer.DrawTool.Freehand ? Thin(drawn.ToList(), 1.2 / k) : drawn.ToList();
+        double left = pts.Min(p => p.X), right = pts.Max(p => p.X), top = pts.Min(p => p.Y), bottom = pts.Max(p => p.Y);
+        double min = 12 / k, w = Math.Max(right - left, min), h = Math.Max(bottom - top, min), cx = (left + right) / 2, cy = (top + bottom) / 2;
+        var points = pts.Select(p => (Math.Round((p.X - cx) / w, 4), Math.Round((p.Y - cy) / h, 4))).ToArray();
+        var shape = tool == OverlayLayer.DrawTool.Freehand ? OverlayShape.Freehand : OverlayShape.Polyline;
+        Snapshot(); lastOverlayControl = "draw";
+        ReplaceOverlay(Timeline.SelectedOverlay, (SelectedOverlayItem! with
+        {
+            Shape = shape, Closed = closed, Points = points, ShapeWidth = w * k, ShapeHeight = h * k, X = cx / frameW, Y = cy / frameH,
+            Scale = 1, Rotation = 0, Keys = Array.Empty<OverlayKeyframe>(), ShapeCorners = OverlayItem.NoCorners,
+            // A straight line gets an arrow at its end to start with.
+            EndCap = tool == OverlayLayer.DrawTool.Line && SelectedOverlayItem!.EndCap == OverlayCap.None && SelectedOverlayItem.StartCap == OverlayCap.None ? OverlayCap.Arrow : SelectedOverlayItem!.EndCap,
+        }).Validated());
+        LoadOverlayUi();
+        StatusLabel.Text = closed ? "Shape drawn. Pick a fill, or Outline only to circle something." : "Line drawn. Set its thickness, style and ends in the panel.";
+    }
+    // Ramer–Douglas–Peucker: keeps the points that matter to the stroke's shape, within tolerance pixels.
+    private static List<Point> Thin(List<Point> pts, double tolerance)
+    {
+        if (pts.Count < 3) return pts;
+        var keep = new bool[pts.Count]; keep[0] = keep[^1] = true;
+        var stack = new Stack<(int, int)>(); stack.Push((0, pts.Count - 1));
+        while (stack.Count > 0)
+        {
+            var (a, b) = stack.Pop(); double far = 0; int at = -1;
+            for (int i = a + 1; i < b; i++)
+            {
+                double d = Distance(pts[i], pts[a], pts[b]);
+                if (d > far) { far = d; at = i; }
+            }
+            if (at >= 0 && far > tolerance) { keep[at] = true; stack.Push((a, at)); stack.Push((at, b)); }
+        }
+        var result = pts.Where((_, i) => keep[i]).ToList();
+        return result.Count > 300 ? Thin(result, tolerance * 1.5) : result;
+        static double Distance(Point p, Point a, Point b)
+        {
+            var ab = b - a; if (ab.Length < 1e-9) return (p - a).Length;
+            double t = Math.Clamp(((p - a) * ab) / ab.LengthSquared, 0, 1);
+            return (p - (a + ab * t)).Length;
+        }
     }
     // A colour's alpha as its own opacity slider.
     private Grid OpacityOfColor(string control, Func<OverlayItem, string> get, Func<OverlayItem, string, OverlayItem> set) =>

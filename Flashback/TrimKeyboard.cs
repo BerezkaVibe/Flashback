@@ -81,6 +81,7 @@ public partial class TrimWindow
         TextToolButton.ToolTip="Text: click two spots to add a caption for that part · "+Key(TrimAction.TextTool);
         ImageToolButton.ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part · "+Key(TrimAction.ImageTool);
         ShapeToolButton.ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area · "+Key(TrimAction.ShapeTool);
+        SetDrawTool(drawTool);
         VolumeToolButton.ToolTip="Volume: click two spots on an audio lane to make that part louder or quieter · "+Key(TrimAction.VolumeTool);
         SoundToolButton.ToolTip="Sound: click two spots to add music or a sound file · "+Key(TrimAction.SoundTool);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
@@ -130,6 +131,7 @@ public partial class TrimWindow
             case TrimAction.TextTool: TextTool_Click(this,none); break;
             case TrimAction.ImageTool: ImageTool_Click(this,none); break;
             case TrimAction.ShapeTool: ShapeTool_Click(this,none); break;
+            case TrimAction.DrawTool: DrawTool_Click(this,none); break;
             case TrimAction.VolumeTool: VolumeTool_Click(this,none); break;
             case TrimAction.SoundTool: SoundTool_Click(this,none); break;
             case TrimAction.CopyPart: CopyPart(); break;

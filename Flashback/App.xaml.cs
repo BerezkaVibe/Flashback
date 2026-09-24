@@ -33,9 +33,9 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
-        if (e.Args.Contains("--media-parts-test"))
+        if (e.Args.Contains("--media-parts-test") || e.Args.Contains("--media-parts-live-test"))
         {
-            try { await MediaPartsDiagnostics.RunAsync(); Shutdown(0); }
+            try { await MediaPartsDiagnostics.RunAsync(e.Args.Contains("--media-parts-live-test")); Shutdown(0); }
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }

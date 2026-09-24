@@ -17,7 +17,7 @@ namespace Flashback;
 // real exports checked pixel by pixel and sample by sample, then the live editor with screenshots.
 internal static class MediaPartsDiagnostics
 {
-    internal static async Task RunAsync()
+    internal static async Task RunAsync(bool liveOnly = false)
     {
         Directory.CreateDirectory(Storage.Root);
         var checks = new List<string>();
@@ -33,6 +33,8 @@ internal static class MediaPartsDiagnostics
         var inset = Path.Combine(folder, "Magenta inset.mp4");
         await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "color=0xFF00FF:s=320x240:r=30:d=6", "-f", "lavfi", "-i", "sine=frequency=1500:sample_rate=48000:duration=6",
             "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", inset);
+        // The live editor alone, without the export checks, for quick looks.
+        if (liveOnly) { await LiveAsync(source, inset, Check); return; }
         var noisy = Path.Combine(folder, "Noisy source.mp4");
         await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4,noise=alls=50:allf=t", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv420p", noisy);
         var music = Path.Combine(folder, "Tune.m4a");
@@ -211,7 +213,40 @@ internal static class MediaPartsDiagnostics
             await Task.Delay(300); await Shot(live, "parts-panel-shape.png");
             typeof(TrimWindow).GetMethod("OpenOverlay", flags)!.Invoke(live, new object[] { 2 });
             await Task.Delay(300); await Shot(live, "parts-panel-video.png");
-            // A zoomed-in timeline keeps its layers lined up with the video track.
+            // Drawing: a freehand loop, a straight arrow and joined lines, as the draw tool makes them.
+            var drawn = new[]
+            {
+                (OverlayLayer.DrawTool.Freehand, Enumerable.Range(0, 40).Select(i => new Point(160 + 90 * Math.Cos(i * Math.PI / 20), 200 + 70 * Math.Sin(i * Math.PI / 20) + (i % 3) * 2)).ToArray(), true),
+                (OverlayLayer.DrawTool.Line, new[] { new Point(300, 60), new Point(470, 150) }, false),
+                (OverlayLayer.DrawTool.Corners, new[] { new Point(380, 300), new Point(450, 230), new Point(520, 290), new Point(600, 220) }, false),
+            };
+            var start = live.Timeline.Overlays.ToList();
+            foreach (var (tool, points, closed) in drawn)
+            {
+                var blank = OverlayItem.NewShape(0, 6, null) with { Layer = start.Count };
+                start.Add(blank);
+                typeof(TrimWindow).GetMethod("SetOverlays", flags)!.Invoke(live, new object[] { start.ToArray() });
+                typeof(TrimWindow).GetMethod("OpenOverlay", flags)!.Invoke(live, new object[] { start.Count - 1 });
+                typeof(TrimWindow).GetMethod("ShapeDrawn", flags)!.Invoke(live, new object[] { tool, points, closed });
+                start = live.Timeline.Overlays.ToList();
+            }
+            int loop = start.Count - 3, arrow = start.Count - 2, joined = start.Count - 1;
+            start[loop] = start[loop] with { ShapeColor = "#00FF3B30", ShapeBorderColor = "#FFFFE600", ShapeBorderWidth = 8, Dash = OverlayDash.Dotted };
+            start[arrow] = start[arrow] with { ShapeColor = "#FF00E5FF", LineWidth = 12, Dash = OverlayDash.Dashed };
+            start[joined] = start[joined] with { ShapeColor = "#FFFFFFFF", LineWidth = 8, StartCap = OverlayCap.Dot, EndCap = OverlayCap.Arrow };
+            typeof(TrimWindow).GetMethod("SetOverlays", flags)!.Invoke(live, new object[] { start.ToArray() });
+            Check(start[loop] is { Shape: OverlayShape.Freehand, Closed: true } && start[arrow] is { Shape: OverlayShape.Polyline, IsLine: true, EndCap: OverlayCap.Arrow, Points.Count: 2 }
+                && start[joined] is { Shape: OverlayShape.Polyline, IsLine: true, Points.Count: 4 }, "Drawing makes a closed freehand shape, a straight arrow and joined lines");
+            Check(start[loop].Points.Count < 40 && start[loop].Points.Count >= 8, $"Freehand strokes are thinned to the points that shape them ({start[loop].Points.Count} of 40)");
+            // The line's box fits its corners, so its handles and click area cover it.
+            var fitted = start[joined].Points;
+            Check(fitted.Min(p => p.X) > -.51 && fitted.Max(p => p.X) < .51 && fitted.Min(p => p.Y) > -.51 && fitted.Max(p => p.Y) < .51, "A drawn line's box fits around it");
+            typeof(TrimWindow).GetMethod("OpenOverlay", flags)!.Invoke(live, new object[] { joined });
+            await Shot(live, "parts-drawing.png");
+            var capped = OverlayRenderer.Content(start[joined], 0, 0, 16.0 / 9).Bounds; var plainEnds = OverlayRenderer.Content(start[joined] with { StartCap = OverlayCap.None, EndCap = OverlayCap.None }, 0, 0, 16.0 / 9).Bounds;
+            Check(capped.Width > plainEnds.Width + 4 || capped.Height > plainEnds.Height + 4, $"Line ends draw arrows and dots ({plainEnds.Size} → {capped.Size})");            // Every drawn thing is drawn into the export the same way.
+            foreach (var i in new[] { loop, arrow, joined })
+                Check(!OverlayRenderer.Content(start[i], 0, 0, 16.0 / 9).Bounds.IsEmpty, $"{start[i].Label} renders for the export");            // A zoomed-in timeline keeps its layers lined up with the video track.
             for (int i = 0; i < 3; i++) typeof(TrimWindow).GetMethod("ZoomIn_Click", flags)!.Invoke(live, new object[] { live, new RoutedEventArgs() });
             await Task.Delay(300); await Shot(live, "parts-timeline-zoomed.png");
         }

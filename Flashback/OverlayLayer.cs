@@ -16,7 +16,7 @@ internal sealed class OverlayLayer : FrameworkElement
     internal double VideoWidth = 1920, VideoHeight = 1080;
     private IReadOnlyList<OverlayItem> items = Array.Empty<OverlayItem>();
     internal IReadOnlyList<OverlayItem> Items { get => items; set { items = value; ForgetPlayers(); Refresh(); SyncVideos(true); } }
-    internal int Selected { get => selected; set { if (value != selected) { SetCropping(false); SetShapeEditing(false); } selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
+    internal int Selected { get => selected; set { if (value != selected) { SetCropping(false); SetShapeEditing(false); if (Drawing != null) SetDrawing(null); } selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
     private int selected = -1;
     private double time;
     internal double Time { get => time; set { if (Math.Abs(time - value) < 1e-9) return; time = value; Refresh(onlyIfChanged: true); SyncVideos(); } }
@@ -294,12 +294,15 @@ internal sealed class OverlayLayer : FrameworkElement
         return b.IsEmpty ? new Rect(-40, -20, 80, 40) : b;
     }
     private static bool HasShape(OverlayItem item) => item.Kind == OverlayKind.Shape || item.Kind == OverlayKind.Text && item.Shape is not OverlayShape.None;
+    // Shapes whose own corners drag: custom shapes and lines of clicked corners.
+    private static bool HasPoints(OverlayItem item) => item.Shape is OverlayShape.Custom or OverlayShape.Polyline;
     private void DrawHandles()
     {
         using var dc = handles.RenderOpen();
         // Handles only show while the pointer is on the item or dragging it, so the rest of the
         // time the preview looks exactly like the export.
-        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None && !Cropping && !ShapeEditing)) return;
+        if (Drawing != null) { DrawStroke(dc); return; }
+        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None && !Cropping && !ShapeEditing && Drawing == null)) return;
         if (Cropping) { DrawCrop(dc, item); return; }
         if (ShapeEditing) { DrawShapeHandles(dc, item); return; }
         var m = ItemToScreen(item, out var content, out _);
@@ -320,7 +323,7 @@ internal sealed class OverlayLayer : FrameworkElement
         }
         if (HasShape(item) && item.Shape == OverlayShape.Bubble)
             dc.DrawEllipse(Guide, HandlePen, m.Transform(OverlayRenderer.TailTip(item)), 5, 5);
-        if (HasShape(item) && item.Shape == OverlayShape.Custom)
+        if (HasShape(item) && HasPoints(item))
             foreach (var p in CustomPoints(item, m)) dc.DrawEllipse(Guide, HandlePen, p, 4.5, 4.5);
         var v = Video;
         if (guideX is { } gx) dc.DrawLine(GuidePen, new Point(gx.X, v.Top), new Point(gx.X, v.Bottom));
@@ -342,6 +345,97 @@ internal sealed class OverlayLayer : FrameworkElement
         var box = ShapeFrame(item);
         return item.Points.Select(p => m.Transform(new Point(box.X + (p.X + .5) * box.Width, box.Y + (p.Y + .5) * box.Height)));
     }
+
+    // ---- Drawing ----
+    // Draw a shape or line for the selected shape item: drag freehand, drag a straight line (Shift
+    // snaps to 15° steps), or click corners one by one (double-click or Enter finishes; clicking the
+    // first corner closes the shape; right-click takes the last corner back). Esc cancels.
+    internal enum DrawTool { Freehand, Line, Corners }
+    internal DrawTool? Drawing { get; private set; }
+    internal event Action<bool>? DrawingChanged;
+    // The drawn points in frame pixels, and whether they close into a shape.
+    internal event Action<DrawTool, IReadOnlyList<Point>, bool>? Drawn;
+    private readonly List<Point> stroke = new();
+    private Point? rubber;
+    internal void SetDrawing(DrawTool? tool)
+    {
+        if (tool != null && Current is not { Kind: OverlayKind.Shape }) tool = null;
+        if (tool != null) { SetCropping(false); SetShapeEditing(false); }
+        bool changed = Drawing != tool;
+        Drawing = tool; stroke.Clear(); rubber = null; Cursor = tool != null ? Cursors.Pen : null;
+        DrawHandles();
+        if (changed) DrawingChanged?.Invoke(tool != null);
+    }
+    // Enter: finish a line of clicked corners where it is.
+    internal void FinishDrawing(bool closed = false)
+    {
+        if (Drawing is not { } tool) return;
+        if (IsMouseCaptured) ReleaseMouseCapture();
+        int needed = closed ? 3 : 2;
+        if (stroke.Count < needed || Current is not { } item) { SetDrawing(null); return; }
+        var toScreen = FrameToScreen(item);
+        if (!toScreen.HasInverse) { SetDrawing(null); return; }
+        var back = Inverse(toScreen);
+        var points = stroke.Select(back.Transform).ToList();
+        Drawing = null; stroke.Clear(); rubber = null; Cursor = null; DrawHandles();
+        DrawingChanged?.Invoke(false);
+        Drawn?.Invoke(tool, points, closed);
+    }
+    private void DrawStroke(DrawingContext dc)
+    {
+        if (stroke.Count > 0)
+        {
+            var line = new StreamGeometry();
+            using (var g = line.Open()) { g.BeginFigure(stroke[0], false, false); g.PolyLineTo(stroke.Skip(1).Concat(rubber is { } r ? new[] { r } : Array.Empty<Point>()).ToArray(), true, true); }
+            dc.DrawGeometry(null, StrokePen, line);
+            if (Drawing == DrawTool.Corners) foreach (var p in stroke) dc.DrawEllipse(HandleFill, HandlePen, p, 4, 4);
+            // Coming back to the first corner closes the shape.
+            if (Drawing == DrawTool.Corners && stroke.Count >= 3 && rubber is { } near && (near - stroke[0]).Length <= 10) dc.DrawEllipse(Guide, HandlePen, stroke[0], 7, 7);
+        }
+    }
+    private static readonly Pen StrokePen = FrozenPen(new Pen(Guide, 2.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round });
+    private void DrawDown(Point p, MouseButtonEventArgs e)
+    {
+        switch (Drawing)
+        {
+            case DrawTool.Freehand: stroke.Clear(); stroke.Add(p); CaptureMouse(); break;
+            case DrawTool.Line: stroke.Clear(); stroke.Add(p); stroke.Add(p); CaptureMouse(); break;
+            case DrawTool.Corners:
+                if (stroke.Count >= 3 && (p - stroke[0]).Length <= 10) { FinishDrawing(closed: true); return; }
+                if (e.ClickCount == 2) { if (stroke.Count >= 2 && (stroke[^1] - p).Length < 6) stroke.RemoveAt(stroke.Count - 1); stroke.Add(p); FinishDrawing(); return; }
+                stroke.Add(p); break;
+        }
+        DrawHandles();
+    }
+    private void DrawMove(Point p)
+    {
+        switch (Drawing)
+        {
+            case DrawTool.Freehand when IsMouseCaptured && (stroke.Count == 0 || (p - stroke[^1]).Length >= 2): stroke.Add(p); break;
+            case DrawTool.Line when IsMouseCaptured && stroke.Count == 2:
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+                {
+                    var d = p - stroke[0]; double angle = Math.Round(Math.Atan2(d.Y, d.X) / (Math.PI / 12)) * (Math.PI / 12);
+                    p = stroke[0] + new Vector(Math.Cos(angle), Math.Sin(angle)) * d.Length;
+                }
+                stroke[1] = p; break;
+            case DrawTool.Corners: rubber = p; break;
+            default: return;
+        }
+        DrawHandles();
+    }
+    private void DrawUp()
+    {
+        if (!IsMouseCaptured) return;
+        if (Drawing == DrawTool.Freehand)
+        {
+            // A stroke that ends near where it began closes into a shape.
+            bool closed = stroke.Count > 8 && (stroke[^1] - stroke[0]).Length <= Math.Max(18, PathLength(stroke) * .06);
+            FinishDrawing(closed);
+        }
+        else if (Drawing == DrawTool.Line) { if (stroke.Count == 2 && (stroke[1] - stroke[0]).Length >= 6) FinishDrawing(); else { ReleaseMouseCapture(); stroke.Clear(); DrawHandles(); } }
+    }
+    private static double PathLength(List<Point> points) { double sum = 0; for (int i = 1; i < points.Count; i++) sum += (points[i] - points[i - 1]).Length; return sum; }
 
     // ---- Cropping ----
     // Double-click a picture or video to crop it on the preview: the cut-away parts show faintly around
@@ -368,7 +462,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private void DrawShapeHandles(DrawingContext dc, OverlayItem item)
     {
         var m = ItemToScreen(item, out _, out _);
-        if (item.Shape != OverlayShape.Custom)
+        if (!HasPoints(item))
         {
             var c = ShapeCornersOnScreen(item, m);
             var outline = new StreamGeometry();
@@ -458,7 +552,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private enum Grip { None, Move, Scale, Rotate, WrapLeft, WrapRight, Tail, Point, Crop, ShapeCorner, Width, Height }
     private int cropEdges;
     private Grip grip; private Point press; private OverlayItem? original; private int pointIndex; private bool moved;
-    protected override HitTestResult? HitTestCore(PointHitTestParameters p) => ItemAt(p.HitPoint) >= 0 || GripAt(p.HitPoint).Grip != Grip.None ? new PointHitTestResult(this, p.HitPoint) : null;
+    protected override HitTestResult? HitTestCore(PointHitTestParameters p) => Drawing != null || ItemAt(p.HitPoint) >= 0 || GripAt(p.HitPoint).Grip != Grip.None ? new PointHitTestResult(this, p.HitPoint) : null;
     private int ItemAt(Point p)
     {
         foreach (var (item, index) in items.Select((o, i) => (o, i)).OrderByDescending(x => x.o.Layer).ThenByDescending(x => x.o.Start))
@@ -481,11 +575,11 @@ internal sealed class OverlayLayer : FrameworkElement
         if (ShapeEditing)
         {
             if (item.Shape == OverlayShape.Bubble && Near(m.Transform(OverlayRenderer.TailTip(item)))) return (Grip.Tail, -1);
-            if (item.Shape == OverlayShape.Custom) { var pts = CustomPoints(item, m).ToList(); for (int i = 0; i < pts.Count; i++) if (Near(pts[i])) return (Grip.Point, i); }
+            if (HasPoints(item)) { var pts = CustomPoints(item, m).ToList(); for (int i = 0; i < pts.Count; i++) if (Near(pts[i])) return (Grip.Point, i); }
             else { var sc = ShapeCornersOnScreen(item, m); for (int i = 0; i < 4; i++) if (Near(sc[i], 9)) return (Grip.ShapeCorner, i); }
             return (Grip.None, -1);
         }
-        if (HasShape(item) && item.Shape == OverlayShape.Custom)
+        if (HasShape(item) && HasPoints(item))
         {
             var pts = CustomPoints(item, m).ToList();
             for (int i = 0; i < pts.Count; i++) if (Near(pts[i], 7)) return (Grip.Point, i);
@@ -505,6 +599,7 @@ internal sealed class OverlayLayer : FrameworkElement
     {
         base.OnMouseLeftButtonDown(e);
         var p = e.GetPosition(this);
+        if (Drawing != null) { DrawDown(p, e); e.Handled = true; return; }
         var (g, point) = GripAt(p);
         if (Cropping)
         {
@@ -518,7 +613,7 @@ internal sealed class OverlayLayer : FrameworkElement
             if (g != Grip.None) { grip = g; pointIndex = point; press = p; original = Current; moved = false; CaptureMouse(); e.Handled = true; return; }
             // Double-clicking a custom shape's edge adds a corner there; otherwise a double-click,
             // or a click away from the shape, finishes reshaping.
-            if (e.ClickCount == 2 && Current is { Shape: OverlayShape.Custom } custom && ItemAt(p) == selected) { AddPoint(custom, p); e.Handled = true; return; }
+            if (e.ClickCount == 2 && Current is { } custom && HasPoints(custom) && ItemAt(p) == selected) { AddPoint(custom, p); e.Handled = true; return; }
             SetShapeEditing(false);
             if (e.ClickCount == 2 || ItemAt(p) < 0) { e.Handled = e.ClickCount == 2; return; }
             (g, point) = GripAt(p);
@@ -541,9 +636,10 @@ internal sealed class OverlayLayer : FrameworkElement
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
+        if (Drawing == DrawTool.Corners) { if (stroke.Count > 0) stroke.RemoveAt(stroke.Count - 1); DrawHandles(); e.Handled = true; return; }
         // Right-click a custom shape's corner to remove it (a shape keeps at least three).
         var (g, point) = GripAt(e.GetPosition(this));
-        if (g == Grip.Point && Current is { } item && item.Points.Count > 3)
+        if (g == Grip.Point && Current is { } item && item.Points.Count > (item.IsLine ? 2 : 3))
         {
             EditStarted?.Invoke(); Changed?.Invoke(item with { Points = item.Points.Where((_, i) => i != point).ToArray() }); EditFinished?.Invoke(); e.Handled = true;
         }
@@ -574,6 +670,7 @@ internal sealed class OverlayLayer : FrameworkElement
     {
         base.OnMouseMove(e);
         var p = e.GetPosition(this);
+        if (Drawing != null) { DrawMove(p); ToolTip = Drawing switch { DrawTool.Freehand => "Drag to draw · finish near the start to close the shape · Esc cancels", DrawTool.Line => "Drag to draw a line · Shift keeps it straight · Esc cancels", _ => "Click each corner · double-click or Enter to finish · click the first corner to close · right-click takes one back" }; return; }
         if (grip == Grip.None || original is not { } o)
         {
             var (g, edges) = GripAt(p);
@@ -668,6 +765,25 @@ internal sealed class OverlayLayer : FrameworkElement
                 next = posed with { TailX = at.X, TailY = at.Y };
                 break;
             }
+            case Grip.Point when o.Kind == OverlayKind.Shape && o.Shape == OverlayShape.Polyline:
+            {
+                // A line's corner (or end) moves freely; the box refits around the corners so the
+                // handles and the clickable area follow, and the rest of the line stays put.
+                if (!m.HasInverse || pointIndex < 0 || pointIndex >= o.Points.Count) break;
+                var box = ShapeFrame(o); var at = Inverse(m).Transform(p);
+                var corners = o.Points.Select(q => new Point(box.X + (q.X + .5) * box.Width, box.Y + (q.Y + .5) * box.Height)).ToArray();
+                corners[pointIndex] = at;
+                double left = corners.Min(q => q.X), right = corners.Max(q => q.X), top = corners.Min(q => q.Y), bottom = corners.Max(q => q.Y);
+                double w = Math.Max(right - left, 12), h = Math.Max(bottom - top, 12);
+                var centre = new Point((left + right) / 2, (top + bottom) / 2);
+                var onFrame = OverlayRenderer.Placement(posed, state, VideoWidth, VideoHeight).Transform(centre);
+                Changed?.Invoke(o.Shifted(onFrame.X / VideoWidth - state.Dx - posed.X, onFrame.Y / VideoHeight - state.Dy - posed.Y) with
+                {
+                    Points = corners.Select(q => (Math.Round((q.X - centre.X) / w, 4), Math.Round((q.Y - centre.Y) / h, 4))).ToArray(),
+                    ShapeWidth = w, ShapeHeight = h, ShapeCorners = OverlayItem.NoCorners,
+                });
+                return;
+            }
             case Grip.Point:
             {
                 if (!m.HasInverse || pointIndex < 0 || pointIndex >= o.Points.Count) break;
@@ -733,7 +849,7 @@ internal sealed class OverlayLayer : FrameworkElement
     }
     private bool hovering;
     protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); if (hovering && grip == Grip.None) { hovering = false; DrawHandles(); } }
-    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e) { base.OnMouseLeftButtonUp(e); Finish(); }
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e) { base.OnMouseLeftButtonUp(e); if (Drawing != null) { DrawUp(); return; } Finish(); }
     protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); Finish(); }
     private void Finish()
     {

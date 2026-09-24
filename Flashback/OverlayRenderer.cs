@@ -79,14 +79,81 @@ internal static class OverlayRenderer
         var geometry = ShapeIn(item.Shape, ShapeBox(item), item);
         using (var dc = group.Open())
         {
-            if (item.IsRegion) dc.DrawGeometry(Brushes.White, null, geometry);
+            if (item.IsLine)
+            {
+                // An open line in the shape colour, with its ends finished as arrows or dots.
+                var brush = Brush(item.ShapeColor);
+                dc.DrawGeometry(null, LinePen(item, item.LineWidth, brush), geometry);
+                DrawCaps(dc, item, geometry, brush);
+            }
+            else if (item.IsRegion) dc.DrawGeometry(Brushes.White, null, geometry);
             else
             {
-                var pen = item.ShapeBorderWidth > 0 ? new Pen(Brush(item.ShapeBorderColor), item.ShapeBorderWidth) { LineJoin = PenLineJoin.Round } : null;
+                var pen = item.ShapeBorderWidth > 0 ? LinePen(item, item.ShapeBorderWidth, Brush(item.ShapeBorderColor)) : null;
                 dc.DrawGeometry(Brush(item.ShapeColor), pen, geometry);
             }
         }
         group.Freeze(); return group;
+    }
+    // Lines and outlines: round ends and joins, solid, dashed or dotted (a zero-length dash with round
+    // ends is a dot; gaps are measured in line widths).
+    private static Pen LinePen(OverlayItem item, double width, Brush brush)
+    {
+        var pen = new Pen(brush, width) { LineJoin = PenLineJoin.Round, StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, DashCap = PenLineCap.Round };
+        pen.DashStyle = item.Dash switch { OverlayDash.Dashed => new DashStyle(new[] { 2.5, 2.0 }, 0), OverlayDash.Dotted => new DashStyle(new[] { 0.0, 2.0 }, 0), _ => DashStyles.Solid };
+        pen.Freeze(); return pen;
+    }
+    private static void DrawCaps(DrawingContext dc, OverlayItem item, Geometry line, Brush brush)
+    {
+        if (item.StartCap == OverlayCap.None && item.EndCap == OverlayCap.None) return;
+        // The line passes through its points, so its ends and their directions come from them.
+        var box = ShapeBox(item);
+        var points = item.Points.Select(p => new Point(box.X + (p.X + .5) * box.Width, box.Y + (p.Y + .5) * box.Height)).ToList();
+        if (points.Count < 2) return;
+        double w = item.LineWidth;
+        Cap(item.StartCap, points[0], points.Skip(1));
+        Cap(item.EndCap, points[^1], Enumerable.Reverse(points).Skip(1));
+        void Cap(OverlayCap cap, Point tip, IEnumerable<Point> along)
+        {
+            if (cap == OverlayCap.None) return;
+            if (cap == OverlayCap.Dot) { dc.DrawEllipse(brush, null, tip, w * 1.2, w * 1.2); return; }
+            // The arrow points the way the line leaves this end, measured a head's length back.
+            double head = Math.Max(12, w * 3.2);
+            var from = along.FirstOrDefault(p => (p - tip).Length >= head * .6, along.LastOrDefault(tip));
+            var dir = tip - from; if (dir.Length < 1e-6) return; dir.Normalize();
+            var across = new Vector(-dir.Y, dir.X);
+            var back = tip - dir * head;
+            var arrow = Polygon(new[] { tip + dir * w * .3, back + across * head * .6, back - across * head * .6 });
+            dc.DrawGeometry(brush, new Pen(brush, Math.Max(1, w * .3)) { LineJoin = PenLineJoin.Round }, arrow);
+        }
+    }
+    // A drawn shape through its points (fractions of the box): smooth curves for freehand drawing,
+    // straight segments for clicked corners. Open unless it's closed and has at least three points.
+    private static Geometry DrawnPath(OverlayItem item, Rect box)
+    {
+        var pts = item.Points.Select(p => new Point(box.X + (p.X + .5) * box.Width, box.Y + (p.Y + .5) * box.Height)).ToList();
+        bool closed = item.Closed && pts.Count >= 3;
+        var g = new StreamGeometry();
+        using (var c = g.Open())
+        {
+            c.BeginFigure(pts[0], closed, closed);
+            if (item.Shape == OverlayShape.Polyline || pts.Count < 3) c.PolyLineTo(pts.Skip(1).ToArray(), true, true);
+            else c.PolyBezierTo(Smooth(pts, closed), true, true);
+        }
+        g.Freeze(); return g;
+    }
+    // Catmull-Rom through the points, as cubic Bézier control points.
+    private static List<Point> Smooth(List<Point> p, bool closed)
+    {
+        var result = new List<Point>();
+        int n = p.Count, segments = closed ? n : n - 1;
+        Point At(int i) => closed ? p[((i % n) + n) % n] : p[Math.Clamp(i, 0, n - 1)];
+        for (int i = 0; i < segments; i++)
+        {
+            Point p0 = At(i - 1), p1 = At(i), p2 = At(i + 1), p3 = At(i + 2);
+            result.Add(p1 + (p2 - p0) / 6); result.Add(p2 - (p3 - p1) / 6); result.Add(p2);
+        }
+        return result;
     }
     internal static Geometry ShapeGeometryOf(OverlayItem item) => ShapeIn(item.Shape, ShapeBox(item), item);
 
@@ -294,6 +361,7 @@ internal static class OverlayRenderer
                 break;
             }
             case OverlayShape.Ellipse when !aroundText: g = new EllipseGeometry(c, rx, ry); break;
+            case OverlayShape.Freehand or OverlayShape.Polyline: g = DrawnPath(item, box); break;
             default: g = TextShape(item, shape, box, lines ?? Array.Empty<(double, double, double, double)>()); break;
         }
         if (item.CornersMoved && shape != OverlayShape.Custom && shape != OverlayShape.Bubble) g = Warp(g, box, item.ShapeCorners);

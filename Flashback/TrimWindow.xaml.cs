@@ -315,6 +315,7 @@ public partial class TrimWindow : Window
         if (key==Key.Escape && modifiers==ModifierKeys.None && Timeline.PickTime!=null) { Timeline.PickTime=null; StatusLabel.Text="Pick cancelled."; return true; }
         if (source.Length>0 && Nudge(key,modifiers)) return true;
         // Esc or Enter finishes cropping a picture.
+        if (OverlayView.Drawing != null && key is Key.Escape or Key.Enter && modifiers == ModifierKeys.None) { if (key == Key.Enter) OverlayView.FinishDrawing(); else { OverlayView.SetDrawing(null); StatusLabel.Text = "Drawing cancelled."; } return true; }
         if (key is Key.Escape or Key.Enter && modifiers==ModifierKeys.None && (OverlayView.Cropping || OverlayView.ShapeEditing)) { OverlayView.SetCropping(false); OverlayView.SetShapeEditing(false); return true; }
         // Esc leaves the cut, speed, zoom, text or picture tool.
         if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode || Timeline.ZoomMode || Timeline.OverlayMode!=null || Timeline.VolumeMode || Timeline.SoundMode))
