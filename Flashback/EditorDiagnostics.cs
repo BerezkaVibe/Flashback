@@ -146,7 +146,10 @@ internal static class EditorDiagnostics
         {
             caption with { Start = .5, End = 3.5, In = OverlayMotion.Typewriter, InLength = 1, Out = OverlayMotion.Fade, Shape = OverlayShape.Bubble, Shadow = new OverlayShadow(true) },
             picture with { Start = 1, End = 5, In = OverlayMotion.Pop, Out = OverlayMotion.SlideLeft, Rotation = 30, Opacity = .7, Layer = 1, StickToVideo = false },
+            caption with { Start = 0, End = 4, Y = .2, Text = "SKEW", Shape = OverlayShape.Pill, ShapeColor = "#99FFE600", ShapeCorners = new[] { (-60.0, -30.0), (40.0, 0.0), (0.0, 30.0), (0.0, 0.0) }, Layer = 2 },
         };
+        var plain = caption with { Shape = OverlayShape.Pill };
+        Check(OverlayRenderer.Content(busyItems[2], 4, 0, 16.0 / 9).Bounds.Left < OverlayRenderer.Content(plain, 4, 0, 16.0 / 9).Bounds.Left - 40, "Dragging a shape's corner stretches the shape");
         await ExportServices.PreciseAsync(source, busy, new[] { new KeepSection(0, 2), new KeepSection(3, 5) }, null, CancellationToken.None, true,
             new ShareExportOptions { Overlays = busyItems, SlowRegions = new[] { new SpeedRegion(1, 2, .5) }, ZoomRegions = new[] { zoomRegion } });
         Check(Math.Abs(ClipMedia.Read(busy).Duration - 5) < .3, "Animated text and pictures export alongside speed parts, zoom and two sections");

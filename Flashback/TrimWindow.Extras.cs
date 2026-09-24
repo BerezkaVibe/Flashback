@@ -108,16 +108,26 @@ public partial class TrimWindow
     }
     private void CutAdded(CutRegion cut)
     {
-        // Cuts and speed parts never overlap.
-        if (Timeline.SlowRegions.Any(r => r.End > cut.Start && r.Start < cut.End)) { StatusLabel.Text = "Cuts can't overlap a speed part. Pick a stretch outside the purple speed parts."; return; }
+        // A video cut-out can't overlap speed, zoom, text or picture parts; audio cut-outs can overlap anything.
+        if (cut.Lane < 0 && OverlapsParts(cut.Start, cut.End) is { } blocked) { StatusLabel.Text = $"A video cut-out can't overlap {blocked}. Cut the audio instead, or pick another stretch."; return; }
         Snapshot();
         // Overlapping cuts on the same lane merge into one.
         var same = Timeline.Cuts.Where(c => c.Lane == cut.Lane && c.End >= cut.Start && c.Start <= cut.End).ToList();
         var merged = new CutRegion(cut.Lane, same.Select(c => c.Start).Append(cut.Start).Min(), same.Select(c => c.End).Append(cut.End).Max());
         Timeline.Cuts = Timeline.Cuts.Except(same).Append(merged).OrderBy(c => c.Lane).ThenBy(c => c.Start).ToArray();
-        string what = cut.Lane < 0 ? "Video blacked out" : $"{Timeline.Lanes[cut.Lane].Name} muted";
+        string what = cut.Lane < 0 ? "Video blacked out" : cut.Lane < Timeline.Lanes.Count ? $"{Timeline.Lanes[cut.Lane].Name} muted" : "Audio muted";
         StatusLabel.Text = $"{what} from {KeepSection.TimeText(merged.Start)} to {KeepSection.TimeText(merged.End)}.";
         ApplyPreviewCuts(); UpdateExportHint();
+    }
+    private bool OverlapsVideoCut(double start, double end) => Timeline.Cuts.Any(c => c.Lane < 0 && c.End > start + 1e-9 && c.Start < end - 1e-9);
+    // What a video cut-out over start-end would collide with, or null when it's clear.
+    private string? OverlapsParts(double start, double end)
+    {
+        bool Hits(double a, double b) => b > start + 1e-9 && a < end - 1e-9;
+        if (Timeline.SlowRegions.Any(r => Hits(r.Start, r.End))) return "a speed part";
+        if (Timeline.ZoomRegions.Any(r => Hits(r.Start, r.End))) return "a zoom";
+        if (Timeline.Overlays.Any(o => Hits(o.Start, o.End))) return "text or a picture";
+        return null;
     }
     private void CutRemoved(CutRegion cut)
     {
@@ -156,7 +166,7 @@ public partial class TrimWindow
     }
     private void SlowAdded(double start, double end)
     {
-        if (Timeline.Cuts.Any(c => c.End > start && c.Start < end)) { StatusLabel.Text = "A speed part can't overlap a cut. Pick a stretch outside the red cut-outs."; return; }
+        if (OverlapsVideoCut(start, end)) { StatusLabel.Text = "A speed part can't overlap a video cut-out. Pick a stretch outside the red cut-outs."; return; }
         if (Timeline.SlowRegions.Any(r => r.End > start && r.Start < end)) { StatusLabel.Text = "That overlaps another speed part. Click its tag to change it instead."; return; }
         Snapshot();
         Timeline.SlowRegions = Timeline.SlowRegions.Append(new SpeedRegion(start, end, .5)).OrderBy(r => r.Start).ToArray();

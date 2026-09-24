@@ -123,6 +123,9 @@ internal static class TrimInteractionDiagnostics
             cutsBefore=tl.Cuts.Count; tl.CutMode=true;
             place.Invoke(tl,new object[]{new Point(tl.XAt(7.2),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(7.8),26)});
             Check(tl.Cuts.Count==cutsBefore,"Cuts can't be placed over slow motion");
+            cutAdded.Invoke(trim,new object[]{new CutRegion(0,7.2,7.8)});
+            Check(tl.Cuts.Count==cutsBefore+1,"Audio cut-outs may overlap a speed part");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             tl.CutMode=false;
             trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             Check(tl.SlowRegions[^1].Speed==.5,"Undo reverts a slow-motion speed change");

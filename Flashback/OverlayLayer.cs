@@ -15,7 +15,7 @@ internal sealed class OverlayLayer : FrameworkElement
     internal double VideoWidth = 1920, VideoHeight = 1080;
     private IReadOnlyList<OverlayItem> items = Array.Empty<OverlayItem>();
     internal IReadOnlyList<OverlayItem> Items { get => items; set { items = value; Refresh(); } }
-    internal int Selected { get => selected; set { if (value != selected) SetCropping(false); selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
+    internal int Selected { get => selected; set { if (value != selected) { SetCropping(false); SetShapeEditing(false); } selected = value; hovering = value >= 0 && IsMouseOver && ItemAt(Mouse.GetPosition(this)) == value; Refresh(); } }
     private int selected = -1;
     private double time;
     internal double Time { get => time; set { if (Math.Abs(time - value) < 1e-9) return; time = value; Refresh(onlyIfChanged: true); } }
@@ -114,8 +114,9 @@ internal sealed class OverlayLayer : FrameworkElement
         using var dc = handles.RenderOpen();
         // Handles only show while the pointer is on the item or dragging it, so the rest of the
         // time the preview looks exactly like the export.
-        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None && !Cropping)) return;
+        if (Current is not { } item || !Visible(item) || (!hovering && grip == Grip.None && !Cropping && !ShapeEditing)) return;
         if (Cropping) { DrawCrop(dc, item); return; }
+        if (ShapeEditing) { DrawShapeHandles(dc, item); return; }
         var m = ItemToScreen(item, out var content, out _);
         var box = HandleBox(item, content); var c = Corners(box, m);
         var outline = new StreamGeometry();
@@ -159,6 +160,32 @@ internal sealed class OverlayLayer : FrameworkElement
         if (Cropping == on) return;
         Cropping = on; DrawHandles(); CroppingChanged?.Invoke(on);
     }
+    // Double-click text with a shape behind it to reshape it: each of the shape's corners drags
+    // (a custom shape's own corners, and a bubble's tail, drag too).
+    internal bool ShapeEditing { get; private set; }
+    internal event Action<bool>? ShapeEditingChanged;
+    internal void SetShapeEditing(bool on)
+    {
+        if (on && Current is not { Kind: OverlayKind.Text, Shape: not OverlayShape.None }) on = false;
+        if (ShapeEditing == on) return;
+        ShapeEditing = on; DrawHandles(); ShapeEditingChanged?.Invoke(on);
+    }
+    private Point[] ShapeCornersOnScreen(OverlayItem item, Matrix m) => OverlayRenderer.ShapeCornerPoints(item, PaddedBox(item)).Select(m.Transform).ToArray();
+    private void DrawShapeHandles(DrawingContext dc, OverlayItem item)
+    {
+        var m = ItemToScreen(item, out _, out _);
+        if (item.Shape != OverlayShape.Custom)
+        {
+            var c = ShapeCornersOnScreen(item, m);
+            var outline = new StreamGeometry();
+            using (var g = outline.Open()) { g.BeginFigure(c[0], false, true); g.PolyLineTo(c.Skip(1).ToArray(), true, false); }
+            dc.DrawGeometry(null, GuideDash, outline);
+            foreach (var p in c) dc.DrawRectangle(Guide, HandlePen, new Rect(p.X - 5, p.Y - 5, 10, 10));
+        }
+        else foreach (var p in CustomPoints(item, m)) dc.DrawEllipse(Guide, HandlePen, p, 5, 5);
+        if (item.Shape == OverlayShape.Bubble) dc.DrawEllipse(Guide, HandlePen, m.Transform(OverlayRenderer.TailTip(item)), 5, 5);
+    }
+    private static readonly Pen GuideDash = FrozenPen(new Pen(Guide, 1.2) { DashStyle = new DashStyle(new double[] { 3, 3 }, 0) });
     private const int EdgeLeft = 1, EdgeTop = 2, EdgeRight = 4, EdgeBottom = 8;
     private static Rect Kept(OverlayItem item, Rect full) =>
         new(full.Left + item.CropLeft * full.Width, full.Top + item.CropTop * full.Height, full.Width * (1 - item.CropLeft - item.CropRight), full.Height * (1 - item.CropTop - item.CropBottom));
@@ -227,7 +254,7 @@ internal sealed class OverlayLayer : FrameworkElement
     }
 
     // ---- Mouse ----
-    private enum Grip { None, Move, Scale, Rotate, WrapLeft, WrapRight, Tail, Point, Crop }
+    private enum Grip { None, Move, Scale, Rotate, WrapLeft, WrapRight, Tail, Point, Crop, ShapeCorner }
     private int cropEdges;
     private Grip grip; private Point press; private OverlayItem? original; private int pointIndex; private bool moved;
     protected override HitTestResult? HitTestCore(PointHitTestParameters p) => ItemAt(p.HitPoint) >= 0 || GripAt(p.HitPoint).Grip != Grip.None ? new PointHitTestResult(this, p.HitPoint) : null;
@@ -250,6 +277,13 @@ internal sealed class OverlayLayer : FrameworkElement
         var m = ItemToScreen(item, out var content, out _);
         var c = Corners(HandleBox(item, content), m);
         bool Near(Point a, double r = 8) => (a - p).Length <= r;
+        if (ShapeEditing)
+        {
+            if (item.Shape == OverlayShape.Bubble && Near(m.Transform(OverlayRenderer.TailTip(item)))) return (Grip.Tail, -1);
+            if (item.Shape == OverlayShape.Custom) { var pts = CustomPoints(item, m).ToList(); for (int i = 0; i < pts.Count; i++) if (Near(pts[i])) return (Grip.Point, i); }
+            else { var sc = ShapeCornersOnScreen(item, m); for (int i = 0; i < 4; i++) if (Near(sc[i], 9)) return (Grip.ShapeCorner, i); }
+            return (Grip.None, -1);
+        }
         if (item.Kind == OverlayKind.Text && item.Shape == OverlayShape.Custom)
         {
             var pts = CustomPoints(item, m).ToList();
@@ -273,16 +307,25 @@ internal sealed class OverlayLayer : FrameworkElement
             else { grip = g; cropEdges = point; press = p; original = Current; moved = false; CaptureMouse(); e.Handled = true; return; }
             (g, point) = GripAt(p);
         }
+        if (ShapeEditing)
+        {
+            if (g != Grip.None) { grip = g; pointIndex = point; press = p; original = Current; moved = false; CaptureMouse(); e.Handled = true; return; }
+            // Double-clicking a custom shape's edge adds a corner there; otherwise a double-click,
+            // or a click away from the text, finishes reshaping.
+            if (e.ClickCount == 2 && Current is { Shape: OverlayShape.Custom } custom && ItemAt(p) == selected) { AddPoint(custom, p); e.Handled = true; return; }
+            SetShapeEditing(false);
+            if (e.ClickCount == 2 || ItemAt(p) < 0) { e.Handled = e.ClickCount == 2; return; }
+            (g, point) = GripAt(p);
+        }
         if (g == Grip.None)
         {
             int hit = ItemAt(p);
             if (hit < 0) return;
             if (hit != selected) { Picked?.Invoke(hit); }
             g = Grip.Move;
-            // Double-clicking a picture crops it on the video.
+            // Double-clicking a picture crops it on the video; double-clicking text reshapes what's behind it.
             if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Image }) { SetCropping(true); e.Handled = true; return; }
-            // Double-clicking a custom shape's edge adds a corner there.
-            if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Text, Shape: OverlayShape.Custom } custom) { AddPoint(custom, p); e.Handled = true; return; }
+            if (e.ClickCount == 2 && Current is { Kind: OverlayKind.Text }) { SetShapeEditing(true); e.Handled = true; return; }
         }
         if (Current == null) return;
         grip = g; pointIndex = point; press = p; original = Current; moved = false; hovering = true;
@@ -334,6 +377,12 @@ internal sealed class OverlayLayer : FrameworkElement
                 ToolTip = "Drag the edges to crop · double-click or Esc when done";
                 return;
             }
+            if (ShapeEditing)
+            {
+                Cursor = g == Grip.None ? null : Cursors.Cross;
+                ToolTip = "Drag the pink corners to reshape · double-click or Esc when done";
+                return;
+            }
             bool over = g != Grip.None || (selected >= 0 && ItemAt(p) == selected);
             if (over != hovering) { hovering = over; DrawHandles(); }
             Cursor = g switch { Grip.Scale => Cursors.SizeNWSE, Grip.Rotate => Cursors.Hand, Grip.WrapLeft or Grip.WrapRight => Cursors.SizeWE, Grip.Tail or Grip.Point => Cursors.Cross, _ => ItemAt(p) >= 0 ? Cursors.SizeAll : null };
@@ -349,6 +398,16 @@ internal sealed class OverlayLayer : FrameworkElement
         switch (grip)
         {
             case Grip.Crop: next = CropTo(o, p); break;
+            case Grip.ShapeCorner:
+            {
+                if (!m.HasInverse || pointIndex < 0 || pointIndex > 3) break;
+                var local = Inverse(m).Transform(p);
+                var box = PaddedBox(o);
+                var home = new[] { box.TopLeft, box.TopRight, box.BottomRight, box.BottomLeft }[pointIndex];
+                var corners = o.ShapeCorners.ToArray(); corners[pointIndex] = (Math.Round(local.X - home.X, 1), Math.Round(local.Y - home.Y, 1));
+                next = o with { ShapeCorners = corners };
+                break;
+            }
             case Grip.Move:
             {
                 var delta = Inverse(toScreen).Transform(p - press);

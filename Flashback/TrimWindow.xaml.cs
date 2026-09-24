@@ -284,7 +284,7 @@ public partial class TrimWindow : Window
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
         // Esc or Enter finishes cropping a picture.
-        if (key is Key.Escape or Key.Enter && modifiers==ModifierKeys.None && OverlayView.Cropping) { OverlayView.SetCropping(false); return true; }
+        if (key is Key.Escape or Key.Enter && modifiers==ModifierKeys.None && (OverlayView.Cropping || OverlayView.ShapeEditing)) { OverlayView.SetCropping(false); OverlayView.SetShapeEditing(false); return true; }
         // Esc leaves the cut, speed, zoom, text or picture tool.
         if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode || Timeline.ZoomMode || Timeline.OverlayMode!=null))
         {

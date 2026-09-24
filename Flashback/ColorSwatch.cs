@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 namespace Flashback;
@@ -64,7 +65,9 @@ internal sealed class ColorSwatch : Button
             alphaRow.Children.Add(alpha);
             panel.Children.Add(alphaRow);
         }
+        // The pop-up would otherwise inherit the icon font from this button.
         var border = new Border { Padding = new Thickness(10), CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Child = panel };
+        TextElement.SetFontFamily(border, new FontFamily("Segoe UI")); TextElement.SetFontSize(border, 12);
         border.SetResourceReference(Border.BackgroundProperty, "Surface"); border.SetResourceReference(Border.BorderBrushProperty, "Outline");
         popup.Child = border;
         Click += (_, _) => popup.IsOpen = !popup.IsOpen;

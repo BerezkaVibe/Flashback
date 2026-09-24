@@ -180,9 +180,11 @@ internal static class OverlayRenderer
             case OverlayShape.Ellipse: g = new EllipseGeometry(new Point(box.X + box.Width / 2, box.Y + box.Height / 2), box.Width / 2 * 1.3, box.Height / 2 * 1.35); break;
             case OverlayShape.Bubble:
             {
-                var body = new RectangleGeometry(box, Math.Min(item.Corner * 1.5 + 6, box.Height / 2), Math.Min(item.Corner * 1.5 + 6, box.Height / 2));
+                // The body follows dragged corners; the tail keeps pointing where it was aimed.
+                Geometry body = new RectangleGeometry(box, Math.Min(item.Corner * 1.5 + 6, box.Height / 2), Math.Min(item.Corner * 1.5 + 6, box.Height / 2));
+                if (item.CornersMoved) body = Warp(body, box, item.ShapeCorners);
                 g = new CombinedGeometry(GeometryCombineMode.Union, body, Tail(item, box)).GetFlattenedPathGeometry();
-                break;
+                g.Freeze(); return g;
             }
             case OverlayShape.Arrow:
             {
@@ -196,7 +198,39 @@ internal static class OverlayRenderer
                 break;
             default: g = new RectangleGeometry(box, item.Corner, item.Corner); break;
         }
+        if (item.CornersMoved && item.Shape != OverlayShape.Custom) g = Warp(g, box, item.ShapeCorners);
         g.Freeze(); return g;
+    }
+    // Where the shape's four corners are after dragging (top-left, top-right, bottom-right, bottom-left).
+    internal static Point[] ShapeCornerPoints(OverlayItem item, Rect box) => new[]
+    {
+        new Point(box.Left + item.ShapeCorners[0].X, box.Top + item.ShapeCorners[0].Y), new Point(box.Right + item.ShapeCorners[1].X, box.Top + item.ShapeCorners[1].Y),
+        new Point(box.Right + item.ShapeCorners[2].X, box.Bottom + item.ShapeCorners[2].Y), new Point(box.Left + item.ShapeCorners[3].X, box.Bottom + item.ShapeCorners[3].Y),
+    };
+    // Stretches a shape drawn in box so the box's corners land on the dragged corners. Curves are
+    // flattened first, so rounded corners and ellipses bend smoothly with it.
+    private static Geometry Warp(Geometry shape, Rect box, IReadOnlyList<(double X, double Y)> offsets)
+    {
+        var q = new[] { new Vector(offsets[0].X, offsets[0].Y), new Vector(offsets[1].X, offsets[1].Y), new Vector(offsets[2].X, offsets[2].Y), new Vector(offsets[3].X, offsets[3].Y) };
+        Point Map(Point p)
+        {
+            double u = (p.X - box.Left) / Math.Max(1e-6, box.Width), v = (p.Y - box.Top) / Math.Max(1e-6, box.Height);
+            return p + (1 - u) * (1 - v) * q[0] + u * (1 - v) * q[1] + u * v * q[2] + (1 - u) * v * q[3];
+        }
+        var flat = shape.GetFlattenedPathGeometry(.25, ToleranceType.Absolute);
+        var result = new PathGeometry { FillRule = flat.FillRule };
+        foreach (var figure in flat.Figures)
+        {
+            var points = new List<Point>();
+            foreach (var segment in figure.Segments)
+                switch (segment)
+                {
+                    case LineSegment line: points.Add(Map(line.Point)); break;
+                    case PolyLineSegment poly: points.AddRange(poly.Points.Select(Map)); break;
+                }
+            result.Figures.Add(new PathFigure(Map(figure.StartPoint), new PathSegment[] { new PolyLineSegment(points, true) }, figure.IsClosed) { IsFilled = figure.IsFilled });
+        }
+        return result;
     }
     // The bubble's tail: a triangle from the body towards the tip.
     private static Geometry Tail(OverlayItem item, Rect box)

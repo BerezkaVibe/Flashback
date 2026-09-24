@@ -37,6 +37,7 @@ public partial class TrimWindow
     private void ZoomAdded(double start, double end)
     {
         if (Timeline.ZoomRegions.Any(r => r.End > start && r.Start < end)) { StatusLabel.Text = "That overlaps another zoom. Click its tag to edit it instead."; return; }
+        if (OverlapsVideoCut(start, end)) { StatusLabel.Text = "A zoom can't overlap a video cut-out. Pick a stretch outside the red cut-outs."; return; }
         Snapshot();
         var preset = CurrentPreset;
         var region = new ZoomRegion(start, end, .5, .5, preset.MaxZoom, preset.Curve);

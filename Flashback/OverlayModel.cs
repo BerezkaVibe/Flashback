@@ -67,6 +67,11 @@ internal sealed record OverlayItem
     // Custom shape corners, as fractions of the padded text box (-0.5..0.5 is the box itself).
     public IReadOnlyList<(double X, double Y)> Points { get; init; } = DefaultPoints;
     internal static readonly (double X, double Y)[] DefaultPoints = { (-.5, -.5), (.5, -.5), (.5, .5), (-.5, .5) };
+    // How far each corner of the shape (top-left, top-right, bottom-right, bottom-left) has been dragged
+    // from the padded text box, in reference pixels; the shape stretches to follow.
+    public IReadOnlyList<(double X, double Y)> ShapeCorners { get; init; } = NoCorners;
+    internal static readonly (double X, double Y)[] NoCorners = { (0, 0), (0, 0), (0, 0), (0, 0) };
+    internal bool CornersMoved => ShapeCorners.Any(c => Math.Abs(c.X) > .01 || Math.Abs(c.Y) > .01);
 
     // Image
     public string ImagePath { get; init; } = "";
@@ -110,6 +115,7 @@ internal sealed record OverlayItem
         CropRight = Math.Clamp(Finite(CropRight, 0), 0, .9 - Math.Clamp(Finite(CropLeft, 0), 0, .9)),
         CropBottom = Math.Clamp(Finite(CropBottom, 0), 0, .9 - Math.Clamp(Finite(CropTop, 0), 0, .9)),
         Points = Points is { Count: >= 3 } ? Points : DefaultPoints,
+        ShapeCorners = ShapeCorners is { Count: 4 } && ShapeCorners.All(c => double.IsFinite(c.X) && double.IsFinite(c.Y)) ? ShapeCorners : NoCorners,
     };
     private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
 

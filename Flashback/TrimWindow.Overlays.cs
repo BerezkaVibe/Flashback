@@ -28,12 +28,22 @@ public partial class TrimWindow
         Timeline.OverlayAdded += OverlayAdded; Timeline.OverlayPicked += OpenOverlay; Timeline.OverlayRemoved += RemoveOverlay;
         Timeline.OverlayEditStarted += () => { Snapshot(); lastOverlayControl = "timeline"; };
         Timeline.OverlayMoved += (_, _) => { OverlayView.Items = Timeline.Overlays; if (OverlayPanel.Visibility == Visibility.Visible) ShowOverlayTitle(); };
-        Timeline.OverlayEditFinished += () => { OverlayView.Items = Timeline.Overlays; UpdateExportHint(); if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi(); };
+        Timeline.OverlayEditFinished += () =>
+        {
+            // Dragged onto a video cut-out: put it back where it was.
+            if (Timeline.Overlays.Any(o => OverlapsVideoCut(o.Start, o.End)))
+            {
+                Restore(undo, redo); redo.Clear();
+                StatusLabel.Text = "Text and pictures can't overlap a video cut-out, so it went back.";
+            }
+            OverlayView.Items = Timeline.Overlays; UpdateExportHint(); if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi();
+        };
         OverlayView.Picked += OpenOverlay;
         OverlayView.EditStarted += () => { Snapshot(); lastOverlayControl = "view"; };
         OverlayView.Changed += item => { if (Timeline.SelectedOverlay >= 0) { ReplaceOverlay(Timeline.SelectedOverlay, item.Validated()); LoadOverlayUi(); } };
         OverlayView.WheelAdjusted += WheelAdjust;
         OverlayView.CroppingChanged += on => StatusLabel.Text = on ? "Cropping: drag the edges or corners, or drag inside to move the crop. Double-click or Esc when done." : "Crop done.";
+        OverlayView.ShapeEditingChanged += on => StatusLabel.Text = on ? "Reshaping: drag the pink corners. Double-click or Esc when done." : "Shape done.";
     }
     // Scroll over an item on the preview: scale, Shift for rotation, Ctrl for opacity. A run of
     // scrolling is one undo step.
@@ -97,6 +107,7 @@ public partial class TrimWindow
     }
     private void AddOverlay(OverlayItem item)
     {
+        if (OverlapsVideoCut(item.Start, item.End)) { StatusLabel.Text = "Text and pictures can't overlap a video cut-out. Pick a stretch outside the red cut-outs."; return; }
         Snapshot();
         item = item with { Layer = OverlayOrder.FreeLayer(Timeline.Overlays, item.Start, item.End) };
         // New text that would land right on top of other text showing at the same time moves up a line.
@@ -233,18 +244,25 @@ public partial class TrimWindow
                 o => o.Shape, (o, v) => o with { Shape = v });
             bool Shaped(OverlayItem o) => o.Shape != OverlayShape.None;
             When(Row("Color", Swatch("shapeColor", o => o.ShapeColor, (o, c) => o with { ShapeColor = c }, alpha: true)), Shaped);
+            // The shape's opacity is the alpha of its color, shown as its own slider.
+            When(SliderRow("Opacity", "shapeOpacity", 0, 1, o => OverlayRenderer.ParseColor(o.ShapeColor, Colors.Black).A / 255.0,
+                (o, v) => { var c = OverlayRenderer.ParseColor(o.ShapeColor, Colors.Black); return o with { ShapeColor = $"#{(byte)Math.Round(v * 255):X2}{c.R:X2}{c.G:X2}{c.B:X2}" }; }, v => $"{v * 100:0}%"), Shaped);
             When(SliderRow("Padding", "padding", 0, 120, o => o.Padding, (o, v) => o with { Padding = Math.Round(v) }, v => $"{v:0}"), Shaped);
             When(SliderRow("Corners", "corner", 0, 80, o => o.Corner, (o, v) => o with { Corner = Math.Round(v) }, v => $"{v:0}"), o => o.Shape is OverlayShape.Lines or OverlayShape.Box or OverlayShape.Bubble);
             var borderRow = new StackPanel { Orientation = Orientation.Horizontal };
             borderRow.Children.Add(Swatch("shapeBorder", o => o.ShapeBorderColor, (o, c) => o with { ShapeBorderColor = c }));
             When(Row("Border", borderRow), Shaped);
             When(SliderRow("Width", "shapeBorderWidth", 0, 16, o => o.ShapeBorderWidth, (o, v) => o with { ShapeBorderWidth = Math.Round(v, 1) }, v => v < .05 ? "Off" : $"{v:0.#}", tip: "Border thickness"), Shaped);
-            When(Hint("Drag the pink dot on the video to point the tail."), o => o.Shape == OverlayShape.Bubble);
-            When(Hint("Drag the pink corners on the video. Double-click an edge to add a corner; right-click one to remove it."), o => o.Shape == OverlayShape.Custom);
-            var resetShape = new Button { Content = "Reset corners", FontSize = 11, MinHeight = 26, Height = 26, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
-            resetShape.SetResourceReference(StyleProperty, "TrimButton");
-            resetShape.Click += (_, _) => EditOverlay("resetShape", o => o with { Points = OverlayItem.DefaultPoints });
-            OverlayControls.Children.Add(resetShape); overlayRows.Add((resetShape, o => o.Shape == OverlayShape.Custom));
+            When(Hint("Double-click the text on the video, then drag the pink corners to reshape it (bubble tails drag too). Esc when done."), o => o.Shape is not (OverlayShape.None or OverlayShape.Custom));
+            When(Hint("Double-click the text on the video, then drag the pink corners. Double-click an edge to add a corner; right-click one to remove it."), o => o.Shape == OverlayShape.Custom);
+            var shapeButtons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+            SmallButton(shapeButtons, "Reshape", "Drag the shape's corners on the video · or double-click the text", () =>
+            {
+                if (SelectedOverlayItem is { } o && (playhead < o.Start || playhead >= o.End)) OpenOverlay(Timeline.SelectedOverlay);
+                OverlayView.SetShapeEditing(true);
+            });
+            SmallButton(shapeButtons, "Reset shape", "Put the corners back", () => EditOverlay("resetShape", o => o with { Points = OverlayItem.DefaultPoints, ShapeCorners = OverlayItem.NoCorners }));
+            OverlayControls.Children.Add(shapeButtons); overlayRows.Add((shapeButtons, Shaped));
         }
         else
         {
