@@ -36,6 +36,8 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     internal static readonly double[] RegionSpeeds = { .25, .5, .75, 1.5, 2 };
     // Zoomed stretches, in source time. They may overlap speed parts and cuts.
     internal IReadOnlyList<ZoomRegion> ZoomRegions { get; init; } = Array.Empty<ZoomRegion>();
+    // Text and pictures over the video, in source time. They may overlap everything else.
+    internal IReadOnlyList<OverlayItem> Overlays { get; init; } = Array.Empty<OverlayItem>();
     // Kept ranges split at speed-part edges; each piece carries its combined speed.
     internal List<(double Start, double End, double Speed)> Pieces(IEnumerable<KeepSection> ranges)
     {
@@ -85,6 +87,7 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
         if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
         if (SlowRegions.Any(r => r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9 || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
+        if (Overlays.FirstOrDefault(o => o.Kind == OverlayKind.Image && !File.Exists(o.ImagePath)) is { } missing) throw new ArgumentException($"The picture {Path.GetFileName(missing.ImagePath)} can't be found. Remove it or add it again.");
     }
     internal int VideoBitrate(double seconds, bool audio)
     {
@@ -138,6 +141,7 @@ internal static class ExportServices
         int bitrate = options.TargetMb > 0 && encodeVideo ? options.VideoBitrate(output, audio) : 0;
         await Gate.WaitAsync(token);
         string temp = destination + "." + Guid.NewGuid().ToString("N") + ".partial";
+        string overlayFolder = Path.Combine(Path.GetTempPath(), "Flashback-overlays", Guid.NewGuid().ToString("N"));
         try
         {
             Storage.EnsureWritable(Path.GetDirectoryName(destination)!);
@@ -145,6 +149,11 @@ internal static class ExportServices
             // Seek each input at the demuxer before decoding. Only retained sections enter the graph.
             // Thread counts are capped per input; no preview decoder or thumbnail job is started here.
             var inputs = new List<string>(); var filters = new List<string>(); var labels = "";
+            // Text and pictures are drawn to see-through pictures first; each piece reads the ones it shows.
+            var overlayInputs = new List<string>(); int overlayCount = 0;
+            var clips = video && options.Overlays.Count > 0
+                ? await OverlayExport.RenderAsync(OverlayOrder.BackToFront(options.Overlays).Select(o => o.Validated()).ToList(), media.Width > 0 ? media.Width : 1920, media.Height > 0 ? media.Height : 1080, media.FrameRate, overlayFolder, token)
+                : new List<OverlayExport.Clip>();
             bool mixTracks = audio && media.HasSeparateTracks && (options.CustomMix || options.Cuts.Any(c => c.Lane >= 0));
             for (int i = 0; i < pieces.Count; i++)
             {
@@ -172,7 +181,26 @@ internal static class ExportServices
                         var (z, x, y) = ZoomRegion.Expressions(zooms, start, media.FrameRate);
                         zoom = $",zoompan=z='{z}':x='{x}':y='{y}':d=1:s={media.Width}x{media.Height}:fps={Number(media.FrameRate)}";
                     }
-                    filters.Add($"[{i}:v:0]trim=duration={Number(length)},setpts=PTS-STARTPTS{zoom}{blackout}{slowVideo}[v{i}]"); labels += $"[v{i}]";
+                    // Blackout, then pictures stuck to the video, then zoom, then pictures fixed on screen, then speed.
+                    string label = $"b{i}";
+                    filters.Add($"[{i}:v:0]trim=duration={Number(length)},setpts=PTS-STARTPTS{blackout}[{label}]");
+                    void Overlay(bool stuck)
+                    {
+                        // Clips are already back to front.
+                        foreach (var clip in clips.Where(c => c.Item.StickToVideo == stuck))
+                        {
+                            if (OverlayExport.PieceList(clip, start, end, overlayFolder, $"piece{i}-{overlayCount}") is not { } list) continue;
+                            int input = pieces.Count + overlayCount++;
+                            overlayInputs.AddRange(new[] { "-f", "concat", "-safe", "0", "-i", list.List });
+                            string next = $"o{input}";
+                            filters.Add($"[{input}:v]format=rgba[{next}p];[{label}][{next}p]overlay=x={clip.Box.X}:y={clip.Box.Y}:eof_action=pass:enable='gte(t,{Number(list.From)})*lt(t,{Number(list.To)})'[{next}]");
+                            label = next;
+                        }
+                    }
+                    Overlay(true);
+                    if (zoom.Length > 0) { filters.Add($"[{label}]{zoom[1..]}[z{i}]"); label = $"z{i}"; }
+                    Overlay(false);
+                    filters.Add($"[{label}]{(slowVideo.Length > 0 ? slowVideo[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
                 }
                 if (mixTracks)
                 {
@@ -182,6 +210,7 @@ internal static class ExportServices
                 }
                 else if (audio) { filters.Add($"[{i}:a:0]{trim}{Mute(0)}{slowAudio}[a{i}]"); labels += $"[a{i}]"; }
             }
+            inputs.AddRange(overlayInputs);
             filters.Add(labels + $"concat=n={pieces.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
             if (video)
             {
@@ -239,7 +268,11 @@ internal static class ExportServices
             if (encodeVideo) try { ClipLibrary.Remember(result); } catch { }
             progress?.Report(1); return result;
         }
-        finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { Gate.Release(); } }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); }
+            finally { try { if (Directory.Exists(overlayFolder)) Directory.Delete(overlayFolder, true); } catch { } Gate.Release(); }
+        }
     }
 
     internal static async Task SnapshotAsync(string source, string destination, double time, CancellationToken token)

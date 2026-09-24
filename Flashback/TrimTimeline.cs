@@ -52,14 +52,19 @@ internal sealed class TrimTimeline : FrameworkElement
     // Cut tool: a thin cutter line follows the pointer over the video track or an audio lane.
     // Click once to start a cut and again to finish it; dragging still moves the playhead, and the
     // cutter locks onto the playhead when within a few pixels. Right-click a cut to restore it.
-    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) { slowMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool CutMode { get => cutMode; set { cutMode = value; if (value) { slowMode = false; zoomMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
     // Speed tool: the same two clicks mark a stretch that plays slower or faster (video and audio together).
-    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) { cutMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool SlowMode { get => slowMode; set { slowMode = value; if (value) { cutMode = false; zoomMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
     // Zoom tool: the same two clicks mark a zoomed stretch. It may overlap cuts and speed parts,
     // and snaps to speed-part edges as well as the playhead.
-    internal bool ZoomMode { get => zoomMode; set { zoomMode = value; if (value) { cutMode = false; slowMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    internal bool ZoomMode { get => zoomMode; set { zoomMode = value; if (value) { cutMode = false; slowMode = false; overlayMode = null; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    // Text and image tools: the same two clicks add an item on the lowest free layer above the video.
+    internal OverlayKind? OverlayMode { get => overlayMode; set { overlayMode = value; if (value != null) { cutMode = false; slowMode = false; zoomMode = false; } pendingCut = null; cutHover = null; InvalidateVisual(); } }
+    private OverlayKind? overlayMode;
     private bool cutMode, slowMode, zoomMode, cutPress;
-    private bool Placing => cutMode || slowMode || zoomMode;
+    private bool Placing => cutMode || slowMode || zoomMode || overlayMode != null;
+    // Parts that cover the whole picture and sound, and snap to other parts' edges.
+    private bool WholeClipTool => slowMode || zoomMode || overlayMode != null;
     private IReadOnlyList<ZoomRegion> zoomRegions = Array.Empty<ZoomRegion>();
     internal IReadOnlyList<ZoomRegion> ZoomRegions { get => zoomRegions; set { zoomRegions = value; zoomVersion++; InvalidateVisual(); } }
     private int zoomVersion;
@@ -88,19 +93,50 @@ internal sealed class TrimTimeline : FrameworkElement
     private double CutTimeAt(double x)
     {
         if (Math.Abs(x - XAt(Position)) <= PlayheadLock) return Position;
-        // Zoom edges also lock onto the ends of slow-motion parts.
-        if (zoomMode)
-            foreach (var r in slowRegions)
-                foreach (double edge in new[] { r.Start, r.End })
-                    if (Math.Abs(x - XAt(edge)) <= PlayheadLock) return edge;
+        // Zoom, text and image edges also lock onto the ends of other parts.
+        if (zoomMode || overlayMode != null)
+            foreach (double edge in PartEdges())
+                if (Math.Abs(x - XAt(edge)) <= PlayheadLock) return edge;
         return Snap(TimeAt(x));
     }
-    private bool LockedAt(double t) => Math.Abs(t - Position) < 1e-9 || (zoomMode && slowRegions.Any(r => Math.Abs(t - r.Start) < 1e-9 || Math.Abs(t - r.End) < 1e-9));
+    private IEnumerable<double> PartEdges(OverlayItem? except = null) =>
+        slowRegions.SelectMany(r => new[] { r.Start, r.End }).Concat(zoomRegions.SelectMany(r => new[] { r.Start, r.End }))
+            .Concat(overlays.Where(o => !ReferenceEquals(o, except)).SelectMany(o => new[] { o.Start, o.End }));
+    private bool LockedAt(double t) => Math.Abs(t - Position) < 1e-9 || ((zoomMode || overlayMode != null) && PartEdges().Any(e => Math.Abs(t - e) < 1e-9));
+
+    // Text and image items sit on slim layers above the video track; the top row is in front.
+    private IReadOnlyList<OverlayItem> overlays = Array.Empty<OverlayItem>();
+    internal IReadOnlyList<OverlayItem> Overlays { get => overlays; set { overlays = value; overlayVersion++; Height = PreferredHeight; InvalidateVisual(); } }
+    private int overlayVersion;
+    internal int SelectedOverlay { get => selectedOverlay; set { selectedOverlay = value; overlayVersion++; InvalidateVisual(); } }
+    private int selectedOverlay = -1;
+    internal event Action<double, double, OverlayKind>? OverlayAdded;
+    internal event Action<int>? OverlayPicked, OverlayRemoved;
+    // Dragging an item: started (for undo), each change, and done.
+    internal event Action? OverlayEditStarted, OverlayEditFinished;
+    internal event Action<int, OverlayItem>? OverlayMoved;
+    private const double RowHeight = 14, RowGap = 2;
+    private int Rows => overlays.Count == 0 ? 0 : overlays.Max(o => o.Layer) + 1 + (extraRow ? 1 : 0);
+    private bool extraRow;
+    private double RowsSpan => Rows == 0 ? 0 : Rows * (RowHeight + RowGap) + 1;
+    private double TrackTop => 8 + RowsSpan;
+    private double RowTop(int layer) => 8 + (Rows - 1 - layer) * (RowHeight + RowGap);
+    private Rect OverlayRect(OverlayItem o) { double x = XAt(o.Start); return new Rect(x, RowTop(o.Layer), Math.Max(3, XAt(o.End) - x), RowHeight); }
+    private int OverlayAt(Point p)
+    {
+        // Front-most first, so the item on top wins when rows are tight.
+        for (int i = overlays.Count - 1; i >= 0; i--)
+            if (overlays[i].End >= ViewStart && overlays[i].Start <= ViewStart + Span && Rect.Inflate(OverlayRect(overlays[i]), 2, 1).Contains(p)) return i;
+        return -1;
+    }
+    private int RowAt(double y) => Rows == 0 ? -1 : (int)Math.Clamp(Math.Floor((8 + Rows * (RowHeight + RowGap) - y) / (RowHeight + RowGap)), -1, Rows);
     internal event Action<CutRegion>? CutAdded, CutRemoved;
-    private enum Drag { None, Start, End, Playhead, Pan }
+    private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd }
     private Drag drag;
     private double grabOffset;
-    private const double Inset = 20, TrackTop = 8, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
+    // The item being dragged: its index, its state before the drag and whether it has moved yet.
+    private int dragOverlay = -1; private OverlayItem? dragOriginal; private bool overlayDragMoved;
+    private const double Inset = 20, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 4;
     // Audio lanes fold away behind a chevron beside the video track, so they only take room (and load) when opened.
     internal bool LanesExpanded
@@ -156,7 +192,7 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnRender(dc);
         if (Duration <= 0 || ActualWidth <= 2*Inset)
         { using (staticLayer.RenderOpen()) { } using (liveLayer.RenderOpen()) { } cacheKey = null; return; }
-        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion, zoomVersion);
+        var key = (ViewStart, Span, ActualWidth, ActualHeight, Start, End, Duration, FrameRate, lanesVersion, SectionsKey(), SelectedSection, cutsVersion, toggleHover, slowVersion, zoomVersion, (overlayVersion, extraRow));
         if (!Equals(cacheKey, key))
         {
             using (var layer = staticLayer.RenderOpen()) DrawStatic(layer);
@@ -224,8 +260,10 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         DrawLaneToggle(dc, dpi);
         foreach (var cut in cuts) if (cut.Lane < 0) DrawCut(dc, cut.Lane, cut.Start, cut.End, dpi);
+        DrawOverlayWash(dc);
         DrawSlowRegions(dc, dpi);
         DrawZoomRegions(dc, dpi);
+        DrawOverlayRows(dc, dpi);
         if (LaneReveal > 0 && lanes.Count > 0)
         {
             // Lanes slide out from under the video track and fade in as they open.
@@ -327,6 +365,8 @@ internal sealed class TrimTimeline : FrameworkElement
     private int BandAt(Point p)
     {
         if (p.Y >= TrackTop - 4 && p.Y <= TrackTop + TrackHeight + 4) return -1;
+        // The layer rows count as the video track for text and image tools.
+        if (overlayMode != null && p.Y >= 4 && p.Y < TrackTop) return -1;
         if (lanesExpanded) for (int i = 0; i < lanes.Count; i++) { var b = Band(i); if (p.Y >= b.Top && p.Y <= b.Bottom) return i; }
         return -2;
     }
@@ -355,6 +395,7 @@ internal sealed class TrimTimeline : FrameworkElement
         if (end < ViewStart || start > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(start), w = Math.Max(2, XAt(end) - x);
         var area = new Rect(x, band.Top, w, band.Height);
+        if (overlayMode != null && lane < 0) { dc.DrawRoundedRectangle(OverlayWash, new Pen(OverlayFill, 1), area, 3, 3); return; }
         dc.DrawRoundedRectangle(zoom ? ZoomFill : slow ? SlowFill : CutFill, new Pen(zoom ? ZoomEdge : slow ? SlowEdge : CutEdge, 1), area, 3, 3);
     }
     // Zoom regions: teal boxes with a magnifier tag (top-right) that selects the region for editing.
@@ -378,6 +419,47 @@ internal sealed class TrimTimeline : FrameworkElement
         }
     }
     private int ZoomTagAt(Point p) { for (int i = 0; i < zoomTags.Count; i++) if (zoomTags[i].Contains(p)) return i; return -1; }
+    // Text and images are amber. On the video track a faint amber wash marks where any are shown,
+    // blending with the speed and zoom colors; the items themselves sit on the rows above.
+    private static readonly Brush OverlayFill = Brush("#F59E0B"), OverlayDim = Brush("#B7791F"), OverlayWash = Brush("#40F59E0B"), OverlayInk = Brush("#2A1A02"), RowFill = Brush("#161B21");
+    private static readonly Pen OverlayCutterPen = new(Brush("#FBBF24"), 1.5);
+    private void DrawOverlayWash(DrawingContext dc)
+    {
+        // Merge the spans first so overlapping items don't darken the wash.
+        double end = double.MinValue, start = 0;
+        foreach (var o in overlays.OrderBy(o => o.Start))
+        {
+            if (o.Start > end) { if (end > start) Wash(start, end); start = o.Start; end = o.End; }
+            else end = Math.Max(end, o.End);
+        }
+        if (end > start) Wash(start, end);
+        void Wash(double a, double b)
+        {
+            if (b < ViewStart || a > ViewStart + Span) return;
+            double x = XAt(a); dc.DrawRoundedRectangle(OverlayWash, null, new Rect(x, TrackTop, Math.Max(2, XAt(b) - x), TrackHeight), 3, 3);
+        }
+    }
+    private void DrawOverlayRows(DrawingContext dc, double dpi)
+    {
+        if (Rows == 0) return;
+        double width = ActualWidth - 2 * Inset;
+        for (int r = 0; r < Rows; r++) dc.DrawRoundedRectangle(RowFill, null, new Rect(Inset, RowTop(r), width, RowHeight), 3, 3);
+        dc.PushClip(new RectangleGeometry(new Rect(Inset, 0, width, TrackTop)));
+        for (int i = 0; i < overlays.Count; i++)
+        {
+            var o = overlays[i];
+            if (o.End < ViewStart || o.Start > ViewStart + Span) continue;
+            var rect = OverlayRect(o); bool selected = i == selectedOverlay;
+            dc.DrawRoundedRectangle(selected ? OverlayFill : OverlayDim, selected ? new Pen(Ink, 1.2) : null, rect, 3, 3);
+            if (rect.Width < 16) continue;
+            var icon = new FormattedText(o.Kind == OverlayKind.Image ? "" : "", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Glyph, 8, OverlayInk, dpi);
+            dc.DrawText(icon, new Point(rect.X + 4, rect.Y + (RowHeight - icon.Height) / 2));
+            var label = Text(o.Label, 9, OverlayInk, dpi);
+            label.MaxTextWidth = Math.Max(1, rect.Width - icon.Width - 11); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
+            if (rect.Width > icon.Width + 20) dc.DrawText(label, new Point(rect.X + icon.Width + 7, rect.Y + (RowHeight - label.Height) / 2));
+        }
+        dc.Pop();
+    }
     // Speed parts: a purple box on the video track with a small speed tag (bottom-right) that opens
     // the speed choices when clicked. Tag rectangles are kept for hit-testing.
     private void DrawSlowRegions(DrawingContext dc, double dpi)
@@ -403,13 +485,15 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         if (t < ViewStart || t > ViewStart + Span || lane >= lanes.Count || (lane >= 0 && LaneReveal <= 0)) return;
         var band = Band(lane); double x = XAt(t);
-        dc.DrawLine(LockedAt(t) ? LockedCutterPen : zoomMode ? ZoomCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, band.Top - 3), new Point(x, band.Bottom + 3));
+        // Text and image markers reach up through the layer rows too.
+        double top = overlayMode != null && lane < 0 ? 4 : band.Top - 3;
+        dc.DrawLine(LockedAt(t) ? LockedCutterPen : overlayMode != null ? OverlayCutterPen : zoomMode ? ZoomCutterPen : slowMode ? SlowCutterPen : CutterPen, new Point(x, top), new Point(x, band.Bottom + 3));
     }
     private void PlaceCutPoint(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
         if (band < -1) return;
-        if (slowMode || zoomMode) band = -1; // speed parts and zoom cover the whole picture and sound
+        if (WholeClipTool) band = -1; // speed parts, zoom, text and images cover the whole picture and sound
         double t = CutTimeAt(p.X);
         if (pendingCut is not { } from) pendingCut = (band, t);
         else
@@ -418,7 +502,8 @@ internal sealed class TrimTimeline : FrameworkElement
             double a = Math.Min(from.Time, t), b = Math.Max(from.Time, t);
             if (b - a >= 1 / Math.Max(1, FrameRate) - 1e-9)
             {
-                if (zoomMode) ZoomAdded?.Invoke(a, b);
+                if (overlayMode is { } kind) OverlayAdded?.Invoke(a, b, kind);
+                else if (zoomMode) ZoomAdded?.Invoke(a, b);
                 else if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
             }
         }
@@ -427,7 +512,7 @@ internal sealed class TrimTimeline : FrameworkElement
     private void UpdateCutHover(Point p)
     {
         int band = pendingCut?.Lane ?? BandAt(p);
-        (int, double)? next = Placing && band > -2 ? (slowMode || zoomMode ? -1 : band, CutTimeAt(p.X)) : null;
+        (int, double)? next = Placing && band > -2 ? (WholeClipTool ? -1 : band, CutTimeAt(p.X)) : null;
         if (!Equals(next, cutHover)) { cutHover = next; InvalidateVisual(); }
     }
     private int LaneAt(Point p)
@@ -446,6 +531,14 @@ internal sealed class TrimTimeline : FrameworkElement
         if (Duration<=0 || ActualWidth<=2*Inset) return;
         Focus(); var point = e.GetPosition(this);
         if (lanes.Count > 0 && ToggleArea.Contains(point)) { LanesToggleRequested?.Invoke(); e.Handled = true; return; }
+        if (pendingCut == null && OverlayAt(point) is int item and >= 0)
+        {
+            // Press on an item: a click opens it, a drag moves it (or its edges) and changes its layer.
+            var rect = OverlayRect(overlays[item]);
+            drag = point.X - rect.Left <= 5 && rect.Width > 14 ? Drag.OverlayStart : rect.Right - point.X <= 5 && rect.Width > 14 ? Drag.OverlayEnd : Drag.OverlayMove;
+            dragOverlay = item; dragOriginal = overlays[item]; overlayDragMoved = false; pressPoint = point;
+            CaptureMouse(); e.Handled = true; return;
+        }
         if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
         if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
         if (Placing && (pendingCut != null || BandAt(point) > -2))
@@ -480,6 +573,12 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseMove(e);
         var p=e.GetPosition(this);
+        if (IsMouseCaptured && drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
+        {
+            if (!overlayDragMoved && (p - pressPoint).Length <= 3) return;
+            if (!overlayDragMoved) { overlayDragMoved = true; OverlayEditStarted?.Invoke(); }
+            DragOverlay(p); return;
+        }
         if (IsMouseCaptured)
         {
             if (cutPress)
@@ -495,12 +594,21 @@ internal sealed class TrimTimeline : FrameworkElement
         bool hover = lanes.Count > 0 && ToggleArea.Contains(p);
         if (hover != toggleHover) { toggleHover = hover; InvalidateVisual(); }
         if (hover) { Cursor = Cursors.Hand; ToolTip = lanesExpanded ? "Hide the audio tracks" : "Show the audio tracks"; return; }
+        if (pendingCut == null && OverlayAt(p) is int hoverItem and >= 0)
+        {
+            var rect = OverlayRect(overlays[hoverItem]);
+            Cursor = rect.Width > 14 && (p.X - rect.Left <= 5 || rect.Right - p.X <= 5) ? Cursors.SizeWE : Cursors.SizeAll;
+            ToolTip = $"{overlays[hoverItem].Label} · click to edit, drag to move, drag up or down to change layer, drag an edge to change its length · right-click removes";
+            return;
+        }
         if (pendingCut == null && ZoomTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Edit this zoom"; return; }
         if (pendingCut == null && SlowTagAt(p) >= 0) { Cursor = Cursors.Hand; ToolTip = "Change this part's speed"; return; }
         if (Placing && (pendingCut != null || BandAt(p) > -2))
         {
             Cursor = Cursors.Cross;
-            ToolTip = zoomMode
+            ToolTip = overlayMode is { } kind
+                ? pendingCut == null ? $"Click to start the {(kind == OverlayKind.Text ? "text" : "picture")}; it snaps to the playhead and other parts' edges" : $"Click where the {(kind == OverlayKind.Text ? "text" : "picture")} ends · Esc leaves the tool"
+                : zoomMode
                 ? pendingCut == null ? "Click to start a zoom; it snaps to the playhead and speed-part edges. Right-click a zoom to remove it" : "Click to finish the zoom · Esc leaves the tool"
                 : slowMode
                 ? pendingCut == null ? "Click to start a speed part; drag to move the playhead. Right-click a speed part to remove it" : "Click to finish the speed part · Esc leaves the tool"
@@ -521,6 +629,7 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
+        if (pendingCut == null && OverlayAt(e.GetPosition(this)) is int item and >= 0) { OverlayRemoved?.Invoke(item); e.Handled = true; return; }
         if (!Placing) return;
         // Right-click cancels a half-placed cut, or restores the cut (or slow part) under the pointer.
         if (pendingCut != null) { CancelPendingCut(); e.Handled = true; return; }
@@ -544,13 +653,74 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         base.OnMouseLeftButtonUp(e);
         if (!IsMouseCaptured) return;
+        if (drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
+        {
+            int picked = dragOverlay; bool moved = overlayDragMoved;
+            ReleaseMouseCapture(); e.Handled = true;
+            if (!moved && picked >= 0) OverlayPicked?.Invoke(picked);
+            return;
+        }
         if (cutPress) { cutPress = false; ReleaseMouseCapture(); PlaceCutPoint(pressPoint); e.Handled = true; return; }
         if (drag != Drag.Pan) MoveTo(e.GetPosition(this).X);
         ReleaseMouseCapture(); e.Handled=true;
     }
     protected override void OnLostMouseCapture(MouseEventArgs e)
     { base.OnLostMouseCapture(e); EndDrag(); }
-    internal void EndDrag() { if (drag == Drag.None) return; bool quiet = drag is Drag.Pan; drag=Drag.None; if (!quiet) DragCompleted?.Invoke(); }
+    internal void EndDrag()
+    {
+        if (drag == Drag.None) return;
+        if (drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
+        {
+            drag = Drag.None; dragOverlay = -1; dragOriginal = null;
+            if (overlayDragMoved) { overlayDragMoved = false; Overlays = OverlayOrder.Compact(overlays); OverlayEditFinished?.Invoke(); }
+            return;
+        }
+        bool quiet = drag is Drag.Pan; drag=Drag.None; if (!quiet) DragCompleted?.Invoke();
+    }
+    // Moves the dragged item in time (snapping to the playhead and other parts' edges) and between
+    // layers; an item never overlaps another on the same layer.
+    private void DragOverlay(Point p)
+    {
+        if (dragOriginal is not { } o || dragOverlay < 0 || dragOverlay >= overlays.Count) return;
+        double perPixel = Span / Math.Max(1, ActualWidth - 2 * Inset), shift = (p.X - pressPoint.X) * perPixel, frame = 1 / Math.Max(1, FrameRate);
+        double SnapEdge(double t, out bool locked)
+        {
+            locked = true;
+            foreach (double edge in PartEdges(o).Prepend(Position)) if (Math.Abs(XAt(edge) - XAt(t)) <= PlayheadLock) return edge;
+            locked = false; return Snap(t);
+        }
+        var others = overlays.Where((_, i) => i != dragOverlay).ToList();
+        bool Free(int layer, double a, double b) => !others.Any(x => x.Layer == layer && x.End > a + 1e-9 && x.Start < b - 1e-9);
+        var next = o;
+        if (drag == Drag.OverlayMove)
+        {
+            double length = o.Length, start = Math.Clamp(o.Start + shift, 0, Math.Max(0, Duration - length));
+            // Whichever edge is closer to something to lock onto wins.
+            double a = SnapEdge(start, out bool lockA), b = SnapEdge(start + length, out bool lockB) - length;
+            start = Math.Clamp(lockA || !lockB ? a : b, 0, Math.Max(0, Duration - length));
+            int row = RowAt(p.Y), layer = o.Layer;
+            if (p.Y < TrackTop && row >= 0) layer = Math.Min(row, others.Count == 0 ? 0 : others.Max(x => x.Layer) + 1);
+            if (!Free(layer, start, start + length)) layer = Free(o.Layer, start, start + length) ? o.Layer : Enumerable.Range(0, overlays.Count + 1).First(l => Free(l, start, start + length));
+            next = o with { Start = start, End = start + length, Layer = layer };
+        }
+        else
+        {
+            var neighbours = others.Where(x => x.Layer == o.Layer).ToList();
+            if (drag == Drag.OverlayStart)
+            {
+                double limit = neighbours.Where(x => x.End <= o.Start + 1e-9).Select(x => x.End).DefaultIfEmpty(0).Max();
+                next = o with { Start = Math.Clamp(SnapEdge(o.Start + shift, out _), limit, o.End - frame) };
+            }
+            else
+            {
+                double limit = neighbours.Where(x => x.Start >= o.End - 1e-9).Select(x => x.Start).DefaultIfEmpty(Duration).Min();
+                next = o with { End = Math.Clamp(SnapEdge(o.End + shift, out _), o.Start + frame, limit) };
+            }
+        }
+        var list = overlays.ToArray(); list[dragOverlay] = next;
+        overlays = list; overlayVersion++; Height = PreferredHeight; InvalidateVisual();
+        OverlayMoved?.Invoke(dragOverlay, next);
+    }
     // Wheel zooms around the pointer, Shift+wheel pans, Ctrl+wheel steps the preview speed.
     // Deltas are scaled rather than counted, so touchpads and free-spinning wheels stay smooth.
     internal event Action<int>? SpeedStepRequested;

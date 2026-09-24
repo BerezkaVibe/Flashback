@@ -110,6 +110,49 @@ internal static class EditorDiagnostics
         double plateau = Diff(await Frame(detailed, 2.5, "crop=320:180:160:90,"), await Frame(zoomed, 2.5));
         double unzoomed = Diff(await Frame(detailed, 2.5), await Frame(zoomed, 2.5));
         Check(outside < 8 && plateau < 12 && unzoomed > plateau + 5, $"Zoomed frames match a 2x crop of the target (outside {outside:0.0}, plateau {plateau:0.0}, versus unzoomed {unzoomed:0.0})");
+        // Text and pictures: drawn at the right place and time, stuck to or fixed against zoom.
+        async Task<byte[]> Pixel(string file, double at, int x, int y)
+        {
+            var raw = Path.Combine(folder, $"pixel-{Guid.NewGuid():N}.rgb");
+            await Ffmpeg("-y", "-ss", ExportServices.Number(at), "-i", file, "-frames:v", "1", "-vf", $"format=rgb24,crop=1:1:{x}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24", raw);
+            var bytes = File.ReadAllBytes(raw); File.Delete(raw); return bytes;
+        }
+        bool Near(byte[] rgb, int r, int g, int b) => Math.Abs(rgb[0] - r) < 60 && Math.Abs(rgb[1] - g) < 60 && Math.Abs(rgb[2] - b) < 60;
+        var caption = OverlayItem.NewText(1, 3, null) with { Text = "TEST", Y = .5, Shape = OverlayShape.Box, ShapeColor = "#FF0000FF", Padding = 60 };
+        var captioned = Path.Combine(folder, "Captioned.mp4");
+        await ExportServices.PreciseAsync(source, captioned, new[] { new KeepSection(0, 4) }, null, CancellationToken.None, true, new ShareExportOptions { Overlays = new[] { caption } });
+        var boxEdge = await Pixel(captioned, 2, 285, 180);
+        Check(Near(boxEdge, 0, 0, 255) && Near(await Pixel(captioned, .5, 285, 180), 255, 0, 0) && Near(await Pixel(captioned, 3.5, 285, 180), 255, 0, 0) && Math.Abs(ClipMedia.Read(captioned).Duration - 4) < .2,
+            "A caption shows only during its part, with its box drawn behind it");
+        var sticker = Path.Combine(folder, "Sticker.png");
+        await Ffmpeg("-y", "-f", "lavfi", "-i", "color=white:s=200x200,drawbox=x=50:y=50:w=100:h=100:color=0x00FF00:t=fill", "-frames:v", "1", sticker);
+        var picture = OverlayItem.NewImage(0, 4, sticker) with { Key = OverlayKey.White };
+        var pictured = Path.Combine(folder, "Pictured.mp4");
+        await ExportServices.PreciseAsync(source, pictured, new[] { new KeepSection(0, 2) }, null, CancellationToken.None, true, new ShareExportOptions { Overlays = new[] { picture } });
+        Check(Near(await Pixel(pictured, 1, 320, 180), 0, 255, 0) && Near(await Pixel(pictured, 1, 320 - 70, 180), 255, 0, 0), "Pictures show over the video with a white background removed");
+        // A small blue square at x 0.6 under a 2x zoom on the centre: stuck, it moves out to 0.7; fixed, it stays.
+        var square = OverlayItem.NewImage(0, 4, sticker) with { Key = OverlayKey.None, X = .6, Y = .5, Scale = .1, ImageCorner = 0 };
+        var steady = new ZoomRegion(0, 4, .5, .5, 2, ZoomPreset.BuiltIns[2].Curve);
+        foreach (bool stuck in new[] { true, false })
+        {
+            var output = Path.Combine(folder, $"Zoom overlay {stuck}.mp4");
+            await ExportServices.PreciseAsync(source, output, new[] { new KeepSection(0, 3) }, null, CancellationToken.None, true, new ShareExportOptions { ZoomRegions = new[] { steady }, Overlays = new[] { square with { StickToVideo = stuck } } });
+            int x = (int)(640 * (stuck ? .7 : .6));
+            Check(Near(await Pixel(output, 2, x, 180), 0, 255, 0), stuck ? "Pictures stuck to the video follow a zoom" : "Pictures fixed on screen ignore a zoom");
+        }
+        // Everything at once: animated entrances, a typewriter caption, a speed part and two sections.
+        var busy = Path.Combine(folder, "Busy overlays.mp4");
+        var busyItems = new[]
+        {
+            caption with { Start = .5, End = 3.5, In = OverlayMotion.Typewriter, InLength = 1, Out = OverlayMotion.Fade, Shape = OverlayShape.Bubble, Shadow = new OverlayShadow(true) },
+            picture with { Start = 1, End = 5, In = OverlayMotion.Pop, Out = OverlayMotion.SlideLeft, Rotation = 30, Opacity = .7, Layer = 1, StickToVideo = false },
+        };
+        await ExportServices.PreciseAsync(source, busy, new[] { new KeepSection(0, 2), new KeepSection(3, 5) }, null, CancellationToken.None, true,
+            new ShareExportOptions { Overlays = busyItems, SlowRegions = new[] { new SpeedRegion(1, 2, .5) }, ZoomRegions = new[] { zoomRegion } });
+        Check(Math.Abs(ClipMedia.Read(busy).Duration - 5) < .3, "Animated text and pictures export alongside speed parts, zoom and two sections");
+        var typing = caption with { In = OverlayMotion.Typewriter, InLength = 1 };
+        Check(typing.StateAt(0).Chars == 0 && typing.StateAt(.5).Chars == 2 && typing.StateAt(1.5).Chars == 4, "Typewriter reveals the text over its entrance");
+        Check(Math.Abs((caption with { In = OverlayMotion.Fade, InLength = 1 }).StateAt(.25).Opacity - .25) < 1e-6, "Fade in eases the opacity up");
         var slowGif = Path.Combine(folder, "Slow.gif");
         await ExportServices.PreciseAsync(source, slowGif, new[] { new KeepSection(1, 2) }, null, CancellationToken.None, true, ShareExportOptions.For(ExportFormat.Gif) with { Speed = .5, Crop = new CropRect(0, 0, 320, 180) });
         Check(new FileInfo(slowGif).Length > 1000, "Slow motion also works for cropped GIFs");

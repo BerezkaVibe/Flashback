@@ -8,6 +8,7 @@
   <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <Border x:Name="PreviewFrame" Background="#000000" CornerRadius="8" ClipToBounds="True"><MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Close" ScrubbingEnabled="True" Stretch="Uniform" MediaOpened="Player_Opened" MediaEnded="Player_Ended" MediaFailed="Player_Failed"/></Border>
    <Border x:Name="CensorOverlay" Background="#000000" CornerRadius="8" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="Blacked out in the export" Foreground="#9DA6B1" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+   <local:OverlayLayer x:Name="OverlayView" AutomationProperties.Name="Text and pictures"/>
    <local:CropOverlay x:Name="CropArea" Visibility="Collapsed" AutomationProperties.Name="Crop area"/>
    <local:ZoomTargetOverlay x:Name="ZoomTarget" Visibility="Collapsed" AutomationProperties.Name="Zoom target"/>
    <Border x:Name="ZoomPanel" Grid.Column="1" Width="300" Margin="10,0,0,0" Visibility="Collapsed" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="12,10">
@@ -32,6 +33,18 @@
      <CheckBox x:Name="ZoomOutSameCheck" DockPanel.Dock="Top" Content="Same curve as zoom in" Margin="22,6,0,0" IsChecked="True" Click="ZoomOutToggle_Click" Visibility="Collapsed"/>
      <Button DockPanel.Dock="Bottom" Style="{StaticResource TrimButton}" Content="Remove zoom" Click="ZoomRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" HorizontalAlignment="Left" Margin="-8,0,0,0"/>
      <TextBlock Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,6" Text="Drag the box on the video to aim; drag its corners to zoom further. On the graph, drag points; Ctrl-drag scales the height, Alt-drag the timing. Double-click adds a point, right-click removes one."/>
+    </DockPanel>
+   </Border>
+   <Border x:Name="OverlayPanel" Grid.Column="1" Width="300" Margin="10,0,0,0" Visibility="Collapsed" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="12,10,4,10">
+    <DockPanel>
+     <DockPanel DockPanel.Dock="Top" Margin="0,0,8,0">
+      <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" MinHeight="26" FontSize="10" Content="&#xE711;" Click="OverlayDone_Click" ToolTip="Done editing" AutomationProperties.Name="Close text and picture editor"/>
+      <TextBlock x:Name="OverlayHeading" Text="Text" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <TextBlock x:Name="OverlayTitle" Foreground="{DynamicResource Muted}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+     </DockPanel>
+     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,8,0,0" Padding="0,0,8,0">
+      <StackPanel x:Name="OverlayControls"/>
+     </ScrollViewer>
     </DockPanel>
    </Border>
    <Border x:Name="CropBar" Visibility="Collapsed" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,10,0,0" Background="#E6111318" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="4">
@@ -69,28 +82,37 @@
      </Border>
     </Popup>
    </StackPanel>
-   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-    <StackPanel x:Name="ListControls" Orientation="Horizontal">
-     <Button x:Name="AddSectionButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE710;" Click="Add_Click" Foreground="{DynamicResource Accent}" AutomationProperties.Name="Add section"/>
-     <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time · X" AutomationProperties.Name="Cut out tool"/>
-     <Button x:Name="SlowToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE916;" Click="SlowTool_Click" ToolTip="Speed: click two spots to slow down or speed up that part · R" AutomationProperties.Name="Slow motion tool"/>
-     <Popup x:Name="SlowPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True" Closed="SlowPopup_Closed">
-      <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
-       <StackPanel>
-        <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
-        <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.302585" Maximum="1.386294" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
-        <UniformGrid x:Name="SlowChoices" Rows="1"/>
-        <Button Style="{StaticResource TrimButton}" Content="Remove speed change" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
-       </StackPanel>
-      </Border>
-     </Popup>     <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
-     <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
-     <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE8C6;" Click="Split_Click" ToolTip="Split the section under the playhead into two" AutomationProperties.Name="Split section"/>
-     <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
-     <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="14" Content="&#xE894;" Click="Clear_Click" ToolTip="Remove all sections" AutomationProperties.Name="Clear sections"/>
+   <!-- Tools sit in a compact two-row block: timeline tools on top, section editing below. -->
+   <Border Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="3">
+    <StackPanel x:Name="ListControls">
+     <StackPanel Orientation="Horizontal">
+      <Button x:Name="CutToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE75C;" Click="CutTool_Click" ToolTip="Cut out: black out video or mute audio for part of the clip without removing time · X" AutomationProperties.Name="Cut out tool"/>
+      <Button x:Name="SlowToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE916;" Click="SlowTool_Click" ToolTip="Speed: click two spots to slow down or speed up that part · R" AutomationProperties.Name="Slow motion tool"/>
+      <Popup x:Name="SlowPopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True" Closed="SlowPopup_Closed">
+       <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
+        <StackPanel>
+         <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+         <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.302585" Maximum="1.386294" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
+         <UniformGrid x:Name="SlowChoices" Rows="1"/>
+         <Button Style="{StaticResource TrimButton}" Content="Remove speed change" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
+        </StackPanel>
+       </Border>
+      </Popup>
+      <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
+      <Button x:Name="TextToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D2;" Click="TextTool_Click" ToolTip="Text: click two spots to add a caption for that part" AutomationProperties.Name="Text tool"/>
+      <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture: click two spots to add a picture or GIF for that part" AutomationProperties.Name="Picture tool"/>
+      <Button x:Name="CropButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A8;" Click="Crop_Click" ToolTip="Crop the video" AutomationProperties.Name="Crop video"/>
+     </StackPanel>
+     <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+      <Button x:Name="AddSectionButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE710;" Click="Add_Click" Foreground="{DynamicResource Accent}" AutomationProperties.Name="Add section"/>
+      <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8C6;" Click="Split_Click" ToolTip="Split the section under the playhead into two" AutomationProperties.Name="Split section"/>
+      <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE894;" Click="Clear_Click" ToolTip="Remove all sections" AutomationProperties.Name="Clear sections"/>
+      <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A7;" Click="Undo_Click" ToolTip="Undo" AutomationProperties.Name="Undo"/>
+      <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE7A6;" Click="Redo_Click" ToolTip="Redo" AutomationProperties.Name="Redo"/>
+      <Button Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE768;" Click="Preview_Click" ToolTip="Play only the kept sections" AutomationProperties.Name="Preview sections" Foreground="{DynamicResource Accent}"/>
+     </StackPanel>
     </StackPanel>
-    <Button Style="{StaticResource IconButton}" Width="32" Height="32" MinHeight="32" FontSize="13" Content="&#xE768;" Click="Preview_Click" ToolTip="Play only the kept sections" AutomationProperties.Name="Preview sections" Foreground="{DynamicResource Accent}" Margin="6,0,0,0"/>
-   </StackPanel>
+   </Border>
   </Grid>
   <Grid x:Name="RangeControls" Grid.Row="4" Margin="0,0,0,10" Visibility="Collapsed"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
    <StackPanel x:Name="RangeFields" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" Visibility="Collapsed" IsKeyboardFocusWithinChanged="RangeFields_FocusChanged">

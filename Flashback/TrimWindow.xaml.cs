@@ -26,8 +26,8 @@ public partial class TrimWindow : Window
     private readonly bool previewEnabled;
     private Dictionary<TrimAction,string> keys = TrimShortcuts.Resolve(new Settings());
     internal double Playhead => playhead;
-    // Undo covers kept sections, cut-outs, speed parts and zooms.
-    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow, ZoomRegion[] Zoom);
+    // Undo covers kept sections, cut-outs, speed parts, zooms, text and pictures.
+    private sealed record EditState(KeepSection[] Sections, CutRegion[] Cuts, SpeedRegion[] Slow, ZoomRegion[] Zoom, OverlayItem[] Overlays);
     private readonly Stack<EditState> undo = new(), redo = new();
     private int previewSection = -1;
     public event Action<ClipResult>? Exported;
@@ -46,6 +46,7 @@ public partial class TrimWindow : Window
         Timeline.SlowAdded += SlowAdded; Timeline.SlowTagClicked += SlowTagClicked; Timeline.SlowRemoved += SlowRemoved;
         LoadSlowChoices();
         InitZoom();
+        InitOverlays();
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -94,7 +95,9 @@ public partial class TrimWindow : Window
     }
     private void Video_DragOver(object sender,DragEventArgs e)
     {
-        e.Effects=exportCancellation==null && TrimImport.CanDrop(TrimImport.Files(e.Data)) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled=true;
+        var files=TrimImport.Files(e.Data);
+        bool picture=source.Length>0 && files.Length==1 && PictureExtensions.Contains(Path.GetExtension(files[0]).ToLowerInvariant());
+        e.Effects=exportCancellation==null && (picture || TrimImport.CanDrop(files)) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled=true;
     }
     private void Video_Drop(object sender,DragEventArgs e)
     {
@@ -103,6 +106,8 @@ public partial class TrimWindow : Window
         {
             var paths=TrimImport.Files(e.Data);
             if (paths.Length!=1) throw new ArgumentException("Drop one video at a time.");
+            // A picture dropped on an open clip is added over it at the playhead.
+            if (DropPicture(paths[0])) { e.Effects=DragDropEffects.Copy; return; }
             if (LoadClip(paths[0])) e.Effects=DragDropEffects.Copy;
         }
         catch(Exception ex) { e.Effects=DragDropEffects.None; ImportError(ex.Message); }
@@ -134,6 +139,7 @@ public partial class TrimWindow : Window
         PositionLabel.Text = $"{KeepSection.TimeText(playhead)} / {KeepSection.TimeText(media.Duration)}";
         if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
         if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
+        OverlayView.Time = playhead;
     }
     internal void SeekTo(double time, bool defer = false)
     {
@@ -231,7 +237,7 @@ public partial class TrimWindow : Window
     }
     private void Remove_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); if (SectionsList.SelectedItem is KeepSection s) { Snapshot(); sections.Remove(s); } }
     private void Clear_Click(object sender, RoutedEventArgs e) { if(exportCancellation!=null) return; Pause(); Snapshot(); sections.Clear(); }
-    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray());
+    private EditState CurrentEdit() => new(sections.ToArray(), Timeline.Cuts.ToArray(), Timeline.SlowRegions.ToArray(), Timeline.ZoomRegions.ToArray(), Timeline.Overlays.ToArray());
     private void Snapshot() { if (undo.Count >= 50) undo.Clear(); undo.Push(CurrentEdit()); redo.Clear(); }
     private void Undo_Click(object sender, RoutedEventArgs e) => Restore(undo, redo);
     private void Restore(Stack<EditState> from, Stack<EditState> to)
@@ -240,8 +246,9 @@ public partial class TrimWindow : Window
         Pause(); to.Push(CurrentEdit()); var saved = from.Pop();
         if (!saved.Sections.SequenceEqual(sections))
         { sections.Clear(); foreach(var s in saved.Sections) sections.Add(s); if(sections.Count>0) SectionsList.SelectedIndex=0; }
-        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; Timeline.ZoomRegions = saved.Zoom; ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
+        Timeline.Cuts = saved.Cuts; Timeline.SlowRegions = saved.Slow; Timeline.ZoomRegions = saved.Zoom; SetOverlays(saved.Overlays); ApplyPreviewCuts(); UpdateExportHint(); UpdateSummary();
         if (ZoomPanel.Visibility == Visibility.Visible) LoadZoomUi(); else ApplyZoomPreview();
+        if (OverlayPanel.Visibility == Visibility.Visible) LoadOverlayUi();
     }
     private void Split_Click(object sender, RoutedEventArgs e)
     {
@@ -274,11 +281,12 @@ public partial class TrimWindow : Window
         // Open and save work anywhere, including while typing a timestamp.
         if (action is TrimAction.OpenVideo or TrimAction.SaveProject) { if(!repeated) RunAction(action.Value); return true; }
         if (editingText) return false;
-        // Esc leaves the cut, speed or zoom tool.
-        if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode || Timeline.ZoomMode))
+        // Esc leaves the cut, speed, zoom, text or picture tool.
+        if (key==Key.Escape && modifiers==ModifierKeys.None && (Timeline.CutMode || Timeline.SlowMode || Timeline.ZoomMode || Timeline.OverlayMode!=null))
         {
             // One press leaves the tool, dropping any half-placed part.
-            if (Timeline.ZoomMode) ZoomTool_Click(this,new RoutedEventArgs());
+            if (Timeline.OverlayMode!=null) { Timeline.OverlayMode=null; ShowCutTool(); StatusLabel.Text="Tool off."; }
+            else if (Timeline.ZoomMode) ZoomTool_Click(this,new RoutedEventArgs());
             else if (Timeline.SlowMode) SlowTool_Click(this,new RoutedEventArgs());
             else CutTool_Click(this,new RoutedEventArgs());
             return true;

@@ -144,6 +144,35 @@ internal static class TrimInteractionDiagnostics
             trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             Check(tl.ZoomRegions.Count==1,"Undo brings a removed zoom back");
             trim.HandleKey(Key.Z,ModifierKeys.Control,false); trim.HandleKey(Key.Z,ModifierKeys.Control,false); trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            // Text and pictures: two clicks add one on the lowest free layer, the panel edits it, layers restack, undo works.
+            int zoomsLeft=tl.ZoomRegions.Count, slowLeft=tl.SlowRegions.Count;
+            trim.HandleKey(Key.T,ModifierKeys.None,false); Check(tl.OverlayMode==OverlayKind.Text && !tl.ZoomMode && !tl.CutMode,"T switches to the text tool");
+            place.Invoke(tl,new object[]{new Point(tl.XAt(2),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(4),26)});
+            Check(tl.Overlays.Count==1 && tl.Overlays[0].Kind==OverlayKind.Text && Math.Abs(tl.Overlays[0].Start-2)<.05 && Math.Abs(tl.Overlays[0].End-4)<.05,"Two clicks add text for that stretch");
+            Check(trim.OverlayPanel.Visibility==Visibility.Visible && tl.SelectedOverlay==0 && trim.ZoomPanel.Visibility!=Visibility.Visible,"New text opens its editor beside the video");
+            Check(tl.ActualHeight>0 && tl.Height>tl.PreferredHeight-1,"The timeline grows a slim layer row for text");
+            place.Invoke(tl,new object[]{new Point(tl.XAt(3),30)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),30)});
+            Check(tl.Overlays.Count==2 && tl.Overlays[0].Layer==0 && tl.Overlays[1].Layer==1,"Overlapping text goes on the layer above");
+            var textBox=(System.Windows.Controls.TextBox)typeof(TrimWindow).GetField("overlayTextBox",flags)!.GetValue(trim)!;
+            textBox.Text="Hello there";
+            Check(tl.Overlays[1].Text=="Hello there" && trim.OverlayView.Items[1].Text=="Hello there","Typing in the panel changes the text on the video");
+            trim.SeekTo(3.5); EditorDiagnostics.Render(content,1120,900,"trim-overlays.png");
+            typeof(TrimWindow).GetMethod("Restack",flags)!.Invoke(trim,new object[]{-1});
+            Check(tl.Overlays[1].Layer==0 && tl.Overlays[0].Layer==1,"Send back trades layers with the overlapping item");
+            var newer=OverlayItem.NewText(0,1,tl.Overlays[1]);
+            Check(newer.Text=="Your text" && newer.Font==tl.Overlays[1].Font,"New text starts with the last text's style");
+            trim.HandleKey(Key.Escape,ModifierKeys.None,true); Check(tl.OverlayMode==null,"Esc leaves the text tool");
+            for(int i=0;i<4;i++) trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(tl.Overlays.Count==0 && trim.OverlayView.Items.Count==0 && tl.ZoomRegions.Count==zoomsLeft && tl.SlowRegions.Count==slowLeft,"Undo steps back through restacking, typing and adding text");
+            trim.HandleKey(Key.P,ModifierKeys.None,false); Check(tl.OverlayMode==OverlayKind.Image,"P switches to the picture tool");
+            trim.HandleKey(Key.P,ModifierKeys.None,false); Check(tl.OverlayMode==null,"P again leaves the picture tool");
+            var sticker=Path.Combine(Storage.Root,"interaction-sticker.png");
+            var pixels=new byte[64*64*4]; for(int i=0;i<pixels.Length;i+=4){pixels[i+1]=200;pixels[i+3]=255;}
+            using(var file=File.Create(sticker)){var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(System.Windows.Media.Imaging.BitmapSource.Create(64,64,96,96,System.Windows.Media.PixelFormats.Bgra32,null,pixels,256)));png.Save(file);}
+            trim.SeekTo(6);
+            Check(trim.DropPicture(sticker) && tl.Overlays.Count==1 && tl.Overlays[0].Kind==OverlayKind.Image && Math.Abs(tl.Overlays[0].Start-6)<.01 && tl.Overlays[0].Scale<1,"Dropping a picture adds it at the playhead at its own size");
+            trim.HandleKey(Key.Z,ModifierKeys.Control,false);
+            Check(tl.Overlays.Count==0 && trim.OverlayPanel.Visibility!=Visibility.Visible,"Undo removes the dropped picture and closes its editor");
             trim.Timeline.SelectedSection=-1;
             double spanBefore=trim.Timeline.VisibleDuration;
             trim.Timeline.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice,0,120){RoutedEvent=UIElement.MouseWheelEvent});

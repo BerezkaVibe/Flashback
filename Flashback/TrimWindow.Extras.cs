@@ -134,11 +134,11 @@ public partial class TrimWindow
         CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
         Player.IsMuted = userMuted || mute;
     }
-    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.CutMode = false; Timeline.SlowMode = false; ResetZoom(); ShowCutTool(); }
+    private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.CutMode = false; Timeline.SlowMode = false; ResetZoom(); ResetOverlays(); ShowCutTool(); }
     // Lit in the accent color while the tool is on; otherwise it looks like the other icons.
     private void ShowCutTool()
     {
-        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode), (ZoomToolButton, Timeline.ZoomMode) })
+        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode), (ZoomToolButton, Timeline.ZoomMode), (TextToolButton, Timeline.OverlayMode == OverlayKind.Text), (ImageToolButton, Timeline.OverlayMode == OverlayKind.Image) })
         {
             if (on) { button.SetResourceReference(Control.BorderBrushProperty, "Accent"); button.SetResourceReference(Control.ForegroundProperty, "Accent"); }
             else { button.ClearValue(Control.BorderBrushProperty); button.ClearValue(Control.ForegroundProperty); }
