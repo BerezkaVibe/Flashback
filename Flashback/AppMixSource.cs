@@ -15,48 +15,35 @@ using NAudio.Wave;
 
 namespace Flashback;
 
-// Per-app recording mix. Used when an app has a custom level, or when each app is recorded on its own
-// layer; otherwise the whole playback device is captured by AudioLoopback at no extra cost.
+// Per-app recording mix. Used only when an app has a custom level; otherwise the
+// whole playback device is captured by AudioLoopback at no extra cost.
 // Each app that owns an audio session gets its own Windows process-loopback stream.
-// Packets land on accumulators indexed by their capture time, so every app shares
+// Packets land on one accumulator indexed by their capture time, so every app shares
 // the video clock; a writer emits the mix 100 ms behind real time.
-//
-// With layers, an app gets one of Slots layers the first time it makes a sound, and its sound goes there
-// instead of the main output, which then carries only the apps without a layer ("Other apps"). When all
-// layers are taken, a new app takes the one whose app has been quiet longest (10 s at least); otherwise
-// it joins Other apps. Which app had which layer when is kept in a LayerLog, for naming the clip's tracks.
 public sealed class AppMixSource : IRecordingAudio
 {
-    internal const int SampleRate = 48000, Channels = 2, Slots = 6;
+    internal const int SampleRate = 48000, Channels = 2;
     private const int RingFrames = SampleRate * 2, Latency = SampleRate / 10;
-    // Quieter than this (about -60 dB) isn't a sound for giving an app a layer.
-    private const float Audible = .001f;
     // Windows 10 build 20348 and Windows 11 support process loopback capture.
     internal static bool Supported => Environment.OSVersion.Version.Build >= 20348;
     private readonly string deviceId;
     private readonly ConcurrentDictionary<int, AppStream> streams = new();
     private readonly object mix = new();
-    // Output 0 is the main mix; 1..Slots are the layers.
-    private readonly Output[] outputs;
-    private readonly LayerLog? log;
-    private readonly double logOffset;
-    private readonly string?[] layerApps = new string?[Slots + 1];
-    private readonly Dictionary<string, long> lastSound = new(StringComparer.OrdinalIgnoreCase);
-    private long emitted; // frames written to the pipes, counted from the timeline origin
+    private readonly float[] ring = new float[RingFrames * Channels];
+    private long emitted; // frames written to the pipe, counted from the timeline origin
+    private readonly NamedPipeServerStream pipe;
     private readonly CancellationTokenSource cancel = new();
+    private readonly Channel<byte[]> packets = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(512) { SingleReader = true, SingleWriter = true });
     private Func<long>? timelineOrigin;
-    private Task? writer;
+    private Task? pump, writer;
     private volatile Dictionary<string, double> levels;
     private bool disposed;
     private long lastWrite;
     public WaveFormat Format { get; } = WaveFormat.CreateIeeeFloatWaveFormat(SampleRate, Channels);
     public string RawFormat => "f32le";
-    public string PipeName => outputs[0].PipeName;
-    public string InputPath => outputs[0].InputPath;
-    // The layers' pipes, in layer order (none without layers).
-    internal IReadOnlyList<string> LayerInputPaths => outputs.Skip(1).Select(o => o.InputPath).ToArray();
-    internal bool Layered => outputs.Length > 1;
-    public string DeviceName => Layered ? $"App layers ({streams.Count} apps)" : $"App mix ({streams.Count} apps)";
+    public string PipeName { get; } = "Flashback-mix-" + Guid.NewGuid().ToString("N");
+    public string InputPath => @"\\.\pipe\" + PipeName;
+    public string DeviceName => $"App mix ({streams.Count} apps)";
     public string DeviceId => deviceId;
     public bool Muted { get; set; }
     public double Gain { get; set; } = 1;
@@ -64,16 +51,13 @@ public sealed class AppMixSource : IRecordingAudio
     public bool DeviceChanged => false;
     public bool StreamStalled => lastWrite != 0 && Stopwatch.GetElapsedTime(Interlocked.Read(ref lastWrite)).TotalSeconds > 5;
     public Exception? Failure { get; private set; }
-    public string SyncReport => $"App mix: {streams.Count} app streams; {string.Join(", ", streams.Values.Select(s => s.Name).Distinct())}"
-        + (Layered ? $"; layers: {string.Join(", ", layerApps.Skip(1).Select((a, i) => $"{i + 1} {a ?? "free"}"))}" : "");
+    public string SyncReport => $"App mix: {streams.Count} app streams; {string.Join(", ", streams.Values.Select(s => s.Name).Distinct())}";
 
-    // log and logOffset (layers only): where to note which app has which layer, and the recorder's timeline
-    // time this source's time starts at.
-    public AppMixSource(string deviceId, IReadOnlyDictionary<string, int> appLevels, LayerLog? log = null, double logOffset = 0)
+    public AppMixSource(string deviceId, IReadOnlyDictionary<string, int> appLevels)
     {
         if (!Supported) throw new PlatformNotSupportedException("Per-app recording levels need Windows 11 or Windows 10 build 20348 or later.");
-        this.deviceId = deviceId; levels = Normalize(appLevels); this.log = log; this.logOffset = logOffset;
-        outputs = Enumerable.Range(0, log != null ? Slots + 1 : 1).Select(_ => new Output()).ToArray();
+        this.deviceId = deviceId; levels = Normalize(appLevels);
+        pipe = new NamedPipeServerStream(PipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, 0, 256 * 1024);
     }
     private static Dictionary<string, double> Normalize(IReadOnlyDictionary<string, int> source) =>
         source.ToDictionary(p => p.Key.ToLowerInvariant(), p => Math.Clamp(p.Value, 0, 200) / 100.0);
@@ -84,15 +68,13 @@ public sealed class AppMixSource : IRecordingAudio
     {
         this.timelineOrigin = timelineOrigin;
         Interlocked.Exchange(ref lastWrite, Stopwatch.GetTimestamp());
-        // The writer starts once the main pipe is open; the layers' pipes open right after it, and what's
-        // written to them meanwhile waits in their queues.
-        foreach (var output in outputs) output.Pump = Task.Run(async () =>
+        pump = Task.Run(async () =>
         {
             try
             {
-                await output.Pipe.WaitForConnectionAsync(cancel.Token);
-                if (output == outputs[0]) writer = Task.Factory.StartNew(WriteLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-                await foreach (var bytes in output.Packets.Reader.ReadAllAsync(cancel.Token)) await output.Pipe.WriteAsync(bytes, cancel.Token);
+                await pipe.WaitForConnectionAsync(cancel.Token);
+                writer = Task.Factory.StartNew(WriteLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                await foreach (var bytes in packets.Reader.ReadAllAsync(cancel.Token)) await pipe.WriteAsync(bytes, cancel.Token);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!disposed) Failure = ex; }
@@ -122,27 +104,22 @@ public sealed class AppMixSource : IRecordingAudio
     private void Emit(long target)
     {
         int frames = (int)Math.Min(target - emitted, RingFrames / 2);
+        var bytes = new byte[frames * Channels * 4];
         float gain = Muted ? 0 : (float)Gain;
-        var packets = new byte[outputs.Length][];
         lock (mix)
         {
-            for (int o = 0; o < outputs.Length; o++)
+            for (int f = 0; f < frames; f++)
             {
-                var ring = outputs[o].Ring; var bytes = packets[o] = new byte[frames * Channels * 4];
-                for (int f = 0; f < frames; f++)
+                int slot = (int)((emitted + f) % RingFrames) * Channels;
+                for (int c = 0; c < Channels; c++)
                 {
-                    int slot = (int)((emitted + f) % RingFrames) * Channels;
-                    for (int c = 0; c < Channels; c++)
-                    {
-                        float value = Math.Clamp(ring[slot + c] * gain, -1f, 1f); ring[slot + c] = 0;
-                        BitConverter.TryWriteBytes(bytes.AsSpan((f * Channels + c) * 4), value);
-                    }
+                    float value = Math.Clamp(ring[slot + c] * gain, -1f, 1f); ring[slot + c] = 0;
+                    BitConverter.TryWriteBytes(bytes.AsSpan((f * Channels + c) * 4), value);
                 }
             }
             emitted += frames;
         }
-        for (int o = 0; o < outputs.Length; o++)
-            if (!outputs[o].Packets.Writer.TryWrite(packets[o])) throw new IOException(AudioLoopback.BacklogMessage);
+        if (!packets.Writer.TryWrite(bytes)) throw new IOException(AudioLoopback.BacklogMessage);
         Interlocked.Exchange(ref lastWrite, Stopwatch.GetTimestamp());
     }
     // Adds one app packet at its capture time. Each stream keeps a running cursor and
@@ -160,8 +137,6 @@ public sealed class AppMixSource : IRecordingAudio
         float level = (float)LevelFor(stream.Name);
         if (level <= 0) return;
         var samples = MemoryMarshal.Cast<byte, float>(data.AsSpan());
-        int layer = Layered ? LayerFor(stream.Label, samples, start) : 0;
-        var ring = outputs[layer].Ring;
         lock (mix)
         {
             for (int f = 0; f < frames; f++)
@@ -172,36 +147,6 @@ public sealed class AppMixSource : IRecordingAudio
                 for (int c = 0; c < Channels; c++) ring[slot + c] += samples[f * Channels + c] * level;
             }
         }
-    }
-    // The layer an app's sound goes to (0: Other apps). An app gets one when it's first heard.
-    private int LayerFor(string app, ReadOnlySpan<float> samples, long at)
-    {
-        bool audible = false;
-        foreach (float v in samples) if (Math.Abs(v) > Audible) { audible = true; break; }
-        lock (layerApps)
-        {
-            if (audible) lastSound[app] = at;
-            for (int l = 1; l <= Slots; l++) if (string.Equals(layerApps[l], app, StringComparison.OrdinalIgnoreCase)) return l;
-            if (!audible) return 0;
-            int free = Array.FindIndex(layerApps, 1, a => a == null);
-            if (free < 0)
-            {
-                // All taken: the one quiet longest, if it's been quiet 10 s.
-                long QuietSince(int l) => lastSound.TryGetValue(layerApps[l]!, out var t) ? t : long.MinValue;
-                int quietest = Enumerable.Range(1, Slots).OrderBy(QuietSince).First();
-                if (at - QuietSince(quietest) < SampleRate * 10) return 0;
-                free = quietest;
-            }
-            Assign(free, app, at);
-            return free;
-        }
-    }
-    private void Assign(int layer, string? app, long at)
-    {
-        double time = logOffset + Math.Max(0, at) / (double)SampleRate;
-        if (layerApps[layer] != null) log?.Close(layer, time);
-        layerApps[layer] = app;
-        if (app != null) log?.Open(layer, app, time);
     }
 
     // Opens a stream for every process with an audio session on the playback device,
@@ -227,68 +172,38 @@ public sealed class AppMixSource : IRecordingAudio
         catch { /* Keep existing streams if the device list is briefly unavailable. */ }
         foreach (var (pid, stream) in streams)
             if (!seen.Contains(pid) && stream.Exited) { if (streams.TryRemove(pid, out var gone)) gone.Dispose(); }
-        // An app that has closed gives its layer back.
-        if (Layered)
-            lock (layerApps)
-                for (int l = 1; l <= Slots; l++)
-                    if (layerApps[l] is { } app && !streams.Values.Any(s => string.Equals(s.Label, app, StringComparison.OrdinalIgnoreCase))) Assign(l, null, emitted);
     }
     private void TryOpen(int pid)
     {
         string name;
         try { using var process = Process.GetProcessById(pid); name = process.ProcessName; } catch { return; }
         if (name.Equals("Flashback", StringComparison.OrdinalIgnoreCase)) return; // Never record our own preview audio.
-        // Layers are named for people: "Spotify", "Google Chrome" rather than "chrome" (levels stay by process name).
-        string label = Layered ? FriendlyName(pid, name) : name;
         try
         {
             var client = ProcessLoopback.Activate(pid);
             var capture = new TimestampedAudioCapture(client, AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback | ProcessLoopback.AutoConvert, Format);
-            var stream = new AppStream(pid, name, label, capture);
+            var stream = new AppStream(pid, name, capture);
             capture.DataAvailable += (_, e) => { if (!disposed) Accumulate(stream, e.Buffer, e.TimestampSeconds); };
             if (streams.TryAdd(pid, stream)) capture.StartRecording(); else stream.Dispose();
         }
         catch { /* Protected or short-lived processes are skipped; they stay silent in the mix. */ }
     }
-    // The app's own description of itself (its file description), or its process name.
-    internal static string FriendlyName(int pid, string fallback)
-    {
-        try
-        {
-            if (ExecutablePath(pid) is { } path && FileVersionInfo.GetVersionInfo(path).FileDescription is { Length: > 0 and < 60 } described) return described.Trim();
-        }
-        catch { }
-        return fallback;
-    }
 
     public async ValueTask DisposeAsync()
     {
         if (disposed) return;
-        disposed = true; cancel.Cancel();
-        foreach (var output in outputs) output.Packets.Writer.TryComplete();
+        disposed = true; cancel.Cancel(); packets.Writer.TryComplete();
         foreach (var stream in streams.Values) stream.Dispose();
         streams.Clear();
-        if (Layered) lock (layerApps) for (int l = 1; l <= Slots; l++) if (layerApps[l] != null) Assign(l, null, emitted);
-        foreach (var output in outputs) output.Pipe.Dispose();
-        foreach (var output in outputs) if (output.Pump != null) try { await output.Pump; } catch { }
+        pipe.Dispose();
+        if (pump != null) try { await pump; } catch { }
         if (writer != null) try { await writer; } catch { }
         cancel.Dispose();
     }
 
-    private sealed class Output
-    {
-        internal readonly float[] Ring = new float[RingFrames * Channels];
-        internal readonly string PipeName = "Flashback-mix-" + Guid.NewGuid().ToString("N");
-        internal string InputPath => @"\\.\pipe\" + PipeName;
-        internal readonly NamedPipeServerStream Pipe;
-        internal readonly Channel<byte[]> Packets = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(512) { SingleReader = true, SingleWriter = true });
-        internal Task? Pump;
-        internal Output() => Pipe = new NamedPipeServerStream(PipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, 0, 256 * 1024);
-    }
-    private sealed class AppStream(int pid, string name, string label, TimestampedAudioCapture capture) : IDisposable
+    private sealed class AppStream(int pid, string name, TimestampedAudioCapture capture) : IDisposable
     {
         internal string Name { get; } = name;
-        internal string Label { get; } = label;
         internal long Cursor = -1;
         internal bool Exited { get { try { using var p = Process.GetProcessById(pid); return p.HasExited; } catch { return true; } } }
         public void Dispose() { try { capture.Dispose(); } catch { } }
@@ -337,51 +252,6 @@ public sealed class AppMixSource : IRecordingAudio
     [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(int access, bool inherit, int pid);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool QueryFullProcessImageName(IntPtr process, int flags, System.Text.StringBuilder name, ref int size);
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
-}
-
-// Which app had which layer when, on the recorder's timeline (seconds): kept across restarts of the
-// capture while the replay buffer lives, for naming a saved clip's layer tracks. Old entries are dropped.
-public sealed class LayerLog
-{
-    internal sealed record Span(int Layer, string App, double From, double To);
-    private readonly List<Span> spans = new();
-    internal void Open(int layer, string app, double at) { lock (spans) spans.Add(new Span(layer, app, at, double.PositiveInfinity)); }
-    internal void Close(int layer, double at)
-    {
-        lock (spans)
-        {
-            int i = spans.FindLastIndex(s => s.Layer == layer && double.IsPositiveInfinity(s.To));
-            if (i >= 0) spans[i] = spans[i] with { To = Math.Max(spans[i].From, at) };
-            spans.RemoveAll(s => s.To < at - 900);
-        }
-    }
-    internal void Clear() { lock (spans) spans.Clear(); }
-    internal IReadOnlyList<Span> Snapshot() { lock (spans) return spans.ToArray(); }
-    // A layer's track title for a stretch of the timeline: its apps and when each starts, from the stretch's
-    // start, as "Apps: Spotify@0.00;Google Chrome@12.40" ("Apps:" when it had none).
-    internal string Title(int layer, double from, double to)
-    {
-        var parts = Snapshot().Where(s => s.Layer == layer && s.To > from && s.From < to).OrderBy(s => s.From)
-            .Select(s => $"{Clean(s.App)}@{Math.Max(0, s.From - from).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}");
-        return "Apps: " + string.Join(";", parts);
-    }
-    private static string Clean(string app)
-    {
-        var text = new string(app.Where(c => !char.IsControl(c) && c is not ';' and not '@' and not '=' and not '\\').ToArray()).Trim();
-        return text.Length == 0 ? "App" : text;
-    }
-    // The apps (and when each starts) in a layer track's title; empty for any other title.
-    internal static IReadOnlyList<(string App, double From)> Parse(string? title)
-    {
-        if (title == null || !title.StartsWith("Apps:", StringComparison.Ordinal)) return Array.Empty<(string, double)>();
-        var list = new List<(string, double)>();
-        foreach (var part in title[5..].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            int at = part.LastIndexOf('@');
-            if (at > 0 && double.TryParse(part[(at + 1)..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var from)) list.Add((part[..at], from));
-        }
-        return list;
-    }
 }
 
 // Windows application loopback: an IAudioClient that captures one process tree.

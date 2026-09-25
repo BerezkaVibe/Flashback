@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
@@ -62,33 +61,15 @@ public partial class TrimWindow
     }
     private void SectionPicked(int index) { if (index >= 0 && index < sections.Count) SectionsList.SelectedIndex = index; }
 
-    // Audio lanes: separate recordings show desktop and microphone, others one combined lane. Clips recorded
-    // with app layers show Other apps and the microphone (when it was on), then a layer for each app.
+    // Audio lanes: separate recordings show desktop and microphone, others one combined lane.
     private async void LoadLanes()
     {
         waveformLoad?.Cancel(); waveformLoad = new CancellationTokenSource(); var token = waveformLoad.Token;
         TrackMixPanel.Visibility = media.HasSeparateTracks ? Visibility.Visible : Visibility.Collapsed;
-        DesktopMix.Value = 100; MicrophoneMix.Value = 100; trackVolumes.Clear();
+        DesktopMix.Value = 100; MicrophoneMix.Value = 100;
         var names = media.HasSeparateTracks ? new[] { ("Desktop", 1), ("Microphone", 2) } : media.HasAudio ? new[] { ("Audio", 0) } : Array.Empty<(string, int)>();
-        var lanes = names.Select(n => (Name: n.Item1, Track: n.Item2, Apps: (IReadOnlyList<(string, double)>)Array.Empty<(string, double)>())).ToList();
-        if (media.AudioTracks >= 3 + AppMixSource.Slots)
-        {
-            string path = source;
-            IReadOnlyList<string> titles;
-            try { titles = await AudioWaveforms.TitlesAsync(path, token); } catch { titles = Array.Empty<string>(); }
-            if (token.IsCancellationRequested || path != source) return;
-            if (titles.Count >= 3 && titles[1] == "Other apps")
-            {
-                lanes = new() { ("Other apps", 1, Array.Empty<(string, double)>()) };
-                if (titles[2] == "Microphone") lanes.Add(("Microphone", 2, Array.Empty<(string, double)>()));
-                for (int t = 3; t < titles.Count; t++)
-                    if (LayerLog.Parse(titles[t]) is { Count: > 0 } apps) lanes.Add((string.Join(" / ", apps.Select(a => a.App).Distinct()), t, apps));
-            }
-        }
-        Timeline.Lanes = lanes.Select(n => new AudioLane(n.Name, Array.Empty<float>(), false, media.HasSeparateTracks) { Apps = n.Apps }).ToArray();
-        DesktopMixName.Text = lanes.Count > 0 && lanes[0].Name == "Other apps" ? "Other apps" : "Desktop";
-        laneTracks = lanes.Select(n => n.Track).ToArray(); waveformsLoaded = false;
-        RefreshLaneStates();
+        Timeline.Lanes = names.Select(n => new AudioLane(n.Item1, Array.Empty<float>(), false, media.HasSeparateTracks)).ToArray();
+        laneTracks = names.Select(n => n.Item2).ToArray(); waveformsLoaded = false;
         if (Timeline.LanesExpanded) await LoadWaveformsAsync(token);
     }
     private int[] laneTracks = Array.Empty<int>();
@@ -102,7 +83,7 @@ public partial class TrimWindow
         {
             var peaks = await Task.Run(() => Task.WhenAll(tracks.Select(t => AudioWaveforms.LoadAsync(path, t, token))), token);
             if (token.IsCancellationRequested || path != source) return;
-            Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Peaks = peaks[i] }).ToArray(); RefreshLaneStates();
+            Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Peaks = peaks[i], Muted = LaneMuted(i) }).ToArray();
         }
         catch (OperationCanceledException) { }
         catch { /* Waveforms are a visual aid; trimming works without them. */ }
@@ -289,63 +270,20 @@ public partial class TrimWindow
     private void SlowPopup_Closed(object? sender, EventArgs e) => Timeline.SelectedSlow = -1;
     // The preview plays speed parts at their speed too.
     private double RegionSpeedAt(double time) => Timeline.SlowRegions.FirstOrDefault(r => time >= r.Start && time < r.End)?.Speed ?? 1;
-    // Each separate track's volume in the export: desktop (or Other apps) and microphone from their sliders,
-    // app layers from their pop-up. 0 mutes it.
-    private readonly Dictionary<int, double> trackVolumes = new();
-    private double TrackVolume(int track) => track == 1 ? DesktopMix.Value / 100 : track == 2 ? MicrophoneMix.Value / 100 : trackVolumes.GetValueOrDefault(track, 1);
-    private double LaneVolume(int lane) => lane >= 0 && lane < laneTracks.Length ? TrackVolume(laneTracks[lane]) : 1;
-    private bool LaneMuted(int lane) => media.HasSeparateTracks && LaneVolume(lane) < .005;
-    private void RefreshLaneStates()
-    {
-        if (!media.HasSeparateTracks || Timeline.Lanes.Count != laneTracks.Length) return;
-        Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i), Volume = LaneVolume(i) }).ToArray();
-    }
-    private void SetTrackVolume(int track, double volume)
-    {
-        volume = Math.Clamp(Math.Round(volume, 2), 0, 2);
-        if (track == 1) DesktopMix.Value = volume * 100; else if (track == 2) MicrophoneMix.Value = volume * 100;
-        else { if (Math.Abs(volume - 1) < .005) trackVolumes.Remove(track); else trackVolumes[track] = volume; RefreshLaneStates(); UpdateExportHint(); }
-        ProjectChanged();
-    }
+    private bool LaneMuted(int lane) => media.HasSeparateTracks && (lane == 0 ? DesktopMix.Value : MicrophoneMix.Value) < .5;
     private void LaneToggled(int lane)
     {
-        if (!media.HasSeparateTracks || exportCancellation != null || lane < 0 || lane >= laneTracks.Length) return;
-        SetTrackVolume(laneTracks[lane], LaneMuted(lane) ? 1 : 0);
-    }
-    // An app's layer: its volume (0 mutes it, taking it out of the export); the cut and volume tools on its
-    // row remove or lower just part of it.
-    private void OpenAppLayerPopup(int lane)
-    {
-        if (exportCancellation != null || lane < 0 || lane >= Timeline.Lanes.Count || !Timeline.Lanes[lane].IsAppLayer) return;
-        int track = laneTracks[lane]; var layer = Timeline.Lanes[lane];
-        popupSound = null; var panel = SoundControls; panel.Children.Clear();
-        panel.Children.Add(new TextBlock { Text = "♪ " + layer.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 2) });
-        var note = new TextBlock { Text = "Recorded on its own layer. Mute it to take it out of the export, or use the cut and volume tools on its row for just part of it. (The preview still plays everything.)", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
-        note.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); panel.Children.Add(note);
-        var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-        var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
-        static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
-        var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = Level(TrackVolume(track) * 100) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
-        var slider = new Slider { Minimum = 0, Maximum = 200, Value = TrackVolume(track) * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
-        slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); SetTrackVolume(track, Math.Round(e.NewValue) / 100); };
-        DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
-        row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);
-        var mute = new Button { Content = TrackVolume(track) < .005 ? "Bring it back" : "Mute (remove it from the export)", FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch };
-        mute.SetResourceReference(StyleProperty, "TrimButton");
-        mute.Click += (_, _) => { slider.Value = TrackVolume(track) < .005 ? 100 : 0; mute.Content = TrackVolume(track) < .005 ? "Bring it back" : "Mute (remove it from the export)"; };
-        panel.Children.Add(mute);
-        SoundPopup.IsOpen = true;
+        if (!media.HasSeparateTracks || exportCancellation != null) return;
+        var slider = lane == 0 ? DesktopMix : MicrophoneMix;
+        slider.Value = slider.Value < .5 ? 100 : 0;
     }
     private void Mix_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (DesktopMixLabel == null || MicrophoneMixLabel == null) return;
         DesktopMixLabel.Text = $"{DesktopMix.Value:0}%"; MicrophoneMixLabel.Text = $"{MicrophoneMix.Value:0}%";
-        RefreshLaneStates();
-        UpdateExportHint(); ProjectChanged();
+        if (Timeline.Lanes.Count == 2) Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i) }).ToArray();
+        UpdateExportHint();
     }
-    // Separate tracks go to the export with their lanes' tracks and volumes.
-    private ShareExportOptions WithLanes(ShareExportOptions options) => media.HasSeparateTracks && laneTracks.Length > 0
-        ? options with { LaneTracks = laneTracks.ToArray(), LaneVolumes = laneTracks.Select(TrackVolume).ToArray() } : options;
 
     // Crop edits happen over the preview; the chosen area applies to every export format.
     private void Crop_Click(object sender, RoutedEventArgs e)
@@ -404,7 +342,7 @@ public partial class TrimWindow
         // Never spend more than ~24 Mbps: beyond that a bigger file looks no better than the recording.
         double target = Math.Min(limit, Math.Ceiling(seconds * (24_000_000 + 128000) / 8 / 1_000_000 / .92));
         ShareExportOptions options;
-        try { options = WithLanes(ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions, ZoomRegions = Timeline.ZoomRegions, Overlays = Timeline.Overlays, VolumeRegions = Timeline.VolumeRegions, Sounds = Timeline.Sounds, Freezes = Timeline.Freezes }); options.Validate(); }
+        try { options = ShareExportOptions.For(format, Math.Max(1, target)) with { Crop = CurrentCrop(), DesktopVolume = DesktopMix.Value / 100, MicrophoneVolume = MicrophoneMix.Value / 100, Cuts = Timeline.Cuts, Speed = ExportSpeedValue, SlowRegions = Timeline.SlowRegions, ZoomRegions = Timeline.ZoomRegions, Overlays = Timeline.Overlays, VolumeRegions = Timeline.VolumeRegions, Sounds = Timeline.Sounds, Freezes = Timeline.Freezes }; options.Validate(); }
         catch (ArgumentException ex) { StatusLabel.Text = ex.Message; return; }
         string folder = Path.GetDirectoryName(source)!, name = Path.GetFileNameWithoutExtension(source) + $" — {limit:0} MB";
         string destination = Path.Combine(folder, name + ".mp4");

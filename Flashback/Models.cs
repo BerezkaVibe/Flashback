@@ -44,10 +44,6 @@ public sealed class Settings
     public bool PreviewEffects { get; set; } = true;
     public bool UiAnimations { get; set; } = true;
     public bool SeparateAudioTracks { get; set; }
-    // Each app playing sound is recorded on its own layer (up to AppMixSource.Slots, the rest together), so it
-    // can be removed in the editor later. Off by default: it opens a capture stream per app while recording.
-    public bool SeparateAppAudio { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore] public bool AppLayers => SeparateAppAudio && DesktopAudio && AppMixSource.Supported;
     public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Flashback");
@@ -120,7 +116,7 @@ public sealed class Settings
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
         || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
-        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || SeparateAppAudio != other.SeparateAppAudio || MixerActive != other.MixerActive || MicNoiseReduction != other.MicNoiseReduction;
+        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || MixerActive != other.MixerActive || MicNoiseReduction != other.MicNoiseReduction;
     public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
     public int BitrateMbps => (int)Math.Round((Quality switch { "Compact" => 8, "High" => 24, _ => 14 }) * (Height switch { 720 => 0.6, 1440 => 1.7, 2160 => 3.0, 0 => 2.0, _ => 1.0 }) * Math.Max(0.65, FrameRate / 60.0));
     public double EstimatedBufferMb => BitrateMbps * (ReplaySeconds + 12) / 8.0 * 1.1;

@@ -20,10 +20,6 @@ public sealed class Recorder : IAsyncDisposable
     private readonly object logLock = new();
     private Process? process;
     private IRecordingAudio? audio;
-    // App layers: which app had which layer when, while the buffer lives, and whether this buffer has them
-    // (and a microphone) so saved clips get their tracks named.
-    private readonly LayerLog layers = new();
-    private bool layeredBuffer, layeredMicrophone;
     private AudioLoopback? microphone;
     private VideoFrameBridge? video;
     internal bool UseBridgeForTests { get; set; }
@@ -180,10 +176,9 @@ public sealed class Recorder : IAsyncDisposable
                 stage = "initializing desktop audio";
                 if (s.DesktopAudio && !synthetic)
                 {
-                    // Per-app streams only when an app has a custom level or each app gets its own layer;
-                    // the whole device otherwise.
-                    audio = (s.MixerActive || s.AppLayers) && AppMixSource.Supported
-                        ? new AppMixSource(s.AudioDeviceId, s.AppVolumes, s.AppLayers ? layers : null, timelineOffset) { Muted = s.DesktopMuted, Gain = s.DesktopVolume / 100.0 }
+                    // Per-app streams only when an app has a custom level; the whole device otherwise.
+                    audio = s.MixerActive && AppMixSource.Supported
+                        ? new AppMixSource(s.AudioDeviceId, s.AppVolumes) { Muted = s.DesktopMuted, Gain = s.DesktopVolume / 100.0 }
                         : new AudioLoopback(s.AudioDeviceId, hold: s.DesktopLocked) { Muted = s.DesktopMuted, Gain = s.DesktopVolume / 100.0 };
                     LastStartupReport += $"Audio source: {audio.DeviceName}; {(string.IsNullOrEmpty(s.AudioDeviceId) ? "follow Windows default" : "fixed playback device")}\n";
                 }
@@ -194,7 +189,6 @@ public sealed class Recorder : IAsyncDisposable
                     LastStartupReport += $"Microphone: {microphone.DeviceName}; {(string.IsNullOrEmpty(s.MicrophoneDeviceId) ? "follow Windows communications default" : "fixed input device")}\n";
                 }
             }, cancellationToken);
-            layeredBuffer = audio is AppMixSource { Layered: true }; layeredMicrophone = microphone != null;
             Mark("audio devices opened");
             stage = "configuring display capture";
             RecordingSize = synthetic ? (640, 360) : OutputSize(settings);
@@ -296,10 +290,6 @@ public sealed class Recorder : IAsyncDisposable
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.25", "-progress", "pipe:1" };
         var audioInputs = new List<int>();
-        // App layers (each app on its own track): their inputs follow the desktop and microphone ones.
-        var layerInputs = new List<int>();
-        var layerPaths = audio is AppMixSource { Layered: true } layered ? layered.LayerInputPaths : Array.Empty<string>();
-        void AddInput(IRecordingAudio input, string path) => args.AddRange(new[] { "-thread_queue_size", "256", "-probesize", "32", "-analyzeduration", "0", "-f", input.RawFormat, "-ar", input.Format.SampleRate.ToString(), "-ac", input.Format.Channels.ToString(), "-i", path });
         string? videoFilter = null;
         if (bridge != null)
         {
@@ -316,10 +306,9 @@ public sealed class Recorder : IAsyncDisposable
             {
                 foreach (var input in new IRecordingAudio?[] { audio, microphone }.Where(a => a != null))
                 {
-                    AddInput(input!, input!.InputPath);
+                    args.AddRange(new[] { "-thread_queue_size", "256", "-probesize", "32", "-analyzeduration", "0", "-f", input!.RawFormat, "-ar", input.Format.SampleRate.ToString(), "-ac", input.Format.Channels.ToString(), "-i", input.InputPath });
                     audioInputs.Add(audioInputs.Count + 1);
                 }
-                foreach (var path in layerPaths) { AddInput(audio!, path); layerInputs.Add(audioInputs.Count + layerInputs.Count + 1); }
                 videoFilter = "[0:v]hwupload[video]";
             }
         }
@@ -338,10 +327,9 @@ public sealed class Recorder : IAsyncDisposable
             args.AddRange(new[] { "-init_hw_device", $"d3d11va=capture:{display.AdapterIndex}", "-filter_hw_device", "capture" });
             foreach (var input in new IRecordingAudio?[] { audio, microphone }.Where(a => a != null))
             {
-                AddInput(input!, input!.InputPath);
+                args.AddRange(new[] { "-thread_queue_size", "256", "-probesize", "32", "-analyzeduration", "0", "-f", input!.RawFormat, "-ar", input.Format.SampleRate.ToString(), "-ac", input.Format.Channels.ToString(), "-i", input.InputPath });
                 audioInputs.Add(audioInputs.Count);
             }
-            foreach (var path in layerPaths) { AddInput(audio!, path); layerInputs.Add(audioInputs.Count + layerInputs.Count); }
             // Desktop Duplication repeats still frames at the requested rate.
             // AMD keeps capture and resize on its adapter. NVIDIA resizing retains
             // the CUDA path because scale_d3d11 failed on the tested RTX 3070 Ti.
@@ -365,22 +353,7 @@ public sealed class Recorder : IAsyncDisposable
         }
         var filters = new List<string>();
         if (videoFilter != null) filters.Add(videoFilter);
-        bool layers = layerInputs.Count > 0;
-        if (layers)
-        {
-            // App layers: the desktop input carries the apps without a layer. Track 1 stays the whole mix, so every
-            // player and Discord hears everything; then Other apps, the microphone (silent when it's off, so the
-            // tracks keep their places) and each layer.
-            const string Even = "aresample=48000:async=1000:first_pts=0,aformat=channel_layouts=stereo";
-            bool voice = audioInputs.Count == 2;
-            filters.Add($"[{audioInputs[0]}:a:0]{Even}[a0]");
-            if (voice) filters.Add($"[{audioInputs[1]}:a:0]{Even}{(synthetic ? "" : NoiseFilter(s, ","))}[a1]");
-            for (int j = 0; j < layerInputs.Count; j++) filters.Add($"[{layerInputs[j]}:a:0]{Even},asplit=2[l{j}mix][layer{j}]");
-            filters.Add(voice ? "[a0]asplit=2[a0mix][desktop];[a1]asplit=2[a1mix][voice]" : "[a0]asplit=3[a0mix][desktop][quiet];[quiet]volume=0[voice]");
-            var parts = new List<string> { "[a0mix]" }; if (voice) parts.Add("[a1mix]"); parts.AddRange(Enumerable.Range(0, layerInputs.Count).Select(j => $"[l{j}mix]"));
-            filters.Add($"{string.Concat(parts)}amix=inputs={parts.Count}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0:latency=1[mixed]");
-        }
-        else if (audioInputs.Count == 2)
+        if (audioInputs.Count == 2)
         {
             // Normalize each independent device clock before mixing to one stereo track.
             for (int i = 0; i < audioInputs.Count; i++)
@@ -396,9 +369,8 @@ public sealed class Recorder : IAsyncDisposable
         }
         if (filters.Count > 0) args.AddRange(new[] { "-filter_complex", string.Join(";", filters) });
         if (!synthetic) args.AddRange(new[] { "-map", "[video]" });
-        if (audioInputs.Count > 0) args.AddRange(new[] { "-map", audioInputs.Count == 2 || layers ? "[mixed]" : $"{audioInputs[0]}:a:0" });
-        if (layers) { args.AddRange(new[] { "-map", "[desktop]", "-map", "[voice]" }); for (int j = 0; j < layerInputs.Count; j++) args.AddRange(new[] { "-map", $"[layer{j}]" }); }
-        else if (audioInputs.Count == 2 && s.SeparateAudioTracks)
+        if (audioInputs.Count > 0) args.AddRange(new[] { "-map", audioInputs.Count == 2 ? "[mixed]" : $"{audioInputs[0]}:a:0" });
+        if (audioInputs.Count == 2 && s.SeparateAudioTracks)
             args.AddRange(new[] { "-map", "[desktop]", "-map", "[voice]", "-metadata:s:a:0", "title=Combined", "-metadata:s:a:1", "title=Desktop", "-metadata:s:a:2", "title=Microphone" });
         if (synthetic)
             args.AddRange(new[] { "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25", "-threads", "2", "-pix_fmt", "yuv420p" });
@@ -408,10 +380,8 @@ public sealed class Recorder : IAsyncDisposable
         if (audioInputs.Count > 0)
         {
             args.AddRange(new[] { "-c:a", "aac", "-b:a", s.AudioBitrate + "k", "-ac", "2", "-ar", "48000" });
-            // App layers are only for editing, so they're kept a little smaller.
-            for (int j = 0; j < layerInputs.Count; j++) args.AddRange(new[] { $"-b:a:{3 + j}", Math.Min(s.AudioBitrate, 128) + "k" });
             // A lone microphone (desktop audio off) gets its noise reduction here.
-            if (audioInputs.Count == 1 && !layers) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" + (microphone != null && audio == null && !synthetic ? NoiseFilter(s, ",") : "") });
+            if (audioInputs.Count == 1) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" + (microphone != null && audio == null && !synthetic ? NoiseFilter(s, ",") : "") });
         }
         args.AddRange(new[] { "-f", "segment", "-segment_time", "2", "-segment_time_delta", "0.02", "-segment_format", "mpegts", "-segment_list", "segments.csv", "-segment_list_type", "csv", "-segment_list_size", (s.ReplaySeconds / 2 + 12).ToString(), "-reset_timestamps", "1", "part-%09d.ts" });
         args.InsertRange(args.Count - 1, new[] { "-segment_start_number", startSegmentNumber.ToString(CultureInfo.InvariantCulture) });
@@ -622,10 +592,7 @@ public sealed class Recorder : IAsyncDisposable
             }
             finally { files.Release(); }
             File.WriteAllLines(Path.Combine(staging, "clip.ffconcat"), new[] { "ffconcat version 1.0" }.Concat(selected.SelectMany(s => new[] { $"file '{s.Name}'", "duration " + s.Duration.ToString("0.000000", CultureInfo.InvariantCulture) })), new UTF8Encoding(false));
-            var muxArgs = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "1", "-ss", (start - selected[0].Start).ToString("0.000000", CultureInfo.InvariantCulture), "-i", "clip.ffconcat", "-t", duration.ToString("0.000000", CultureInfo.InvariantCulture), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", "-avoid_negative_ts", "disabled" };
-            if (layeredBuffer) muxArgs.AddRange(LayerTitles(layers, start, start + duration, layeredMicrophone));
-            muxArgs.AddRange(new[] { "-f", "mp4", partial });
-            using var mux = StartProcess(muxArgs, staging);
+            using var mux = StartProcess(new[] { "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "1", "-ss", (start - selected[0].Start).ToString("0.000000", CultureInfo.InvariantCulture), "-i", "clip.ffconcat", "-t", duration.ToString("0.000000", CultureInfo.InvariantCulture), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", "-avoid_negative_ts", "disabled", "-f", "mp4", partial }, staging);
             var errors = mux.StandardError.ReadToEndAsync();
             var unused = mux.StandardOutput.ReadToEndAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
@@ -647,14 +614,6 @@ public sealed class Recorder : IAsyncDisposable
             if (staging != null) TryDeleteDirectory(staging);
             Interlocked.Decrement(ref saving); saver.Release();
         }
-    }
-    // The tracks of a clip with app layers are named, so the editor knows them: the whole mix, Other apps,
-    // the microphone, then each layer with its apps and when each starts ("Apps: Spotify@0.00").
-    internal static IEnumerable<string> LayerTitles(LayerLog log, double from, double to, bool microphone)
-    {
-        var titles = new List<string> { "Combined", "Other apps", microphone ? "Microphone" : "Microphone (off)" };
-        titles.AddRange(Enumerable.Range(1, AppMixSource.Slots).Select(l => log.Title(l, from, to)));
-        return titles.SelectMany((t, i) => new[] { $"-metadata:s:a:{i}", "title=" + t, $"-metadata:s:a:{i}", "handler_name=" + t });
     }
     public async Task StopAsync()
     {
@@ -717,7 +676,7 @@ public sealed class Recorder : IAsyncDisposable
         else
         {
             if (session != null) { TryDeleteDirectory(session); session = null; }
-            retainedSegments.Clear(); timelineOffset = 0; nextSegmentNumber = 0; savedThrough = 0; layers.Clear();
+            retainedSegments.Clear(); timelineOffset = 0; nextSegmentNumber = 0; savedThrough = 0;
         }
         BufferedSeconds = 0; BufferBytes = 0; stopping = false;
     }

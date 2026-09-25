@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -17,8 +16,6 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     public OverlayItem[]? Overlays { get; init; }
     public VolumeRegion[]? Volumes { get; init; }
     public SoundItem[]? Sounds { get; init; }
-    // Volumes of separate tracks that aren't 100%, by track (1 desktop or Other apps, 2 microphone, 3 on app layers).
-    public Dictionary<int, double>? TrackVolumes { get; init; }
     public FreezeFrame[]? Freezes { get; init; }
     // Crop as a fraction of the frame: x, y, width, height.
     public double[]? Crop { get; init; }
@@ -39,7 +36,7 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
         project.Validate(); return project.Cleaned();
     }
     // True when there is anything to keep beyond the untouched clip.
-    internal bool HasEdits(double duration) => Sections.Length > 0 || Start > .001 || End < duration - .001 || Cuts?.Length > 0 || Speed?.Length > 0 || Zoom?.Length > 0 || Overlays?.Length > 0 || Volumes?.Length > 0 || Sounds?.Length > 0 || Freezes?.Length > 0 || Crop != null || TrackVolumes?.Count > 0;
+    internal bool HasEdits(double duration) => Sections.Length > 0 || Start > .001 || End < duration - .001 || Cuts?.Length > 0 || Speed?.Length > 0 || Zoom?.Length > 0 || Overlays?.Length > 0 || Volumes?.Length > 0 || Sounds?.Length > 0 || Freezes?.Length > 0 || Crop != null;
     internal void Validate()
     {
         if (Version is < 1 or > CurrentVersion || string.IsNullOrWhiteSpace(Source) || !Path.IsPathFullyQualified(Source) || Sections == null) throw new IOException("Unsupported project.");
@@ -72,7 +69,6 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
             Sounds = Sounds?.Where(s => s != null && Ok(s.Start, s.End) && !string.IsNullOrWhiteSpace(s.Path)).Select(s => s with { Volume = Math.Clamp(s.Volume, 0, 2), Offset = Math.Max(0, s.Offset), FadeIn = Math.Clamp(s.FadeIn, 0, 30), FadeOut = Math.Clamp(s.FadeOut, 0, 30), DuckLevel = Math.Clamp(s.DuckLevel, 0, 1),
                 Hold = double.IsFinite(s.Hold) ? Math.Clamp(s.Hold, 0, FreezeFrame.MaxSeconds) : 0, Speed = double.IsFinite(s.Speed) ? Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed) : 1 }).ToArray(),
             Crop = Crop is { Length: 4 } c && c.All(double.IsFinite) && c[2] > .01 && c[3] > .01 ? c : null,
-            TrackVolumes = TrackVolumes?.Where(p => p.Key >= 1 && p.Key < 16 && double.IsFinite(p.Value)).ToDictionary(p => p.Key, p => Math.Clamp(p.Value, 0, 2)),
         };
     }
     internal string Serialize() => JsonSerializer.Serialize(this with { Saved = null }, Json);

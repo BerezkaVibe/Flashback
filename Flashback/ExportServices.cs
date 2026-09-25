@@ -30,11 +30,7 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
     // Applied only to clips recorded with separate desktop and microphone tracks.
     internal double DesktopVolume { get; init; } = 1;
     internal double MicrophoneVolume { get; init; } = 1;
-    // Separate tracks laid out as the editor's lanes (which track each lane is, and its volume), for clips
-    // with app layers; without them the lanes are the desktop and microphone tracks at the volumes above.
-    internal IReadOnlyList<int>? LaneTracks { get; init; }
-    internal IReadOnlyList<double>? LaneVolumes { get; init; }
-    internal bool CustomMix => Math.Abs(DesktopVolume - 1) > .001 || Math.Abs(MicrophoneVolume - 1) > .001 || LaneVolumes?.Any(v => Math.Abs(v - 1) > .001) == true;
+    internal bool CustomMix => Math.Abs(DesktopVolume - 1) > .001 || Math.Abs(MicrophoneVolume - 1) > .001;
     // Lane -1 blacks out the picture; audio lanes follow the trimmer: combined, or desktop then microphone.
     internal IReadOnlyList<CutRegion> Cuts { get; init; } = Array.Empty<CutRegion>();
     // Slow motion: 1 is normal speed, 0.5 plays at half speed. Audio keeps its pitch.
@@ -129,8 +125,7 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
             throw new ArgumentException("Choose a file limit from 1 to 10,000 MB, or 0 for no size limit.");
         if (Height is not (0 or 480 or 720 or 1080) || Fps is not (0 or 15 or 30 or 60)) throw new ArgumentException("Choose a supported export size and frame rate.");
         if (Crop is { } c && (c.X < 0 || c.Y < 0 || c.Width < 32 || c.Height < 32)) throw new ArgumentException("The crop area is too small.");
-        if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2 || LaneVolumes?.Any(v => v is < 0 or > 2 || !double.IsFinite(v)) == true) throw new ArgumentException("Choose a track volume from 0% to 200%.");
-        if (LaneTracks != null && (LaneVolumes == null || LaneVolumes.Count != LaneTracks.Count || LaneTracks.Any(t => t < 1))) throw new ArgumentException("The audio tracks don't match the clip. Open it again.");
+        if (DesktopVolume is < 0 or > 2 || MicrophoneVolume is < 0 or > 2) throw new ArgumentException("Choose a track volume from 0% to 200%.");
         if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
         if (SlowRegions.Any(r => r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9 || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
         if (Freezes.Any(f => !double.IsFinite(f.At) || f.At < 0 || !(f.Seconds >= FreezeFrame.MinSeconds - 1e-9 && f.Seconds <= FreezeFrame.MaxSeconds + 1e-9))) throw new ArgumentException("A freeze frame holds for 0.2 to 10 seconds.");
@@ -462,16 +457,8 @@ internal static class ExportServices
                 }
                 else if (mixTracks)
                 {
-                    // Rebuild the mix from the separate tracks (desktop and microphone, or Other apps, the
-                    // microphone and each app's layer) with the chosen volumes and cuts. A muted track is left out.
-                    var tracks = options.LaneTracks ?? new[] { 1, 2 };
-                    var volumes = options.LaneVolumes ?? new[] { options.DesktopVolume, options.MicrophoneVolume };
-                    var used = Enumerable.Range(0, tracks.Count).Where(l => volumes[l] > .0001).ToList();
-                    string mix = used.Count == 0
-                        ? $"[{i}:a:0]{trim},volume=0"
-                        : string.Join(";", used.Select(l => $"[{i}:a:{tracks[l]}]{trim},volume={Number(volumes[l])}{Mute(l)}[t{i}x{l}]"))
-                            + $";{string.Concat(used.Select(l => $"[t{i}x{l}]"))}amix=inputs={used.Count}:duration=longest:normalize=0,alimiter=limit=0.95:level=0";
-                    filters.Add(WithPip(mix) + $"{slowSound}{audioShape}[a{i}]");
+                    // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
+                    filters.Add(WithPip($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0") + $"{slowSound}{audioShape}[a{i}]");
                     labels += $"[a{i}]";
                 }
                 else if (audio) { filters.Add(WithPip($"[{i}:a:0]{trim}{Mute(0)}") + $"{slowSound}{audioShape}[a{i}]"); labels += $"[a{i}]"; }

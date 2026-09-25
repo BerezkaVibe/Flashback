@@ -51,35 +51,6 @@ internal static class MixerDiagnostics
             report.Add($"All apps at 0%: peak {mutedPeak:0.000000} ({(mutedPeak < 1e-6 ? "silent" : "NOT silent")})");
             report.Add($"Failure: {mix.Failure?.Message ?? "none"}");
         }
-        // App layers: each app that plays is given a layer and heard there, not in Other apps; all seven
-        // outputs keep up with real time.
-        var layerLog = new LayerLog(); long layerOrigin = Stopwatch.GetTimestamp();
-        await using (var layered = new AppMixSource("", new Dictionary<string, int>(), layerLog))
-        {
-            layered.Start(() => layerOrigin);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var paths = new[] { layered.PipeName }.Concat(layered.LayerInputPaths.Select(p => p[(p.LastIndexOf('\\') + 1)..])).ToArray();
-            var results = await Task.WhenAll(paths.Select(async name =>
-            {
-                await using var pipe = new NamedPipeClientStream(".", name, PipeDirection.In, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync(timeout.Token);
-                var buffer = new byte[65536]; long bytes = 0; float peak = 0; var clock = Stopwatch.StartNew();
-                while (clock.Elapsed.TotalSeconds < 5)
-                {
-                    int read = await pipe.ReadAsync(buffer, timeout.Token);
-                    if (read == 0) break;
-                    // The first second is when apps are found and given layers.
-                    if (clock.Elapsed.TotalSeconds > 1.5) for (int i = 0; i + 3 < read; i += 4) peak = Math.Max(peak, Math.Abs(BitConverter.ToSingle(buffer, i)));
-                    bytes += read;
-                }
-                return (Bytes: bytes, Peak: peak, Seconds: clock.Elapsed.TotalSeconds);
-            }));
-            for (int o = 0; o < results.Length; o++)
-                report.Add($"{(o == 0 ? "Other apps" : "Layer " + o)}: {results[o].Bytes / Math.Max(1, (results[o].Seconds - .1) * AppMixSource.SampleRate * AppMixSource.Channels * 4):P0} of real time, peak {results[o].Peak:0.000}");
-            report.Add("Layers: " + layered.SyncReport);
-            report.Add("Layer log: " + string.Join("; ", layerLog.Snapshot().Select(sp => $"{sp.Layer} {sp.App} from {sp.From:0.00} s")));
-            report.Add($"Layers failure: {layered.Failure?.Message ?? "none"}");
-        }
         File.WriteAllLines(Path.Combine(Storage.Root, "mixer-results.txt"), report);
     }
 }

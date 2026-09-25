@@ -9,14 +9,7 @@ using System.Windows.Media;
 namespace Flashback;
 
 // One waveform lane under the video track. Peaks hold 100 samples per second (0..1).
-internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool Toggleable)
-{
-    // An app's own layer (clips recorded with app layers): its apps and when each starts, and its volume.
-    // It's drawn as bars where it made sound, like music, rather than as a waveform.
-    public IReadOnlyList<(string App, double From)> Apps { get; init; } = Array.Empty<(string, double)>();
-    public double Volume { get; init; } = 1;
-    internal bool IsAppLayer => Apps.Count > 0;
-}
+internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool Toggleable);
 // A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
 internal sealed record CutRegion(int Lane, double Start, double End);
 // A stretch played back slower (video and audio together), in source time.
@@ -708,7 +701,6 @@ internal sealed class TrimTimeline : FrameworkElement
     private readonly Dictionary<string, ((float[], double, double, double, double) Key, StreamGeometry Geometry)> waveCache = new();
     private void DrawLane(DrawingContext dc, AudioLane lane, double top, double width, double dpi)
     {
-        if (lane.IsAppLayer) { DrawAppLayer(dc, lane, top, width, dpi); return; }
         dc.DrawRoundedRectangle(LaneFill, null, new Rect(Inset, top, width, LaneHeight), 4, 4);
         var peaks = lane.Peaks; double mid = top + LaneHeight / 2;
         // The outline only changes with the view, so edits elsewhere on the timeline reuse it.
@@ -781,44 +773,6 @@ internal sealed class TrimTimeline : FrameworkElement
     }
     private static readonly Typeface Glyphs = new("Segoe MDL2 Assets");
     // Just a chevron that turns down as the lanes open; a small red dot marks muted audio while folded.
-    // An app's layer: bars where the app made sound, named for it, like music on the audio timeline. Dashed
-    // and dim when it's muted; a volume other than 100% shows on the bar.
-    private static readonly Brush AppFill = Brush("#5AC084FC"), AppMutedFill = Brush("#22C084FC"), AppEdge = Brush("#C084FC");
-    private readonly Dictionary<string, (float[] Peaks, double Duration, List<(double From, double To, string App)> Bars)> appBars = new();
-    private List<(double From, double To, string App)> AppBars(AudioLane lane)
-    {
-        if (appBars.TryGetValue(lane.Name, out var known) && ReferenceEquals(known.Peaks, lane.Peaks) && known.Duration == Duration) return known.Bars;
-        var bars = AppLayer.Bars(lane.Peaks, lane.Apps, Duration);
-        appBars[lane.Name] = (lane.Peaks, Duration, bars);
-        return bars;
-    }
-    private void DrawAppLayer(DrawingContext dc, AudioLane lane, double top, double width, double dpi)
-    {
-        dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, top, width, LaneHeight), 4, 4);
-        var edge = new Pen(AppEdge, 1) { DashStyle = lane.Muted ? DashStyles.Dash : null };
-        string level = lane.Muted ? " · muted" : Math.Abs(lane.Volume - 1) > .005 ? $" · {lane.Volume * 100:0}%" : "";
-        foreach (var (from, to, app) in AppBars(lane))
-            foreach (var (x0, x1) in XSpans(from, to))
-            {
-                var rect = new Rect(x0, top + 2, Math.Max(3, x1 - x0), LaneHeight - 4);
-                dc.DrawRoundedRectangle(lane.Muted ? AppMutedFill : AppFill, edge, rect, 4, 4);
-                var label = Text("♪ " + app + level, 10, lane.Muted ? Muted : Ink, dpi);
-                label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
-                if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
-            }
-    }
-    // The app layer (lane index) whose bar is under a point, or -1.
-    internal event Action<int>? AppLayerPicked;
-    private int AppLayerAt(Point p)
-    {
-        if (!lanesExpanded) return -1;
-        for (int i = 0; i < lanes.Count; i++)
-        {
-            if (!lanes[i].IsAppLayer || p.Y < LaneTop(i) || p.Y > LaneTop(i) + LaneHeight) continue;
-            foreach (var (from, to, _) in AppBars(lanes[i])) foreach (var (x0, x1) in XSpans(from, to)) if (p.X >= x0 - 2 && p.X <= Math.Max(x1, x0 + 3) + 2) return i;
-        }
-        return -1;
-    }
     private void DrawLaneToggle(DrawingContext dc, double dpi)
     {
         if (!HasAudioArea) return;
@@ -1186,7 +1140,7 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             if (!lanesExpanded) break;
             double top = LaneTop(i);
-            if (p.Y >= top && p.Y <= top + LaneHeight && p.X <= Inset + 110 && !lanes[i].IsAppLayer) return i;
+            if (p.Y >= top && p.Y <= top + LaneHeight && p.X <= Inset + 110) return i;
         }
         return -1;
     }
@@ -1248,8 +1202,6 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         int lane = LaneAt(point);
         if (lane >= 0 && lanes[lane].Toggleable) { LaneToggled?.Invoke(lane); e.Handled = true; return; }
-        // An app's bar opens its volume and mute (the cut and volume tools, when out, work on its row instead).
-        if (pendingCut == null && AppLayerAt(point) is int appLayer and >= 0) { AppLayerPicked?.Invoke(appLayer); e.Handled = true; return; }
         if (e.ClickCount == 2 && point.Y >= TrackTop && point.Y <= TrackTop + TrackHeight)
         {
             double t = TimeAt(point.X);
@@ -1398,12 +1350,6 @@ internal sealed class TrimTimeline : FrameworkElement
         if (!Placing && pendingCut == null && !(Mapped && focusedPart is SoundItem) && FocusedEdgeAt(p) is bool edge) { Cursor = Cursors.SizeWE; ToolTip = edge ? "Drag to change when it starts" : "Drag to change when it ends"; return; }
         if (pendingCut == null && cutTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this cut-out's times, or restore it"; return; }
         if (pendingCut == null && lanesExpanded && volumeTags.Any(t => t.Tag.Contains(p))) { Cursor = Cursors.Hand; ToolTip = "Change this part's volume · also selects it, so you can drag its ends"; return; }
-        if (!Placing && pendingCut == null && AppLayerAt(p) is int hoverLayer and >= 0)
-        {
-            Cursor = Cursors.Hand;
-            ToolTip = $"{lanes[hoverLayer].Name}, recorded on its own · click to mute it or change its volume · the cut and volume tools remove or lower part of it";
-            return;
-        }
         if (pendingCut == null && SoundAt(p) is { } hoverSound)
         {
             var rect = SoundRect(hoverSound);
