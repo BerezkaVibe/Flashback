@@ -261,6 +261,11 @@ internal static class SystemTestNative
         Input[] sequence = { new() { Data = new Data { Mouse = new MouseInput { Flags = 2 } } }, new() { Data = new Data { Mouse = new MouseInput { Flags = 4 } } } };
         if (SendInput(2, sequence, Marshal.SizeOf<Input>()) != 2) throw new Exception("Windows did not accept the test mouse input.");
     }
+    internal static void MouseButton(bool down)
+    {
+        Input[] sequence = { new() { Data = new Data { Mouse = new MouseInput { Flags = down ? 2u : 4u } } } };
+        if (SendInput(1, sequence, Marshal.SizeOf<Input>()) != 1) throw new Exception("Windows did not accept the test mouse input.");
+    }
     internal static void SingleKey(ushort key)
     {
         Input[] sequence = { new() { Type = 1, Data = new Data { Keyboard = new KeyboardInput { Key = key } } }, new() { Type = 1, Data = new Data { Keyboard = new KeyboardInput { Key = key, Flags = 2 } } } };

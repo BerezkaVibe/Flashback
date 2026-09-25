@@ -456,7 +456,18 @@ internal sealed class TrimTimeline : FrameworkElement
         return under[(current + 1) % under.Count];
     }
     private enum Drag { None, Start, End, Playhead, Pan, OverlayMove, OverlayStart, OverlayEnd, PartEdge, SoundMove, SoundStart, SoundEnd, FreezeMove, FreezeEnd }
-    private SoundItem? soundOriginal, soundCurrent; private bool soundDragMoved;
+    private SoundItem? soundOriginal, soundCurrent; private bool soundDragMoved; private double soundPressY;
+    // The pointer's height in the window. The timeline grows upwards as sound rows are added (the preview above
+    // gives way), so heights within it shift under a still pointer; the window's don't.
+    private double WindowY(MouseEventArgs e) => e.GetPosition(Window.GetWindow(this) as IInputElement ?? this).Y;
+    // The row a dragged sound goes to: the one its bar's middle has been moved into, and at most one new row
+    // below the others (moving it onto a new row grows the timeline, which mustn't carry it further down).
+    private int SoundDragRow(MouseEventArgs e, SoundItem original, IReadOnlyCollection<SoundItem> others)
+    {
+        double pitch = SoundHeight + LaneGap, middle = original.Row * pitch + SoundHeight / 2 + WindowY(e) - soundPressY;
+        int last = Math.Max(original.Row, others.Count == 0 ? 0 : others.Max(s => s.Row) + 1);
+        return Math.Clamp((int)Math.Floor((middle + LaneGap / 2) / pitch), 0, last);
+    }
     private Drag drag;
     private double grabOffset;
     // The item being dragged: its index, its state before the drag and whether it has moved yet.
@@ -1219,7 +1230,7 @@ internal sealed class TrimTimeline : FrameworkElement
             // Press on a sound: a click opens it, a drag moves it (or its ends) and between rows.
             var rect = SoundRect(sound);
             drag = point.X - rect.Left <= 5 && rect.Width > 14 ? Drag.SoundStart : rect.Right - point.X <= 5 && rect.Width > 14 ? Drag.SoundEnd : Drag.SoundMove;
-            soundOriginal = soundCurrent = sound; soundDragMoved = false; pressPoint = point;
+            soundOriginal = soundCurrent = sound; soundDragMoved = false; pressPoint = point; soundPressY = WindowY(e);
             CaptureMouse(); e.Handled = true; return;
         }
         if (pendingCut == null && LayerRows > 1 && FoldToggleArea.Contains(point)) { OverlaysOpen = Folded; e.Handled = true; return; }
@@ -1309,7 +1320,7 @@ internal sealed class TrimTimeline : FrameworkElement
                 {
                     var (src, hold) = FromView(Math.Clamp(from + shift, 0, Math.Max(0, Total - original.Length)));
                     if (hold <= 0) src = Snap(src);
-                    int row = Math.Clamp((int)Math.Floor((p.Y - SoundTop(0)) / (SoundHeight + LaneGap)), 0, SoundRows);
+                    int row = SoundDragRow(e, original, others);
                     // Rows are kept free of overlaps where the sounds play (in finished time).
                     double a = ToView(src) + hold, b = a + original.Length;
                     bool FreeView(int r) => !others.Any(s => s.Row == r && SoundView(s).To > a + 1e-9 && SoundView(s).From < b - 1e-9);
@@ -1329,8 +1340,7 @@ internal sealed class TrimTimeline : FrameworkElement
                 double length = original.Length, start = Math.Clamp(original.Start + shift, 0, Math.Max(0, Duration - length));
                 double a = LockedTime(XAt(start)), b = LockedTime(XAt(start + length)) - length;
                 start = Math.Clamp(Math.Abs(a - start) <= Math.Abs(b - start) ? a : b, 0, Math.Max(0, Duration - length));
-                int row = (int)Math.Floor((p.Y - SoundTop(0)) / (SoundHeight + LaneGap));
-                row = Math.Clamp(row, 0, SoundRows);
+                int row = SoundDragRow(e, original, others);
                 if (!Free(row, start, start + length)) row = Free(original.Row, start, start + length) ? original.Row : Enumerable.Range(0, sounds.Count + 1).First(r => Free(r, start, start + length));
                 next = original with { Start = start, End = start + length, Row = row };
             }
