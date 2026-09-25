@@ -81,9 +81,8 @@ public partial class TrimWindow
         SlowToolButton.ToolTip="Speed: click two spots to slow down or speed up that part · "+Key(TrimAction.SpeedTool);
         ZoomToolButton.ToolTip="Zoom: click two spots to zoom in on that part · "+Key(TrimAction.ZoomTool);
         TextToolButton.ToolTip="Text: click two spots to add a caption for that part · "+Key(TrimAction.TextTool);
-        ImageToolButton.ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part · "+Key(TrimAction.ImageTool);
-        ShapeToolButton.ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area · "+Key(TrimAction.ShapeTool);
-        SetDrawTool(drawTool);
+        ImageToolButton.ToolTip="File: click two spots to add a picture, GIF, video or music file for that part · "+Key(TrimAction.ImageTool);
+        ShowShapeWay();
         VolumeToolButton.ToolTip="Volume: click two spots on an audio lane to make that part louder or quieter · "+Key(TrimAction.VolumeTool);
         SoundToolButton.ToolTip="Sound: click two spots to add music or a sound file · "+Key(TrimAction.SoundTool);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
@@ -133,7 +132,7 @@ public partial class TrimWindow
             case TrimAction.ZoomTool: ZoomTool_Click(this,none); break;
             case TrimAction.TextTool: TextTool_Click(this,none); break;
             case TrimAction.ImageTool: ImageTool_Click(this,none); break;
-            case TrimAction.ShapeTool: ShapeTool_Click(this,none); break;
+            case TrimAction.ShapeTool: ShapeKey(); break;
             case TrimAction.DrawTool: DrawTool_Click(this,none); break;
             case TrimAction.FreezeFrame: FreezeHere_Click(this,none); break;
             case TrimAction.VolumeTool: VolumeTool_Click(this,none); break;

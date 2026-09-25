@@ -338,7 +338,8 @@ public partial class TrimWindow
             var s = Timeline.Sounds[i]; string key = i + "|" + s.Path; wanted.Add(key);
             if (!soundPlayers.TryGetValue(key, out var player))
             {
-                player = new MediaPlayer(); try { player.Open(new Uri(s.Path)); } catch { continue; }
+                if (PreviewSoundPath(s.Path) is not { } file) continue;
+                player = new MediaPlayer(); try { player.Open(new Uri(file)); } catch { continue; }
                 soundPlayers[key] = player;
             }
             double at = map!.ToOutput(s.Start) + s.Hold, local = now - at, speed = Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed);
@@ -357,6 +358,59 @@ public partial class TrimWindow
             else if (soundsPlaying.Remove(key)) player.Pause();
         }
         foreach (var gone in soundPlayers.Keys.Where(k => !wanted.Contains(k)).ToList()) { soundPlayers[gone].Close(); soundPlayers.Remove(gone); soundsPlaying.Remove(gone); }
+    }
+    // A sound from a video file (an unlinked video's sound, or a video picked as a sound) plays in the preview
+    // from just its sound, copied out once into a small file in the background, so the preview doesn't also
+    // decode a picture nobody sees. It joins in once that's ready. The copies are kept for next time, under
+    // about 1 GB, the longest unused dropped first.
+    private static readonly string SoundCacheRoot = Path.Combine(Path.GetTempPath(), "Flashback-sound-cache");
+    private static readonly Dictionary<string, Task<string?>> soundCopies = new(StringComparer.OrdinalIgnoreCase);
+    private static string? PreviewSoundPath(string path)
+    {
+        if (!VideoExtensions.Contains(Path.GetExtension(path).ToLowerInvariant())) return path;
+        if (!soundCopies.TryGetValue(path, out var copy) || (copy.IsCompletedSuccessfully && copy.Result is { } done && !File.Exists(done))) soundCopies[path] = copy = Task.Run(() => CopySoundAsync(path));
+        // (If its sound can't be copied out, it plays from the video itself.)
+        return copy.IsCompletedSuccessfully ? copy.Result ?? path : null;
+    }
+    private static async Task<string?> CopySoundAsync(string video)
+    {
+        try
+        {
+            var info = new FileInfo(video);
+            if (!info.Exists) return null;
+            string key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{info.FullName.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")))[..32];
+            Directory.CreateDirectory(SoundCacheRoot);
+            string output = Path.Combine(SoundCacheRoot, key + ".m4a");
+            if (File.Exists(output)) { try { File.SetLastWriteTimeUtc(output, DateTime.UtcNow); } catch { } return output; }
+            string work = Path.Combine(SoundCacheRoot, key + "." + Guid.NewGuid().ToString("N")[..8] + ".m4a");
+            // Copied as it is, which takes a moment; a sound that doesn't fit the file is made AAC instead.
+            foreach (var codec in new[] { new[] { "-c:a", "copy" }, new[] { "-c:a", "aac", "-b:a", "192k" } })
+            {
+                var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                foreach (var a in new[] { "-y", "-v", "error", "-i", video, "-map", "0:a:0", "-vn", "-sn", "-dn" }.Concat(codec).Append(work)) start.ArgumentList.Add(a);
+                using var p = Process.Start(start)!;
+                await p.StandardError.ReadToEndAsync(); await p.WaitForExitAsync();
+                if (p.ExitCode == 0 && File.Exists(work) && new FileInfo(work).Length > 0) { File.Move(work, output, true); TrimSoundCache(); return output; }
+            }
+            try { File.Delete(work); } catch { }
+        }
+        catch { }
+        return null;
+    }
+    private static void TrimSoundCache()
+    {
+        try
+        {
+            var files = new DirectoryInfo(SoundCacheRoot).GetFiles().OrderBy(f => f.LastWriteTimeUtc).ToList();
+            long total = files.Sum(f => f.Length);
+            foreach (var f in files)
+            {
+                if (total <= 1L << 30) break;
+                if (DateTime.UtcNow - f.LastWriteTimeUtc < TimeSpan.FromMinutes(10)) continue;
+                try { f.Delete(); total -= f.Length; } catch { }
+            }
+        }
+        catch { }
     }
     private void StopSounds() { foreach (var (key, player) in soundPlayers) player.Pause(); soundsPlaying.Clear(); }
     private void CloseSounds() { foreach (var player in soundPlayers.Values) player.Close(); soundPlayers.Clear(); soundsPlaying.Clear(); }

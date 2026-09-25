@@ -176,7 +176,7 @@ public partial class TrimWindow
     // Lit in the accent color while the tool is on; otherwise it looks like the other icons.
     private void ShowCutTool()
     {
-        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode), (ZoomToolButton, Timeline.ZoomMode), (TextToolButton, Timeline.OverlayMode == OverlayKind.Text), (ImageToolButton, Timeline.OverlayMode == OverlayKind.Image), (ShapeToolButton, Timeline.OverlayMode == OverlayKind.Shape && !drawPending), (DrawToolButton, Timeline.OverlayMode == OverlayKind.Shape && drawPending), (VolumeToolButton, Timeline.VolumeMode), (SoundToolButton, Timeline.SoundMode) })
+        foreach (var (button, on) in new[] { (CutToolButton, Timeline.CutMode), (SlowToolButton, Timeline.SlowMode), (ZoomToolButton, Timeline.ZoomMode), (TextToolButton, Timeline.OverlayMode == OverlayKind.Text), (ImageToolButton, Timeline.OverlayMode == OverlayKind.Image), (ShapeToolButton, Timeline.OverlayMode == OverlayKind.Shape), (VolumeToolButton, Timeline.VolumeMode), (SoundToolButton, Timeline.SoundMode) })
         {
             if (on) { button.SetResourceReference(Control.BorderBrushProperty, "Accent"); button.SetResourceReference(Control.ForegroundProperty, "Accent"); }
             else { button.ClearValue(Control.BorderBrushProperty); button.ClearValue(Control.ForegroundProperty); }

@@ -305,6 +305,28 @@ internal static class SequenceDiagnostics
         double stillInHold = Change(await Gray(endsHeld, 2.3, 290, 150, 60, 60), await Gray(endsHeld, 4.3, 290, 150, 60, 60)), goneAfter = Change(await Gray(endsHeld, 4.3, 290, 150, 60, 60), await Gray(endsHeld, 4.8, 290, 150, 60, 60));
         var endsHeldSound = await Pcm(endsHeld, 3, 1);
         Check(stillInHold < 3 && goneAfter > 6 && Tone(endsHeldSound, 1500) < 100, $"A video that ends partway into a hold holds its frame there, silent, and goes at its end ({stillInHold:0.0} held, {goneAfter:0.0} gone, sound {Tone(endsHeldSound, 1500):0})");
+        // ---- A video's sound unlinked into a sound of its own ----
+        // A video from 1 s, playing through the hold. Unlinked, the video plays silent; the sound it became
+        // plays just where the linked sound did (not before the video, through the hold, after it) and as
+        // loud, and the export keeps its length.
+        var fromOne = pip with { Start = 1 };
+        var holdSequence = new SequenceMap(new[] { new KeepSection(0, 6) }, new ShareExportOptions { Freezes = holdFreeze });
+        var linkedLate = await Export("Video from 1 s", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne } });
+        var silentLate = await Export("Video from 1 s, sound unlinked", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne with { SoundUnlinked = true } } });
+        var ownSound = SoundItem.FromVideo(fromOne, holdSequence, 0)!;
+        var unlinkedLate = await Export("Video from 1 s, its sound on its own", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne with { SoundUnlinked = true } }, Sounds = new[] { ownSound } });
+        double linkedLevel = Tone(await Pcm(linkedLate, 3, 1), 1500);
+        Check(linkedLevel > 300 && Tone(await Pcm(silentLate, 3, 1), 1500) < linkedLevel * .1, $"A video whose sound was unlinked plays silent ({Tone(await Pcm(silentLate, 3, 1), 1500):0} vs {linkedLevel:0})");
+        var levels = new List<string>(); bool alike = true;
+        foreach (var (at, sounding) in new[] { (.2, false), (1.3, true), (3.0, true), (6.5, true) })
+        {
+            double linked = Tone(await Pcm(linkedLate, at, .5), 1500), own = Tone(await Pcm(unlinkedLate, at, .5), 1500);
+            alike &= sounding ? linked > 300 && own > linked * .6 && own < linked * 1.6 : linked < 100 && own < 100;
+            levels.Add($"{at:0.0} s: {own:0} on its own, {linked:0} linked");
+        }
+        Check(alike && Math.Abs(ClipMedia.Read(unlinkedLate).Duration - 9) < .2,
+            $"A video's sound on its own plays where the linked sound did, as loud, and the export keeps its length ({string.Join("; ", levels)}; {ClipMedia.Read(unlinkedLate).Duration:0.00} s)");
+
         var project = TrimProject.Create(source, Array.Empty<KeepSection>(), 0, 6, 0, false) with { Sounds = new[] { new SoundItem(music, 0, 2) { Speed = 99, Hold = -3 } } };
         var cleaned = JsonSerializer.Deserialize<TrimProject>(JsonSerializer.Serialize(project))!;
         var cleanedSound = ((TrimProject)typeof(TrimProject).GetMethod("Cleaned", flags)!.Invoke(cleaned, null)!).Sounds![0];

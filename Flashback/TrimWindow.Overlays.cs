@@ -62,12 +62,11 @@ public partial class TrimWindow
     }
     private void TextTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Text);
     private void ImageTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Image);
-    private void ShapeTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Shape);
     private void OverlayTool(OverlayKind kind)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         Timeline.OverlayMode = Timeline.OverlayMode == kind && !drawPending ? null : kind; drawPending = false; ShowCutTool(); SlowPopup.IsOpen = false;
-        string what = kind switch { OverlayKind.Text => "text", OverlayKind.Shape => "a shape (or a blurred or pixelated area)", _ => "a picture, GIF, video or music" };
+        string what = kind switch { OverlayKind.Text => "text", OverlayKind.Shape => "a shape (or a blurred or pixelated area)", _ => "a picture, GIF, video or music file" };
         StatusLabel.Text = Timeline.OverlayMode == null ? "Tool off."
             : $"Click two spots to add {what} for that part; the marker locks onto the playhead and other parts' edges. Esc leaves the tool.";
     }

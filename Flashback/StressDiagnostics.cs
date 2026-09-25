@@ -89,6 +89,20 @@ internal static class StressDiagnostics
             var setPlayhead = typeof(TrimWindow).GetMethod("SetPlayhead", flags)!; var pause = typeof(TrimWindow).GetMethod("Pause", flags)!; var zoomPreview = typeof(TrimWindow).GetMethod("ApplyZoomPreview", flags)!;
             Line($"Seek pieces (ms each): whole seek {Each(200, _ => live.SeekTo(seekRng.NextDouble() * 118, true)):0.00} · pause {Each(200, _ => pause.Invoke(live, null)):0.00} · set playhead {Each(200, _ => setPlayhead.Invoke(live, new object[] { seekRng.NextDouble() * 118 })):0.00} · overlay time {Each(200, _ => live.OverlayView.Time = seekRng.NextDouble() * 118):0.00} · zoom preview {Each(200, _ => zoomPreview.Invoke(live, null)):0.00} · timeline render {Each(20, i => { tl.Position = seekRng.NextDouble() * 118; tl.InvalidateVisual(); tl.UpdateLayout(); }):0.00}");
             Line(await Drag("Heavy edit (122 items, blur and pixelate, 30 freezes, speed, zoom, cuts)"));
+            // The same with the audio area open: videos over the clip with their sound on the audio timeline, one
+            // unlinked into a sound of its own, and music.
+            string inset = Path.Combine(folder, "Inset.mp4");
+            if (!File.Exists(inset))
+                await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "mandelbrot=size=640x360:rate=30", "-t", "30", "-f", "lavfi", "-i", "sine=frequency=900:sample_rate=48000:duration=30",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", inset);
+            var withVideos = items.Concat(Enumerable.Range(0, 5).Select(i => OverlayItem.NewVideo(i * 22 + 3, i * 22 + 20, inset, 640, 360) with { X = .15 + .17 * i, Y = .8, Scale = .25, Layer = 300 + i, SoundUnlinked = i == 4 })).ToArray();
+            typeof(TrimWindow).GetMethod("SetOverlays", flags)!.Invoke(live, new object[] { withVideos });
+            typeof(TrimWindow).GetMethod("SetSounds", flags)!.Invoke(live, new object[] { new[] { new SoundItem(inset, 91, 108), new SoundItem(inset, 10, 40, Row: 1) } });
+            tl.LanesExpanded = true;
+            await Task.Delay(800);
+            Line($"Timeline render, audio area open with videos' sound (ms each): {Each(20, i => { tl.Position = seekRng.NextDouble() * 118; tl.InvalidateVisual(); tl.UpdateLayout(); }):0.00}");
+            Line(await Drag("Heavy edit + 5 videos with sound (4 linked on the audio timeline, 1 unlinked), music, audio area open"));
+            Line($"Managed memory: {GC.GetTotalMemory(true) / 1048576.0:0.0} MiB, working set {Process.GetCurrentProcess().WorkingSet64 / 1048576.0:0.0} MiB");
         }
         finally { live.Close(); }
     }
