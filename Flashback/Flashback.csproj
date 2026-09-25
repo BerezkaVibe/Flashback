@@ -14,6 +14,8 @@
     <RestorePackagesPath>../.packages</RestorePackagesPath>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <!-- The FFmpeg preview player works with FFmpeg's frames and buffers through pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>none</DebugType>
