@@ -21,6 +21,7 @@ public partial class TrimWindow
             if (i < 0 || i >= Timeline.Freezes.Count) return;
             // Two freezes can't share a moment.
             if (Timeline.Freezes.Where((_, n) => n != i).Any(f => Math.Abs(f.At - at) < FrameStep)) return;
+            CarryHoldParts(Timeline.Freezes[i].At, at);
             var moved = Timeline.Freezes[i] with { At = at };
             Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? moved : f).ToArray();
             FocusPart(moved); StatusLabel.Text = $"Freeze frame at {KeepSection.TimeText(at)}.";
@@ -40,6 +41,29 @@ public partial class TrimWindow
         };
     }
     private double FrameStep => 1 / Math.Max(1, media.FrameRate);
+    // Text, pictures, shapes, videos and zooms that start or stop partway through a freeze's hold go with it
+    // when it moves (to), or come back into the footage at its moment when it's removed (to null): one that
+    // lived inside the hold then shows there for as long as it did.
+    private void CarryHoldParts(double at, double? to)
+    {
+        (double S, double E, double Sh, double Eh) Carry(double s, double e, double sh, double eh)
+        {
+            bool atStart = Math.Abs(s - at) < 1e-9 && sh > 0, atEnd = Math.Abs(e - at) < 1e-9 && eh > 0;
+            if (!atStart && !atEnd) return (s, e, sh, eh);
+            double length = Math.Max(FrameStep, eh - sh);
+            if (to is double moved)
+            {
+                double ns = atStart ? moved : s, ne = atEnd ? moved : e;
+                if (HoldTiming.Compare(new Moment(ns, sh), new Moment(ne, eh)) < 0) return (ns, ne, sh, eh);
+            }
+            // Removed (or moved past its own other end): back into the footage.
+            return Math.Abs(s - e) < 1e-9 ? (s, s + length, 0, 0) : (s, e, atStart ? 0 : sh, atEnd ? 0 : eh);
+        }
+        var overlays = Timeline.Overlays.Select(o => { var (s, e, sh, eh) = Carry(o.Start, o.End, o.StartHold, o.EndHold); return s == o.Start && e == o.End && sh == o.StartHold && eh == o.EndHold ? o : o with { Start = s, End = e, StartHold = sh, EndHold = eh }; }).ToArray();
+        if (!overlays.SequenceEqual(Timeline.Overlays, System.Collections.Generic.ReferenceEqualityComparer.Instance)) SetOverlays(overlays);
+        var zooms = Timeline.ZoomRegions.Select(z => { var (s, e, sh, eh) = Carry(z.Start, z.End, z.StartHold, z.EndHold); return z with { Start = s, End = e, StartHold = sh, EndHold = eh }; }).ToArray();
+        if (!zooms.SequenceEqual(Timeline.ZoomRegions)) Timeline.ZoomRegions = zooms;
+    }
     private void FreezeHere_Click(object sender, RoutedEventArgs e) => AddFreeze(playhead, 2);
     // Adds a freeze at a moment (or, if one is already there, opens it).
     private void AddFreeze(double at, double seconds, bool snapshot = true)
@@ -58,6 +82,7 @@ public partial class TrimWindow
     {
         if (index < 0 || index >= Timeline.Freezes.Count) return;
         Snapshot();
+        CarryHoldParts(Timeline.Freezes[index].At, null);
         Timeline.Freezes = Timeline.Freezes.Where((_, n) => n != index).ToArray();
         FreezePopup.IsOpen = false; UpdateExportHint(); UpdateSummary();
         StatusLabel.Text = "Freeze frame removed. Undo brings it back.";
@@ -107,6 +132,7 @@ public partial class TrimWindow
             int i = Timeline.Freezes.ToList().FindIndex(f => Math.Abs(f.At - freeze.At) < 1e-9);
             if (i < 0 || Timeline.Freezes.Where((_, n) => n != i).Any(f => Math.Abs(f.At - playhead) < FrameStep)) return;
             Snapshot();
+            CarryHoldParts(Timeline.Freezes[i].At, playhead);
             var moved = Timeline.Freezes[i] with { At = playhead };
             Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? moved : f).OrderBy(f => f.At).ToArray();
             FreezePopup.IsOpen = false; FocusPart(moved); UpdateExportHint(); UpdateSummary();

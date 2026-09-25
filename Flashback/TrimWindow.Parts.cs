@@ -59,6 +59,25 @@ public partial class TrimWindow
         if (copiedPart is not { } part) { StatusLabel.Text = "Nothing copied yet. Click a part and press Ctrl+C."; return; }
         // A freeze is a single moment, so it goes right at the playhead.
         if (part is FreezeFrame copiedFreeze) { AddFreeze(playhead, copiedFreeze.Seconds); return; }
+        // Parked partway into a freeze's hold (finished view), text, pictures, shapes, videos and zooms go into
+        // the hold, for as long as they showed (up to the end of the hold).
+        if (Timeline.Finished && Timeline.HoldOffset > 0 && part is OverlayItem or ZoomRegion && Timeline.Map.Hold(playhead) is { } hold)
+        {
+            double shown = part switch { OverlayItem o => Timeline.ViewOf(o.To(), true) - Timeline.ViewOf(o.From(), false), ZoomRegion z => Timeline.ViewOf(z.To(), true) - Timeline.ViewOf(z.From(), false), _ => 0 };
+            double into = Timeline.HoldOffset, until = Math.Min(hold.To - hold.From, into + Math.Max(FrameStep, shown));
+            if (until - into < FrameStep - 1e-9) { StatusLabel.Text = "There's no room left in this hold to paste it."; return; }
+            if (part is OverlayItem copiedItem) AddOverlay(copiedItem with { Start = playhead, End = playhead, StartHold = into, EndHold = until, Layer = 0 });
+            else if (part is ZoomRegion copiedZoom)
+            {
+                var pasted = copiedZoom with { Start = playhead, End = playhead, StartHold = into, EndHold = until };
+                if (Timeline.ZoomRegions.Any(r => r.Overlaps(pasted))) { StatusLabel.Text = "It would overlap another zoom."; return; }
+                Snapshot();
+                Timeline.ZoomRegions = Timeline.ZoomRegions.Append(pasted).OrderBy(r => r.Start).ToArray();
+                UpdateExportHint(); OpenZoom(Timeline.ZoomRegions.ToList().IndexOf(pasted));
+            }
+            StatusLabel.Text = $"Pasted the {PartName(part)} into the freeze.";
+            return;
+        }
         var (from, to) = SpanOf(part);
         double start = Math.Min(playhead, Math.Max(0, media.Duration - .05)), end = Math.Min(media.Duration, start + (to - from));
         if (end - start < 1 / Math.Max(1, media.FrameRate)) { StatusLabel.Text = "There's no room after the playhead to paste it."; return; }

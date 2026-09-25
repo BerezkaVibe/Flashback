@@ -52,6 +52,9 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     private TrimProject Cleaned()
     {
         static bool Ok(double a, double b) => double.IsFinite(a) && double.IsFinite(b) && a >= 0 && b > a;
+        // Text, pictures and zooms may also sit entirely inside a freeze's hold (same moment, later hold time).
+        static double Hold(double h) => double.IsFinite(h) ? Math.Clamp(h, 0, FreezeFrame.MaxSeconds) : 0;
+        static bool Spans(double a, double b, double startHold, double endHold) => Ok(a, b) || (double.IsFinite(a) && a >= 0 && Math.Abs(a - b) < 1e-9 && Hold(endHold) > Hold(startHold));
         return this with
         {
             Cuts = Cuts?.Where(c => c != null && Ok(c.Start, c.End) && c.Lane >= -1).ToArray(),
@@ -60,8 +63,8 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
             Freezes = (Freezes ?? Array.Empty<FreezeFrame>()).Where(f => f != null && double.IsFinite(f.At) && f.At >= 0 && double.IsFinite(f.Seconds))
                 .Concat((Speed ?? Array.Empty<SpeedRegion>()).Where(s => s != null && s.Speed == 0 && Ok(s.Start, s.End)).Select(s => new FreezeFrame(s.Start, s.End - s.Start)))
                 .Select(f => f with { Seconds = Math.Clamp(f.Seconds, FreezeFrame.MinSeconds, FreezeFrame.MaxSeconds) }).GroupBy(f => Math.Round(f.At, 4)).Select(g => g.First()).OrderBy(f => f.At).ToArray(),
-            Zoom = Zoom?.Where(z => z?.In?.Points is { Count: >= 2 } && Ok(z.Start, z.End)).Select(z => z with { In = z.In.Validated(), Out = z.Out?.Validated(), MaxZoom = Math.Clamp(z.MaxZoom, 1.1, ZoomRegion.Limit), X = Math.Clamp(z.X, 0, 1), Y = Math.Clamp(z.Y, 0, 1) }).ToArray(),
-            Overlays = Overlays?.Where(o => o != null && Ok(o.Start, o.End)).Select(o => o.Validated()).ToArray(),
+            Zoom = Zoom?.Where(z => z?.In?.Points is { Count: >= 2 } && Spans(z.Start, z.End, z.StartHold, z.EndHold)).Select(z => z with { In = z.In.Validated(), Out = z.Out?.Validated(), MaxZoom = Math.Clamp(z.MaxZoom, 1.1, ZoomRegion.Limit), X = Math.Clamp(z.X, 0, 1), Y = Math.Clamp(z.Y, 0, 1), StartHold = Hold(z.StartHold), EndHold = Hold(z.EndHold) }).ToArray(),
+            Overlays = Overlays?.Where(o => o != null && Spans(o.Start, o.End, o.StartHold, o.EndHold)).Select(o => o.Validated()).ToArray(),
             Volumes = Volumes?.Where(v => v != null && Ok(v.Start, v.End) && v.Lane >= 0).Select(v => v with { Gain = Math.Clamp(v.Gain, 0, 2) }).ToArray(),
             Sounds = Sounds?.Where(s => s != null && Ok(s.Start, s.End) && !string.IsNullOrWhiteSpace(s.Path)).Select(s => s with { Volume = Math.Clamp(s.Volume, 0, 2), Offset = Math.Max(0, s.Offset), FadeIn = Math.Clamp(s.FadeIn, 0, 30), FadeOut = Math.Clamp(s.FadeOut, 0, 30), DuckLevel = Math.Clamp(s.DuckLevel, 0, 1),
                 Hold = double.IsFinite(s.Hold) ? Math.Clamp(s.Hold, 0, FreezeFrame.MaxSeconds) : 0, Speed = double.IsFinite(s.Speed) ? Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed) : 1 }).ToArray(),

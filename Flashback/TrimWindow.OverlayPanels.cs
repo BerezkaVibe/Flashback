@@ -286,6 +286,28 @@ public partial class TrimWindow
         Row("Starts at", holder).ToolTip = "Where in the video it starts playing";
     }
 
+    // A video part that lasts as long as its file has left to play (from where it starts in the file), so all
+    // of it plays. Its own time runs through the holds it keeps going through, so those count towards it.
+    private void FitVideoLength()
+    {
+        if (SelectedOverlayItem is not { Kind: OverlayKind.Video } item) return;
+        double wanted = VideoLength(item.VideoPath) - item.VideoOffset;
+        if (wanted <= FrameStep) { StatusLabel.Text = "That video's length couldn't be read."; return; }
+        double end = item.Start + wanted;
+        for (int i = 0; i < 6; i++)
+        {
+            double shown = (item with { End = end, EndHold = 0 }).Duration(Timeline.Freezes);
+            if (Math.Abs(shown - wanted) < 1e-3) break;
+            end -= shown - wanted;
+        }
+        end = Math.Max(item.Start + FrameStep, end);
+        bool clipped = end > media.Duration + 1e-6;
+        Snapshot();
+        if (!TryRetime(item, item.Start, Math.Min(end, media.Duration), out _, out var error, endHold: 0)) { undo.Pop(); StatusLabel.Text = error; return; }
+        AfterRetime();
+        StatusLabel.Text = clipped ? $"The video runs past the end of the clip, so it plays until the clip ends ({wanted:0.#} s of video)." : $"It now plays the whole video: {wanted:0.#} s.";
+    }
+
     // ---- Keyframes ----
     // The item as it looks at the playhead, and a change to that look (a keyframe there when it has any).
     private OverlayItem Now(OverlayItem o) => o.Posed(Math.Clamp(playhead - o.Start, 0, o.Length));

@@ -31,6 +31,12 @@ internal sealed record OverlayItem
     public OverlayKind Kind { get; init; }
     public double Start { get; init; }
     public double End { get; init; }
+    // Seconds into the hold of a freeze frame at Start or End, for items that start or stop partway
+    // through one (see HoldTiming). 0 is the usual: a start there begins with the hold, an end stops before it.
+    public double StartHold { get; init; }
+    public double EndHold { get; init; }
+    // Videos keep playing (with their sound) while a freeze holds the picture; off, they freeze with it.
+    public bool ThroughFreezes { get; init; } = true;
     public double X { get; init; } = .5;
     public double Y { get; init; } = .5;
     public double Scale { get; init; } = 1;
@@ -211,8 +217,10 @@ internal sealed record OverlayItem
         ShapeWidth = Math.Clamp(Finite(ShapeWidth, 420), 10, 4000), ShapeHeight = Math.Clamp(Finite(ShapeHeight, 260), 10, 4000),
         RegionStrength = Math.Clamp(Finite(RegionStrength, 24), 2, 200),
         VideoOffset = Math.Max(0, Finite(VideoOffset, 0)), VideoVolume = Math.Clamp(Finite(VideoVolume, 1), 0, 2),
+        StartHold = Math.Clamp(Finite(StartHold, 0), 0, FreezeFrame.MaxSeconds), EndHold = Math.Clamp(Finite(EndHold, 0), 0, FreezeFrame.MaxSeconds),
         Keys = (Keys ?? Array.Empty<OverlayKeyframe>()).Where(k => k != null && new[] { k.T, k.X, k.Y, k.Scale, k.Rotation, k.Opacity }.All(double.IsFinite))
-            .Select(k => k with { T = Math.Clamp(k.T, 0, Math.Max(0, End - Start)), Scale = Math.Clamp(k.Scale, MinScale, MaxScale), Opacity = Math.Clamp(k.Opacity, 0, 1), X = Math.Clamp(k.X, -.5, 1.5), Y = Math.Clamp(k.Y, -.5, 1.5) })
+            // (Keyframe times run on the item's own clock, which is longer than End - Start when it's shown in holds.)
+            .Select(k => k with { T = Math.Clamp(k.T, 0, Math.Max(0, End - Start) + (StartHold > 0 || EndHold > 0 ? EndHold + FreezeFrame.MaxSeconds : 0)), Scale = Math.Clamp(k.Scale, MinScale, MaxScale), Opacity = Math.Clamp(k.Opacity, 0, 1), X = Math.Clamp(k.X, -.5, 1.5), Y = Math.Clamp(k.Y, -.5, 1.5) })
             .OrderBy(k => k.T).ToArray(),
     };
     private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
@@ -283,11 +291,13 @@ internal static class OverlayOrder
         return items.Select(i => used[i.Layer] == i.Layer ? i : i with { Layer = used[i.Layer] }).ToArray();
     }
     // The lowest layer where a new item fits without overlapping another.
-    internal static int FreeLayer(IEnumerable<OverlayItem> items, double start, double end)
+    internal static int FreeLayer(IEnumerable<OverlayItem> items, double start, double end) => FreeLayer(items, new Moment(start), new Moment(end));
+    // The same for a stretch that can start or stop partway through a freeze's hold.
+    internal static int FreeLayer(IEnumerable<OverlayItem> items, Moment start, Moment end)
     {
         var list = items.ToList();
         for (int layer = 0; ; layer++)
-            if (!list.Any(i => i.Layer == layer && i.End > start + 1e-9 && i.Start < end - 1e-9)) return layer;
+            if (!list.Any(i => i.Layer == layer && HoldTiming.Overlaps(i.From(), i.To(), start, end))) return layer;
     }
     // Moves an item one layer forward (up) or back (down). If something is in the way it trades places;
     // sending the bottom item back puts it on a new bottom layer by itself.
@@ -299,10 +309,9 @@ internal static class OverlayOrder
             for (int i = 0; i < list.Length; i++) if (i != index) list[i] = list[i] with { Layer = list[i].Layer + 1 };
             return Compact(list);
         }
-        bool Overlaps(OverlayItem o) => o.End > item.Start + 1e-9 && o.Start < item.End - 1e-9;
-        var blockers = list.Select((o, i) => (o, i)).Where(p => p.i != index && p.o.Layer == target && Overlaps(p.o)).ToList();
+        var blockers = list.Select((o, i) => (o, i)).Where(p => p.i != index && p.o.Layer == target && p.o.Overlaps(item)).ToList();
         // Trade places only when the blockers fit where this item was.
-        bool swap = blockers.All(b => !list.Where((o, i) => i != index && !blockers.Any(x => x.i == i) && o.Layer == item.Layer).Any(o => o.End > b.o.Start + 1e-9 && o.Start < b.o.End - 1e-9));
+        bool swap = blockers.All(b => !list.Where((o, i) => i != index && !blockers.Any(x => x.i == i) && o.Layer == item.Layer).Any(o => o.Overlaps(b.o)));
         if (blockers.Count > 0 && !swap) return list;
         foreach (var b in blockers) list[b.i] = b.o with { Layer = item.Layer };
         list[index] = item with { Layer = target };

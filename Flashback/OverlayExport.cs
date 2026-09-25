@@ -29,7 +29,9 @@ internal static class OverlayExport
     // mask (and border) pictures drawn at that size.
     internal sealed record Pip(int CropX, int CropY, int CropW, int CropH, int Width, int Height, double CenterX, double CenterY, string Mask, string? Border, int Pad, bool HasSound);
 
-    internal static Task<List<Clip>> RenderAsync(IReadOnlyList<OverlayItem> items, int width, int height, double frameRate, string folder, CancellationToken token)
+    // alone: items drawn on their own clock (shown partway into freeze holds), which can't share a picture
+    // that changes as items come and go in recording time.
+    internal static Task<List<Clip>> RenderAsync(IReadOnlyList<OverlayItem> items, int width, int height, double frameRate, string folder, CancellationToken token, ISet<OverlayItem>? alone = null)
     {
         Directory.CreateDirectory(folder);
         var done = new TaskCompletionSource<List<Clip>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -46,9 +48,10 @@ internal static class OverlayExport
         {
             if (item.Length <= 0) continue;
             // Up to six to a group, so changing one item redraws only a small group.
-            if (IsStill(item) && run.Count < 6 && (run.Count == 0 || run[0].StickToVideo == item.StickToVideo)) { run.Add(item); continue; }
+            bool groups = IsStill(item) && alone?.Contains(item) != true;
+            if (groups && run.Count < 6 && (run.Count == 0 || run[0].StickToVideo == item.StickToVideo)) { run.Add(item); continue; }
             Flush();
-            if (IsStill(item)) run.Add(item);
+            if (groups) run.Add(item);
             else if (item.Kind == OverlayKind.Video) { var video = item; units.Add(n => RenderItem(video, n, width, height, frameRate, folder, token)); }
             else { var single = item; units.Add(n => Cached(new[] { single }, width, height, frameRate, dir => RenderItem(single, 1, width, height, frameRate, dir, token))); }
         }

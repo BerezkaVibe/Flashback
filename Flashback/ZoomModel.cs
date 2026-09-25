@@ -52,6 +52,12 @@ internal sealed record ZoomCurve(IReadOnlyList<(double T, double F)> Points)
 // Without zoom-out the view stays zoomed to the end and then returns to the full frame at once.
 internal sealed record ZoomRegion(double Start, double End, double X, double Y, double MaxZoom, ZoomCurve In, bool ZoomOut = false, ZoomCurve? Out = null)
 {
+    // Seconds into the hold of a freeze frame at Start or End, for zooms that start or stop partway
+    // through one (see HoldTiming).
+    public double StartHold { get; init; }
+    public double EndHold { get; init; }
+    // Keeps zooming while a freeze holds the picture; off, it freezes with the picture.
+    public bool ThroughFreezes { get; init; } = true;
     internal const double Limit = 8, MaxRamp = 3;
     // The zoom-out ramp: its own curve, or the zoom-in curve mirrored.
     internal ZoomCurve OutCurve => Out ?? In;

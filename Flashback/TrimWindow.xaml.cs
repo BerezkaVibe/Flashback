@@ -75,6 +75,7 @@ public partial class TrimWindow : Window
             // Write any edit still waiting on the autosave timer.
             if (projectSaveTimer?.IsEnabled==true) { projectSaveTimer.Stop(); KeepRecovery(); }
             Pause(); clock.Stop(); Player.Close(); CloseSounds();
+            if (fullscreen) ToggleFullscreen();
         };
         // Decoded pictures and GIF frames are only needed while the trimmer is open.
         Closed += (_, _) => { closed = true; OverlayView.CloseVideos(); OverlayRenderer.ClearCaches(); };
@@ -146,7 +147,15 @@ public partial class TrimWindow : Window
         if (freezing is { } held)
         {
             double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(held.Began).TotalSeconds * PreviewRate;
-            if (elapsed >= held.Part.Seconds) { freezing = null; freezeDone = held.Part.At; int keep = previewSection; StartPlayback(held.Part.At, keep); }
+            if (elapsed >= held.Part.Seconds)
+            {
+                // The player is still paused on the held frame, so it just plays on from there: restarting with
+                // a seek stalled the picture a moment, and a video that kept playing through the hold ran ahead.
+                freezing = null; freezeDone = held.Part.At;
+                SetPlayhead(held.Part.At);
+                Player.SpeedRatio = PreviewRate * RegionSpeedAt(held.Part.At);
+                Player.Play(); SyncSounds();
+            }
             else SetPlayhead(held.Part.At);
             return;
         }
@@ -183,6 +192,10 @@ public partial class TrimWindow : Window
         if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
         if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
         // A freeze frame holds everything on the video, pictures and videos included.
+        // Items can start or stop partway through a hold, and videos keep playing through one, so the
+        // layer also knows how far into the hold the preview is.
+        if (!ReferenceEquals(OverlayView.Freezes, Timeline.Freezes)) OverlayView.Freezes = Timeline.Freezes;
+        OverlayView.HoldRate = PreviewRate; OverlayView.HoldTime = Timeline.HoldOffset;
         OverlayView.Time = freezing is { } held ? held.Part.At : playhead;
         OverlayView.PlaybackSpeed = freezing != null ? 0 : PreviewRate * RegionSpeedAt(playhead);
         // Keyframed items look different at each moment; the panel shows them as they are at the playhead.
@@ -215,6 +228,7 @@ public partial class TrimWindow : Window
     {
         if (ExportButton == null || media == null) return;
         Timeline.Sections = sections; Timeline.ExportSpeed = ExportSpeedValue; Timeline.Remap(); Timeline.InvalidateVisual();
+        if (!ReferenceEquals(OverlayView.Freezes, Timeline.Freezes)) OverlayView.Freezes = Timeline.Freezes;
         if (Timeline.Finished) PositionLabel.Text = PositionText();
         SectionsList.Visibility=SectionsRow.Visibility=sections.Count>0 ? Visibility.Visible : Visibility.Collapsed; UpdateRangeRow();
         TotalLabel.Text = sections.Count > 0 ? $"{sections.Count} sections · {sections.Sum(s => s.Duration):0.##} s" : $"Selected range · {Math.Max(0,Timeline.End-Timeline.Start):0.##} s";
@@ -369,6 +383,8 @@ public partial class TrimWindow : Window
             else CutTool_Click(this,new RoutedEventArgs());
             return true;
         }
+        // Esc (when nothing above wanted it) leaves full screen.
+        if (key==Key.Escape && modifiers==ModifierKeys.None && IsFullscreen) { ToggleFullscreen(); return true; }
         if (action==TrimAction.ShortcutGuide) { if(!repeated) RunAction(action.Value); return true; }
         if (action==null)
         {

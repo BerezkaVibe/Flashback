@@ -181,6 +181,8 @@ internal static class ExportServices
         if (process.ExitCode != 0) throw new IOException("Export failed: " + error);
     }
 
+    // A zoom ramp that's already all the way in: a zoom held still in a hold is drawn as one at its level.
+    private static readonly ZoomCurve Instant = new(new[] { (0.0, 0.0), (1e-6, 1.0) });
     internal static async Task<ClipResult> PreciseAsync(string source, string destination, IEnumerable<KeepSection> sections,
         IProgress<double>? progress, CancellationToken token, bool syntheticEncoder = false, ShareExportOptions? options = null)
     {
@@ -214,9 +216,16 @@ internal static class ExportServices
             string Local(string arg) => arg.StartsWith(overlayFolder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? arg[(overlayFolder.Length + 1)..] : arg;
             Directory.CreateDirectory(overlayFolder);
             // Text, pictures and shapes are drawn to see-through pictures first; each piece reads the ones it shows.
-            var clips = video && options.Overlays.Count > 0
-                ? await OverlayExport.RenderAsync(OverlayOrder.BackToFront(options.Overlays).Select(o => o.Validated()).ToList(), media.Width > 0 ? media.Width : 1920, media.Height > 0 ? media.Height : 1080, media.FrameRate, overlayFolder, token)
+            // Each is drawn on its own clock, which is longer than its recording time when it's shown in freeze
+            // holds (see HoldTiming); the items as edited are kept to know where they start and end.
+            var freezes = options.Freezes;
+            var edited = new Dictionary<OverlayItem, OverlayItem>(ReferenceEqualityComparer.Instance);
+            var timedItems = OverlayOrder.BackToFront(options.Overlays).Select(o => o.Validated()).Select(o => { var t = o.Timed(freezes); edited[t] = o; return t; }).ToList();
+            var alone = new HashSet<OverlayItem>(timedItems.Where(t => !ReferenceEquals(edited[t], t)), ReferenceEqualityComparer.Instance);
+            var clips = video && timedItems.Count > 0
+                ? await OverlayExport.RenderAsync(timedItems, media.Width > 0 ? media.Width : 1920, media.Height > 0 ? media.Height : 1080, media.FrameRate, overlayFolder, token, alone)
                 : new List<OverlayExport.Clip>();
+            OverlayItem Edited(OverlayExport.Clip c) => edited.TryGetValue(c.Item, out var o) ? o : c.Item;
             int frameW = media.Width > 0 ? media.Width : 1920, frameH = media.Height > 0 ? media.Height : 1080;
             bool mixTracks = audio && media.HasSeparateTracks && (options.CustomMix || options.Cuts.Any(c => c.Lane >= 0) || options.VolumeRegions.Any(v => v.Lane >= 0));
             int step = 0;
@@ -245,47 +254,107 @@ internal static class ExportServices
                 string Gain(int lane) => string.Concat(options.VolumeRegions.Where(v => v.Lane == lane && v.End > start && v.Start < end)
                     .Select(v => $",volume={Number(v.Gain)}:enable='between(t,{Number(Math.Max(0, v.Start - start))},{Number(Math.Min(length, v.End - start))})'"));
                 string Mute(int lane) => Gain(lane) + (Window(lane) is { } w ? $",volume=0:enable='{w}'" : "");
+                // Where a part with its own clock shows in this piece, on the piece's time axis (source time for
+                // footage, seconds into the hold for a freeze): Start is where its clock reads 0, From and To the
+                // stretch it shows, Still when its clock stands still here (a hold it spans completely).
+                (double Start, double From, double To, bool Still)? Where(Moment from, Moment to, bool through)
+                {
+                    if (piece.Freeze)
+                    {
+                        double at = piece.Start, held = piece.Hold;
+                        double a = HoldTiming.Compare(from, new Moment(at)) <= 0 ? 0 : Math.Abs(from.At - at) < 1e-9 ? from.Hold : double.NaN;
+                        double b = to.At > at + 1e-9 ? held : Math.Abs(to.At - at) < 1e-9 ? Math.Min(to.Hold, held) : double.NaN;
+                        if (double.IsNaN(a) || double.IsNaN(b) || b - a <= 1e-6) return null;
+                        double c0 = HoldTiming.Clock(from, to, new Moment(at, a), freezes, through);
+                        bool still = HoldTiming.Clock(from, to, new Moment(at, Math.Min(b, a + .01)), freezes, through) <= c0 + 1e-9;
+                        return (a - c0, a, b, still);
+                    }
+                    double f0 = Math.Max(from.At, start), f1 = Math.Min(to.At, end);
+                    if (f1 - f0 <= 1e-6) return null;
+                    // Footage after a freeze's hold starts with the hold behind it.
+                    var here = new Moment(start, HoldTiming.HoldAt(start, freezes));
+                    double zero = HoldTiming.Compare(from, here) < 0 ? start - HoldTiming.Clock(from, to, here, freezes, through) : from.At;
+                    return (zero, f0, f1, false);
+                }
                 if (video && decode is { } hw) inputs.AddRange(new[] { "-hwaccel", hw });
                 inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(piece.Freeze ? length + frame * 2 : length + more), "-i", source });
                 var pipSounds = new List<string>();
                 if (video)
                 {
                     string blackout = Window(-1) is { } w ? $",drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{w}'" : "";
-                    // Zoom renders per frame in source time, before any speed change.
+                    // Zoom renders per frame on each zoom's own clock (source time, plus the holds it keeps going
+                    // through), before any speed change. In a freeze's hold it renders on the held picture.
+                    double axis = piece.Freeze ? 0 : start;
                     string zoom = "";
-                    var zooms = options.ZoomRegions.Where(z => z.End > start && z.Start < end).ToList();
+                    var zooms = new List<ZoomRegion>();
+                    foreach (var r in options.ZoomRegions)
+                    {
+                        if (Where(r.From(), r.To(), r.ThroughFreezes) is not { } place) continue;
+                        if (place.Still)
+                        {
+                            // A hold it spans without keeping going: held at the zoom it had.
+                            double held = r.ZoomAt(new Moment(piece.Start, place.From), freezes);
+                            if (held > 1.0001) zooms.Add(r with { Start = place.From - .001, End = place.To, StartHold = 0, EndHold = 0, MaxZoom = held, In = Instant, ZoomOut = false, Out = null });
+                        }
+                        else zooms.Add(r with { Start = place.Start, End = place.Start + r.Duration(freezes), StartHold = 0, EndHold = 0 });
+                    }
                     if (zooms.Count > 0)
                     {
-                        var (z, x, y) = ZoomRegion.Expressions(zooms, start, media.FrameRate);
+                        var (z, x, y) = ZoomRegion.Expressions(zooms, axis, media.FrameRate);
                         zoom = $",zoompan=z='{z}':x='{x}':y='{y}':d=1:s={media.Width}x{media.Height}:fps={Number(media.FrameRate)}";
                     }
-                    // A freeze takes one frame; it is held after everything is drawn on it.
-                    string source0 = piece.Freeze ? "trim=end_frame=1,setpts=PTS-STARTPTS" : $"trim=duration={Number(length)},setpts=PTS-STARTPTS";
+                    // A freeze takes one frame and holds it first; then everything is drawn on it in hold time, so
+                    // parts can come and go, and zooms and videos keep going, partway through the hold. The held
+                    // frame is restamped first, which keeps the hold exactly its length.
+                    string source0 = piece.Freeze
+                        ? $"trim=end_frame=1,setpts=PTS-STARTPTS{blackout},setpts=N/({Number(1 / frame)}*TB),tpad=stop_mode=clone:stop_duration={Number(Math.Max(0, piece.Hold - frame))}"
+                        : $"trim=duration={Number(length)},setpts=PTS-STARTPTS{blackout}";
                     // Blackout, then things stuck to the video, then zoom, then things fixed on screen, then speed.
                     string label = $"b{i}";
-                    filters.Add($"[{i}:v:0]{source0}{blackout}[{label}]");
+                    filters.Add($"[{i}:v:0]{source0}[{label}]");
                     void Overlay(bool stuck)
                     {
                         // Clips are already back to front.
-                        foreach (var clip in clips.Where(c => c.Item.StickToVideo == stuck))
+                        foreach (var laidOut in clips.Where(c => c.Item.StickToVideo == stuck))
                         {
+                            // The clip placed on this piece's axis: its clock lined up, or held still at one picture.
+                            var edits = Edited(laidOut);
+                            if (Where(edits.From(), edits.To(), edits.Through()) is not { } place) continue;
+                            var timedItem = laidOut.Item;
+                            var clip = laidOut with { Item = timedItem with { Start = place.Start, End = place.Start + timedItem.Length } };
+                            double pieceStart = axis, pieceEnd = place.To;
+                            if (place.Still && laidOut.Video == null)
+                            {
+                                double at = place.From - place.Start;
+                                var shown = laidOut.Frames.LastOrDefault(f => f.Time <= at + 1e-9);
+                                var posed = timedItem.Posed(at);
+                                clip = laidOut with
+                                {
+                                    Item = timedItem with { Start = place.From, End = place.To },
+                                    Frames = new[] { (0.0, shown.File ?? laidOut.Frames.FirstOrDefault().File ?? laidOut.Blank) },
+                                    Move = laidOut.Move is { } move ? move with { Keys = new[] { new OverlayKeyframe(0, posed.X, posed.Y, posed.Scale, posed.Rotation, posed.Opacity) } } : null
+                                };
+                            }
                             string next = $"o{step++}";
                             if (clip.Video is { } pip)
                             {
                                 // Picture-in-picture: the video is cropped, sized, cut to its mask, framed, turned and faded here.
+                                // Held still, it shows its one frame for the stretch.
                                 var item = clip.Item;
-                                double from = Math.Max(0, start - item.Start), to = Math.Min(item.Length, end - item.Start), lead = Math.Max(0, item.Start - start);
+                                double from = Math.Max(0, pieceStart - item.Start), to = Math.Min(item.Length, pieceEnd - item.Start), lead = Math.Max(0, item.Start - pieceStart);
+                                if (place.Still) { from = place.From - place.Start; to = from + (place.To - place.From); lead = place.From; }
                                 if (to - from <= .01) { step--; continue; }
-                                int input = AddInput("-ss", Number(item.VideoOffset + from), "-t", Number(to - from), "-i", item.VideoPath);
+                                int input = AddInput("-ss", Number(item.VideoOffset + from), "-t", Number(place.Still ? frame * 2 : to - from), "-i", item.VideoPath);
                                 int mask = AddInput("-loop", "1", "-t", Number(lead + to - from + 1), "-i", pip.Mask);
-                                var chain = new List<string> { $"[{input}:v:0]setpts=PTS-STARTPTS,crop={pip.CropW}:{pip.CropH}:{pip.CropX}:{pip.CropY},scale={pip.Width}:{pip.Height},format=rgba[{next}v]",
+                                string holdStill = place.Still ? $",trim=end_frame=1,tpad=stop_mode=clone:stop_duration={Number(to - from)}" : "";
+                                var chain = new List<string> { $"[{input}:v:0]setpts=PTS-STARTPTS{holdStill},crop={pip.CropW}:{pip.CropH}:{pip.CropX}:{pip.CropY},scale={pip.Width}:{pip.Height},format=rgba[{next}v]",
                                     $"[{mask}:v]format=rgba,alphaextract[{next}k]", $"[{next}v][{next}k]alphamerge[{next}m]" };
                                 string framed = $"{next}m";
                                 if (pip.Border is { } border)
                                 {
-                                    int frame = AddInput("-loop", "1", "-t", Number(lead + to - from + 1), "-i", border);
+                                    int borderInput = AddInput("-loop", "1", "-t", Number(lead + to - from + 1), "-i", border);
                                     chain.Add($"[{framed}]pad={pip.Width + pip.Pad * 2}:{pip.Height + pip.Pad * 2}:{pip.Pad}:{pip.Pad}:color=0x00000000[{next}q]");
-                                    chain.Add($"[{frame}:v]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=pass[{next}b]");
+                                    chain.Add($"[{borderInput}:v]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=pass[{next}b]");
                                     framed = $"{next}b";
                                 }
                                 double angle = item.Rotation * Math.PI / 180;
@@ -295,14 +364,15 @@ internal static class ExportServices
                                 chain.Add($"[{framed}]null{turn}{fade}{wait}[{next}p]");
                                 chain.Add($"[{label}][{next}p]overlay=x={Number(pip.CenterX)}-overlay_w/2:y={Number(pip.CenterY)}-overlay_h/2:eof_action=pass:enable='gte(t,{Number(lead)})*lt(t,{Number(lead + to - from)})'[{next}]");
                                 filters.AddRange(chain);
-                                if (audio && pip.HasSound && item.VideoVolume > 0 && !piece.Freeze)
+                                // Its sound plays wherever it plays, holds it keeps going through included.
+                                if (audio && pip.HasSound && item.VideoVolume > 0 && !place.Still)
                                 {
                                     filters.Add($"[{input}:a:0]asetpts=PTS-STARTPTS,volume={Number(item.VideoVolume)},adelay=delays={Number(lead * 1000)}:all=1[{next}s]");
                                     pipSounds.Add($"[{next}s]");
                                 }
                                 label = next; continue;
                             }
-                            if (OverlayExport.PieceList(clip, start, end, overlayFolder, $"piece{i}-{step}") is not { } list) { step--; continue; }
+                            if (OverlayExport.PieceList(clip, pieceStart, pieceEnd, overlayFolder, $"piece{i}-{step}") is not { } list) { step--; continue; }
                             int frames = AddInput("-f", "concat", "-safe", "0", "-i", list.List);
                             string when = $"enable='gte(t,{Number(list.From)})*lt(t,{Number(list.To)})'";
                             if (clip.Region)
@@ -317,7 +387,7 @@ internal static class ExportServices
                             else
                             {
                                 // A picture that only moves follows its keyframes; the rest sit at their box.
-                                var (px, py) = clip.Move != null ? OverlayExport.MoveExpressions(clip, start, frameW, frameH) : (clip.Box.X.ToString(CultureInfo.InvariantCulture), clip.Box.Y.ToString(CultureInfo.InvariantCulture));
+                                var (px, py) = clip.Move != null ? OverlayExport.MoveExpressions(clip, pieceStart, frameW, frameH) : (clip.Box.X.ToString(CultureInfo.InvariantCulture), clip.Box.Y.ToString(CultureInfo.InvariantCulture));
                                 filters.Add($"[{frames}:v]format=rgba[{next}p];[{label}][{next}p]overlay=x='{px}':y='{py}':eof_action=pass:{when}[{next}]");
                             }
                             label = next;
@@ -326,17 +396,16 @@ internal static class ExportServices
                     Overlay(true);
                     if (zoom.Length > 0) { filters.Add($"[{label}]{zoom[1..]}[z{i}]"); label = $"z{i}"; }
                     Overlay(false);
-                    // The held frame is restamped first: after a zoom its timestamp is off, which made holds seconds too long.
-                    string hold = piece.Freeze ? $",setpts=N/({Number(1 / frame)}*TB),tpad=stop_mode=clone:stop_duration={Number(Math.Max(0, piece.Hold - frame))}" : "";
-                    string tail = hold + slowVideo;
+                    string tail = slowVideo;
                     filters.Add($"[{label}]{(tail.Length > 0 ? tail[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
                 }
                 // A picture-in-picture video's own sound joins this piece's sound before any speed change.
                 string WithPip(string piece) => pipSounds.Count == 0 ? piece : $"{piece}[{i}pa];[{i}pa]{string.Concat(pipSounds)}amix=inputs={pipSounds.Count + 1}:duration=first:normalize=0";
                 if (audio && piece.Freeze)
                 {
-                    // The hold is silent; music and sound files carry on over it.
-                    filters.Add($"anullsrc=r=48000:cl=stereo,atrim=duration={Number(piece.Hold)},asetpts=PTS-STARTPTS{slowAudio}{audioShape}[a{i}]");
+                    // The clip's own sound is silent in a hold; music and sound files carry on over it, and so do
+                    // videos that keep playing through it.
+                    filters.Add(WithPip($"anullsrc=r=48000:cl=stereo,atrim=duration={Number(piece.Hold)},asetpts=PTS-STARTPTS") + $"{slowAudio}{audioShape}[a{i}]");
                     labels += $"[a{i}]";
                 }
                 else if (mixTracks)
@@ -418,6 +487,15 @@ internal static class ExportServices
                 if (encoder?.IsAmd == true) args.AddRange(new[] { "-init_hw_device", $"d3d11va=exportgpu:{encoder.Adapter.Index}", "-filter_hw_device", "exportgpu" });
                 // The filter graph is read from a file: a big edit's graph is longer than a command line may be.
                 File.WriteAllText(Path.Combine(overlayFolder, "graph.txt"), string.Join(';', filters));
+                // For diagnostics: FLASHBACK_KEEP_GRAPH names a folder that gets a copy of each export's graph.
+                if (Environment.GetEnvironmentVariable("FLASHBACK_KEEP_GRAPH") is { Length: > 0 } keep)
+                    try
+                    {
+                        string copy = Path.Combine(keep, Path.GetFileNameWithoutExtension(destination)); Directory.CreateDirectory(copy);
+                        File.WriteAllText(copy + ".graph.txt", string.Join(";\n", filters) + "\n\n" + string.Join(" ", inputs));
+                        foreach (var file in Directory.GetFiles(overlayFolder)) File.Copy(file, Path.Combine(copy, Path.GetFileName(file)), true);
+                    }
+                    catch { }
                 args.AddRange(inputs); args.AddRange(new[] { "-filter_complex_threads", FilterThreads.ToString(CultureInfo.InvariantCulture), "-/filter_complex", "graph.txt" });
                 if (video) args.AddRange(new[] { "-map", "[v]" });
                 if (!video) { args.AddRange(new[] { "-map", finalAudio, "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", temp }); await Run(args); break; }

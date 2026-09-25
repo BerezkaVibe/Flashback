@@ -60,11 +60,29 @@ internal sealed class OverlayLayer : FrameworkElement
     }
     // Frame pixels to this element, for an item (with the preview zoom when it is stuck to the video).
     private Matrix FrameToScreen(OverlayItem item) => item.StickToVideo ? FrameToElement() * zoom : FrameToElement();
-    private bool Visible(OverlayItem o) => time >= o.Start - 1e-9 && time < o.End;
-    private double LocalTime(OverlayItem o) => Math.Clamp(time - o.Start, 0, o.Length);
+    // Where the preview is inside a freeze's hold (seconds in), and the freezes: items can start or stop
+    // partway through a hold, and videos can keep playing through one (see HoldTiming).
+    internal double HoldTime { get => holdTime; set { if (Math.Abs(holdTime - value) < 1e-9) return; holdTime = value; Refresh(onlyIfChanged: true); SyncVideos(); } }
+    private double holdTime;
+    internal IReadOnlyList<FreezeFrame> Freezes { get => freezes; set { freezes = value; timedVersion++; Refresh(); SyncVideos(true); } }
+    private IReadOnlyList<FreezeFrame> freezes = Array.Empty<FreezeFrame>();
+    // How fast the preview plays; videos that keep going through freezes play at it while a hold stands still.
+    internal double HoldRate { get; set; } = 1;
+    private Moment Now => new(time, holdTime > 0 && HoldTiming.HoldAt(time, freezes) > 0 ? holdTime : 0);
+    private bool Visible(OverlayItem o) => o.Covers(Now);
+    // An item laid out on its own clock, and how far into it the preview is.
+    private (OverlayItem Item, double Local) At(OverlayItem o)
+    {
+        if (freezes.Count == 0 && !o.InHolds()) return (o, time - o.Start);
+        if (!timed.TryGetValue(o, out var t) || t.Version != timedVersion) { if (timed.Count > 256) timed.Clear(); timed[o] = t = (timedVersion, o.Timed(freezes)); }
+        return (t.Item, o.Clock(Now, freezes));
+    }
+    private readonly Dictionary<OverlayItem, (int Version, OverlayItem Item)> timed = new(ReferenceEqualityComparer.Instance);
+    private int timedVersion;
+    private double LocalTime(OverlayItem o) { var (item, local) = At(o); return Math.Clamp(local, 0, item.Length); }
     internal Drawing ContentFor(OverlayItem item, OverlayState state)
     {
-        double local = time - item.Start, aspect = VideoWidth / Math.Max(1, VideoHeight);
+        double local = At(item).Local, aspect = VideoWidth / Math.Max(1, VideoHeight);
         int frame = item.Kind == OverlayKind.Image ? OverlayRenderer.FrameAt(item, local) : 0;
         if (contents.TryGetValue(item, out var hit) && hit.Chars == state.Chars && hit.Frame == frame && hit.Aspect == aspect) return hit.Content;
         // Moving, scaling, rotating, fading or retiming an item doesn't change its drawing, so reuse it.
@@ -93,7 +111,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private void Refresh(bool onlyIfChanged = false)
     {
         // Keyframed items move every frame, so they count as changed at each new time.
-        var showing = items.Where(Visible).Select(o => (o, o.StateAt(time - o.Start), o.Kind == OverlayKind.Image ? OverlayRenderer.FrameAt(o, time - o.Start) : 0, o.Keys.Count > 1 ? (int)Math.Round(time * 1000) : 0)).ToList();
+        var showing = items.Where(Visible).Select(o => { var (t, l) = At(o); return (o, t.StateAt(l), o.Kind == OverlayKind.Image ? OverlayRenderer.FrameAt(t, l) : 0, o.Keys.Count > 1 ? (int)Math.Round(l * 1000) : 0); }).ToList();
         if (onlyIfChanged && showing.SequenceEqual(drawn)) return;
         drawn = showing;
         stuck.Children.Clear(); screen.Children.Clear();
@@ -110,8 +128,8 @@ internal sealed class OverlayLayer : FrameworkElement
             if (!Visible(original) || ActualWidth <= 0) continue;
             // With preview effects off (Settings > Performance), items show plainly: no shadow and no
             // entrance or exit motion. Exports are unaffected.
-            var item = PerformanceOptions.PreviewEffects ? original : Plain(original);
-            double local = time - item.Start;
+            var (timedItem, local) = At(original);
+            var item = PerformanceOptions.PreviewEffects ? timedItem : Plain(timedItem);
             var state = item.StateAt(local);
             // An item's visual is kept until something it shows changes, so a keyframed item moving
             // doesn't rebuild the blur, pixelation and drawings around it every frame.
@@ -241,11 +259,14 @@ internal sealed class OverlayLayer : FrameworkElement
         {
             if (item.Kind != OverlayKind.Video || !Visible(item) || PlayerFor(item) is not { } player) continue;
             used.Add(player);
-            var want = TimeSpan.FromSeconds(Math.Max(0, time - item.Start + item.VideoOffset));
-            player.Volume = playing ? Math.Clamp(item.VideoVolume * Loudness, 0, 1) : 0;
-            if (playing && speed > 0)
+            double local = At(item).Local;
+            var want = TimeSpan.FromSeconds(Math.Max(0, local + item.VideoOffset));
+            // While a freeze holds the picture (speed 0) a video that keeps going plays on at the preview's rate.
+            double rate = speed > 0 ? speed : HoldTiming.HoldAt(time, freezes) > 0 && item.Clock(Now with { Hold = Now.Hold + .02 }, freezes) > local + 1e-4 ? HoldRate : 0;
+            player.Volume = playing && (rate > 0 || speed > 0) ? Math.Clamp(item.VideoVolume * Loudness, 0, 1) : 0;
+            if (playing && rate > 0)
             {
-                if (Math.Abs(player.SpeedRatio - speed) > 1e-6) player.SpeedRatio = speed;
+                if (Math.Abs(player.SpeedRatio - rate) > 1e-6) player.SpeedRatio = rate;
                 if (running.Add(player)) { player.Position = want; player.Play(); }
                 else if (Math.Abs((player.Position - want).TotalSeconds) > .35) player.Position = want;
             }
@@ -289,7 +310,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private Matrix ItemToScreen(OverlayItem item, out Drawing content, out OverlayState state)
     {
         double local = LocalTime(item);
-        state = item.StateAt(local);
+        state = At(item).Item.StateAt(local);
         content = ContentFor(item, state);
         return OverlayRenderer.Placement(item.Posed(local), state, VideoWidth, VideoHeight) * FrameToScreen(item);
     }
@@ -492,7 +513,7 @@ internal sealed class OverlayLayer : FrameworkElement
     private const int EdgeLeft = 1, EdgeTop = 2, EdgeRight = 4, EdgeBottom = 8;
     private static Rect Kept(OverlayItem item, Rect full) =>
         new(full.Left + item.CropLeft * full.Width, full.Top + item.CropTop * full.Height, full.Width * (1 - item.CropLeft - item.CropRight), full.Height * (1 - item.CropTop - item.CropBottom));
-    private Rect FullRect(OverlayItem item) => OverlayRenderer.FullRect(item, time - item.Start);
+    private Rect FullRect(OverlayItem item) => OverlayRenderer.FullRect(item, At(item).Local);
     private void DrawCrop(DrawingContext dc, OverlayItem item)
     {
         var m = ItemToScreen(item, out _, out _);
@@ -504,7 +525,7 @@ internal sealed class OverlayLayer : FrameworkElement
         away.Children.Add(new RectangleGeometry(full)); away.Children.Add(new RectangleGeometry(kept));
         dc.PushClip(away); dc.PushOpacity(.35);
         if (item.Kind == OverlayKind.Video) { if (PlayerFor(item) is { } player) dc.DrawVideo(player, full); else dc.DrawRectangle(Ghost, null, full); }
-        else if (OverlayRenderer.Uncropped(item, time - item.Start).Picture is { } picture) dc.DrawImage(picture, full);
+        else if (OverlayRenderer.Uncropped(item, At(item).Local).Picture is { } picture) dc.DrawImage(picture, full);
         dc.Pop(); dc.Pop();
         dc.Pop();
         var c = Corners(kept, m);

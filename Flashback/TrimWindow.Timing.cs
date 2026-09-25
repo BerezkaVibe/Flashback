@@ -22,6 +22,8 @@ public partial class TrimWindow
         Timeline.PartResizeStarted += part => { Snapshot(); resizeCurrent = CurrentVersion(part); resizeFrom = resizeCurrent is { } p ? SpanOf(p) : default; };
         // While dragging, a move that would break a rule is skipped, so the end stops at the obstacle.
         Timeline.PartResized += (_, start, end) => { if (resizeCurrent != null && TryRetime(resizeCurrent, start, end, out var next, out string? _)) resizeCurrent = next; };
+        // Finished view: a zoom's end can stop partway into a hold.
+        Timeline.PartResizedAt += (_, from, to) => { if (resizeCurrent != null && TryRetime(resizeCurrent, from.At, to.At, out var next, out string? _, from.Hold, to.Hold)) resizeCurrent = next; };
         Timeline.PartResizeFinished += () =>
         {
             // A drag that ended where it began leaves no undo step behind.
@@ -42,19 +44,25 @@ public partial class TrimWindow
     {
         CutRegion c => Timeline.Cuts.Contains(c) ? c : null,
         SpeedRegion s => Timeline.SlowRegions.FirstOrDefault(r => r.Start == s.Start && r.End == s.End),
-        ZoomRegion z => Timeline.ZoomRegions.FirstOrDefault(r => r.Start == z.Start && r.End == z.End),
+        ZoomRegion z => Timeline.ZoomRegions.FirstOrDefault(r => TrimTimeline.SameSpan(r, z)),
         OverlayItem o => Timeline.Overlays.Contains(o) ? o : null,
         VolumeRegion v => Timeline.VolumeRegions.Contains(v) ? v : null,
         SoundItem s => Timeline.Sounds.FirstOrDefault(x => x.Start == s.Start && x.End == s.End && x.Row == s.Row && x.Path == s.Path),
         _ => null
     };
-    // Moves a part to start..end if the rules allow; otherwise explains why not.
-    private bool TryRetime(object current, double start, double end, out object? next, out string? error)
+    // Moves a part to start..end if the rules allow; otherwise explains why not. Zooms, text, pictures, shapes
+    // and videos can start or stop partway through a freeze's hold: startHold and endHold (left out, an end
+    // that doesn't move keeps its hold time).
+    private bool TryRetime(object current, double start, double end, out object? next, out string? error, double? startHold = null, double? endHold = null)
     {
         next = null; error = null;
         double frame = 1 / Math.Max(1, media.FrameRate);
         start = Math.Clamp(start, 0, media.Duration); end = Math.Clamp(end, 0, media.Duration);
-        if (end - start < frame - 1e-9) { error = "It needs to be at least a frame long, with the end after the start."; return false; }
+        var (oldStart, oldEnd, oldStartHold, oldEndHold) = current switch { ZoomRegion z => (z.Start, z.End, z.StartHold, z.EndHold), OverlayItem o => (o.Start, o.End, o.StartHold, o.EndHold), _ => (start, end, 0.0, 0.0) };
+        double sh = startHold ?? (Math.Abs(start - oldStart) < 1e-9 ? oldStartHold : 0), eh = endHold ?? (Math.Abs(end - oldEnd) < 1e-9 ? oldEndHold : 0);
+        Moment from = new(start, sh), to = new(end, eh);
+        bool inHolds = sh > 0 || eh > 0;
+        if (inHolds ? HoldTiming.Compare(from, to) >= 0 : end - start < frame - 1e-9) { error = "It needs to be at least a frame long, with the end after the start."; return false; }
         bool Hits(double a, double b) => b > start + 1e-9 && a < end - 1e-9;
         switch (current)
         {
@@ -72,17 +80,17 @@ public partial class TrimWindow
                 Timeline.SlowRegions = Timeline.SlowRegions.Select(o => o == speed ? newSpeed : o).ToArray();
                 next = newSpeed; break;
             case ZoomRegion zoom:
-                if (Timeline.ZoomRegions.Any(o => o != zoom && Hits(o.Start, o.End))) { error = "It would overlap another zoom."; return false; }
+                if (Timeline.ZoomRegions.Any(o => !TrimTimeline.SameSpan(o, zoom) && HoldTiming.Overlaps(o.From(), o.To(), from, to))) { error = "It would overlap another zoom."; return false; }
                 if (OverlapsVideoCut(start, end)) { error = "A zoom can't overlap a video cut-out."; return false; }
-                var newZoom = zoom with { Start = start, End = end };
+                var newZoom = zoom with { Start = start, End = end, StartHold = sh, EndHold = eh };
                 Timeline.ZoomRegions = Timeline.ZoomRegions.Select(o => o == zoom ? newZoom : o).ToArray();
                 next = newZoom; ApplyZoomPreview(); break;
             case OverlayItem item:
                 if (OverlapsVideoCut(start, end)) { error = "Text and pictures can't overlap a video cut-out."; return false; }
-                if (Timeline.Overlays.Any(o => !ReferenceEquals(o, item) && o.Layer == item.Layer && Hits(o.Start, o.End))) { error = "It would overlap another item on its layer. Drag it to another row first."; return false; }
+                if (Timeline.Overlays.Any(o => !ReferenceEquals(o, item) && o.Layer == item.Layer && HoldTiming.Overlaps(o.From(), o.To(), from, to))) { error = "It would overlap another item on its layer. Drag it to another row first."; return false; }
                 int index = Timeline.Overlays.ToList().FindIndex(o => ReferenceEquals(o, item));
                 if (index < 0) return false;
-                var newItem = item with { Start = start, End = end };
+                var newItem = item with { Start = start, End = end, StartHold = sh, EndHold = eh };
                 ReplaceOverlay(index, newItem);
                 next = newItem; break;
             case VolumeRegion volume:
@@ -115,6 +123,9 @@ public partial class TrimWindow
         var (s, e) = SpanOf(part);
         if (!Timeline.Finished) return (s, e);
         if (part is SoundItem sound) { double at = Timeline.ToView(sound.Start) + sound.Hold; return (at, at + sound.Length); }
+        // Zooms, text, pictures, shapes and videos can start or stop partway through a hold.
+        if (part is ZoomRegion zoom) return (Timeline.ViewOf(zoom.From(), false), Timeline.ViewOf(zoom.To(), true));
+        if (part is OverlayItem item) return (Timeline.ViewOf(item.From(), false), Timeline.ViewOf(item.To(), true));
         return (Timeline.ToView(s), Timeline.EndView(e));
     }
     // Sets one end of a part (typed, or picked on the timeline) as one undo step. view: the time is in
@@ -135,6 +146,14 @@ public partial class TrimWindow
             done = b - a >= FrameStep - 1e-9 && !Timeline.Sounds.Any(o => o != sound && o.Row == sound.Row && ShownSpan(o).End > a + 1e-9 && ShownSpan(o).Start < b - 1e-9);
             if (done) { ReplaceSound(sound, next); FocusPart(next); }
             else error = b - a < FrameStep - 1e-9 ? "It needs to be at least a frame long, with the end after the start." : "It would overlap another sound on its row.";
+        }
+        else if (view && current is ZoomRegion or OverlayItem)
+        {
+            // A typed finished-video time inside a hold keeps its place in the hold.
+            var (at, hold) = Timeline.FromView(Math.Max(0, time));
+            if (hold <= 1e-9) { at = Timeline.SourceNear(time, isStart ? end : start); hold = 0; }
+            if (isStart) done = TryRetime(current, at, end, out _, out error, startHold: hold);
+            else done = TryRetime(current, start, at, out _, out error, endHold: hold);
         }
         else
         {

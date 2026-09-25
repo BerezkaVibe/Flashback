@@ -25,7 +25,7 @@ public partial class TrimWindow
 
     private void InitOverlays()
     {
-        Timeline.OverlayAdded += OverlayAdded; Timeline.OverlayPicked += OpenOverlay; Timeline.OverlayRemoved += RemoveOverlay;
+        Timeline.OverlayAdded += OverlayAdded; Timeline.OverlayAddedAt += OverlayAddedAt; Timeline.OverlayPicked += OpenOverlay; Timeline.OverlayRemoved += RemoveOverlay;
         Timeline.OverlayEditStarted += () => { Snapshot(); lastOverlayControl = "timeline"; };
         Timeline.OverlayMoved += (_, _) => { OverlayView.Items = Timeline.Overlays; ProjectChanged(); if (OverlayPanel.Visibility == Visibility.Visible) ShowOverlayTitle(); };
         Timeline.OverlayEditFinished += () =>
@@ -91,8 +91,11 @@ public partial class TrimWindow
 
     internal static readonly string[] VideoExtensions = { ".mp4", ".m4v", ".mov" };
     private OverlayItem? lastShapeStyle;
-    private void OverlayAdded(double start, double end, OverlayKind kind)
+    private void OverlayAdded(double start, double end, OverlayKind kind) => OverlayAddedAt(new Moment(start), new Moment(end), kind);
+    // Placed in the finished view, its start or end can be partway through a freeze's hold.
+    private void OverlayAddedAt(Moment from, Moment to, OverlayKind kind)
     {
+        double start = from.At, end = to.At;
         OverlayItem item;
         if (kind == OverlayKind.Text) item = OverlayItem.NewText(start, end, lastTextStyle);
         // The shape tool starts from the last solid shape; the draw tool from the last drawing.
@@ -104,7 +107,7 @@ public partial class TrimWindow
             if (NewMedia(start, end, dialog.FileName) is not { } added) return;
             item = added;
         }
-        AddOverlay(item);
+        AddOverlay(item with { StartHold = from.Hold, EndHold = Math.Abs(item.End - end) < 1e-9 ? to.Hold : 0 });
         // With the draw tool, the new part is drawn on the video straight away.
         if (kind == OverlayKind.Shape && drawPending && SelectedOverlayItem is { Kind: OverlayKind.Shape } fresh && ReferenceEquals(fresh, Timeline.Overlays[^1])) StartDrawing(drawTool);
     }
@@ -133,10 +136,10 @@ public partial class TrimWindow
     {
         if (OverlapsVideoCut(item.Start, item.End)) { StatusLabel.Text = "Text, pictures and shapes can't overlap a video cut-out. Pick a stretch outside the red cut-outs."; return; }
         Snapshot();
-        item = item with { Layer = OverlayOrder.FreeLayer(Timeline.Overlays, item.Start, item.End) };
+        item = item with { Layer = OverlayOrder.FreeLayer(Timeline.Overlays, item.From(), item.To()) };
         // New text that would land right on top of other text showing at the same time moves up a line.
         if (item.Kind == OverlayKind.Text)
-            for (int tries = 0; tries < 6 && Timeline.Overlays.Any(o => o.Kind == OverlayKind.Text && o.End > item.Start && o.Start < item.End && Math.Abs(o.Y - item.Y) < .08 && Math.Abs(o.X - item.X) < .25); tries++)
+            for (int tries = 0; tries < 6 && Timeline.Overlays.Any(o => o.Kind == OverlayKind.Text && o.Overlaps(item) && Math.Abs(o.Y - item.Y) < .08 && Math.Abs(o.X - item.X) < .25); tries++)
                 item = item with { Y = item.Y > .3 ? item.Y - .12 : item.Y + .12 };
         SetOverlays(Timeline.Overlays.Append(item).ToArray());
         OpenOverlay(Timeline.Overlays.Count - 1);
@@ -313,6 +316,13 @@ public partial class TrimWindow
                 Header("Sound and start");
                 SliderRow("Volume", "videoVolume", 0, 2, o => o.VideoVolume, (o, v) => o with { VideoVolume = Math.Round(v, 2) }, v => v < .005 ? "Muted" : $"{v * 100:0}%", tip: "How loud this video's own sound is in the export (the preview plays it up to 100%)");
                 VideoStartRow();
+                var through = new CheckBox { Content = "Keep playing through freezes", Margin = new Thickness(0, 6, 0, 0), ToolTip = "On: the video keeps playing, with its sound, while a freeze frame holds the picture. Off: it holds still with the picture." };
+                through.Click += (_, _) => EditOverlay("through", o => o with { ThroughFreezes = through.IsChecked == true });
+                overlayRefresh.Add(o => through.IsChecked = o.ThroughFreezes);
+                OverlayControls.Children.Add(through);
+                var fit = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+                SmallButton(fit, "Fit to video length", "Make it last as long as the video has left to play, from where it starts in the video, so all of it plays", FitVideoLength);
+                OverlayControls.Children.Add(fit);
             }
             Header("Frame");
             Combo("Mask", "mask", MaskChoices, o => o.Mask, (o, v) => o with { Mask = v });

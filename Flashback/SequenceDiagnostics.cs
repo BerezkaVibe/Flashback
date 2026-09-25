@@ -49,6 +49,25 @@ internal static class SequenceDiagnostics
         Check(spans.Count == 2 && Near(spans[0].From, 0) && Near(spans[0].To, .5) && Near(spans[1].From, 8.5) && Near(spans[1].To, 9), "A part across a section jump is drawn in two places");
         Check(Near(map.SourceIn(1, 9), 2) && Near(map.SourceIn(0, 5), 6) && map.SectionAt(4.5) == 0 && map.SectionAt(5.5) == 1, "The end of a section stays in that section");
 
+        // ---- Parts partway through a freeze's hold ----
+        // A freeze at 2 s holds 3 s. Part A lives 1-2 s into the hold; B runs from 1 s into the hold's first
+        // 1.5 s; C spans the hold (frozen unless it keeps going).
+        var holds = new[] { new FreezeFrame(2, 3) };
+        Moment M(double at, double hold = 0) => new(at, hold);
+        Check(HoldTiming.Compare(M(2), M(2, 1)) < 0 && HoldTiming.Compare(M(2, 3), M(2.1)) < 0 && HoldTiming.Compare(M(2, 1), M(2, 1)) == 0, "Moments inside a hold come after its moment and before the footage after it");
+        Check(HoldTiming.Covers(M(2, 1), M(2, 2), M(2, 1.5)) && !HoldTiming.Covers(M(2, 1), M(2, 2), M(2, .5)) && !HoldTiming.Covers(M(2, 1), M(2, 2), M(2, 2)), "A part inside a hold shows only for its stretch of it");
+        Check(HoldTiming.Covers(M(1), M(2), M(1.9)) && !HoldTiming.Covers(M(1), M(2), M(2)) && HoldTiming.Covers(M(1), M(2.5), M(2, 2.9)), "A part ending at a freeze's moment stops before the hold; one ending after it covers the hold");
+        Check(Near(HoldTiming.Clock(M(1), M(2, 1.5), M(2, .5), holds, false), 1.5) && Near(HoldTiming.Duration(M(1), M(2, 1.5), holds, false), 2.5) && Near(HoldTiming.Duration(M(2, 1), M(2, 2), holds, false), 1),
+            "A part's own clock runs through a hold it starts or stops in");
+        Check(Near(HoldTiming.Clock(M(1), M(3), M(2, 2), holds, false), 1) && Near(HoldTiming.Clock(M(1), M(3), M(2, 2), holds, true), 3) && Near(HoldTiming.Duration(M(1), M(3), holds, true), 5),
+            "A part spanning a hold stands still in it, unless it keeps going through freezes");
+        Check(HoldTiming.Overlaps(M(2, 1), M(2, 2), M(1), M(2, 1.5)) && !HoldTiming.Overlaps(M(2, 1), M(2, 2), M(1), M(2, 1)), "Parts overlap only where they share hold time");
+        var oldZoom = JsonSerializer.Deserialize<ZoomRegion>("{\"Start\":1,\"End\":2,\"X\":0.5,\"Y\":0.5,\"MaxZoom\":2,\"In\":{\"Points\":[{\"Item1\":0,\"Item2\":0},{\"Item1\":0.5,\"Item2\":1}]}}", new JsonSerializerOptions { IncludeFields = true })!;
+        Check(oldZoom.ThroughFreezes && oldZoom.StartHold == 0 && new OverlayItem().ThroughFreezes, "Zooms and videos saved before keep going through freezes; nothing else changes");
+        var holdMap = new SequenceMap(new[] { new KeepSection(0, 6) }, new ShareExportOptions { Freezes = holds });
+        var inside = holdMap.Spans(M(2, 1), M(2, 2));
+        Check(inside.Count == 1 && Near(inside[0].From, 3) && Near(inside[0].To, 4) && Near(holdMap.Spans(M(1), M(2, 1.5))[0].To, 3.5), "The finished video shows a part just where it is in the hold");
+
         // ---- Everything slides with the video ----
         var folder = Path.Combine(Storage.Root, "sequence"); Directory.CreateDirectory(folder);
         var source = Path.Combine(folder, "Source.mp4");
@@ -102,6 +121,36 @@ internal static class SequenceDiagnostics
             Check(Near(tl.PositionView, 5.2, .05) && Near(trim.Playhead, 3.2, .05) && tl.HoldOffset == 0, $"Stepping a second moves a second along the finished video, out of the hold ({tl.PositionView:0.00} s, recording {trim.Playhead:0.00} s)");
             Call(trim, "SeekView", 3.5);
             Check(trim.PositionLabel.Text == $"{KeepSection.TimeText(3.5)} / {KeepSection.TimeText(tl.Total)}", $"The time shows the finished video's ({trim.PositionLabel.Text})");
+            // Text placed with two clicks inside the hold (3-5 s of the finished video) keeps its place in it.
+            double Track() => (double)typeof(TrimTimeline).GetProperty("TrackTop", flags)!.GetValue(tl)! + 12;
+            var click = typeof(TrimTimeline).GetMethod("PlaceCutPoint", flags)!;
+            tl.OverlayMode = OverlayKind.Text;
+            click.Invoke(tl, new object[] { new Point(X(3.5), Track()) }); click.Invoke(tl, new object[] { new Point(X(4.5), Track()) }); Layout();
+            var holdText = tl.Overlays.LastOrDefault();
+            Check(holdText is { Kind: OverlayKind.Text } && Near(holdText.Start, 3) && Near(holdText.End, 3) && Near(holdText.StartHold, .5, .03) && Near(holdText.EndHold, 1.5, .03),
+                $"Two clicks inside a hold add text that starts and stops partway through it ({holdText?.Start:0.##}+{holdText?.StartHold:0.##} → {holdText?.End:0.##}+{holdText?.EndHold:0.##})");
+            var view = trim.OverlayView; view.Freezes = tl.Freezes; view.Time = 3;
+            bool Shown(OverlayItem o) => (bool)typeof(OverlayLayer).GetMethod("Visible", flags)!.Invoke(view, new object[] { o })!;
+            view.HoldTime = 1; bool mid = Shown(holdText!); view.HoldTime = .2; bool early = Shown(holdText!); view.HoldTime = 1.8; bool late = Shown(holdText!);
+            Check(mid && !early && !late, "The preview shows it only during its stretch of the hold");
+            await Shot(content, "sequence-hold-text.png");
+            trim.ToggleFinishedView(); Layout();
+            var chip = (Rect)Call(tl, "OverlayRect", holdText!)!;
+            Check(chip.Width < 10 && Math.Abs(chip.X - tl.XAt(3)) < 12, $"In the whole recording, a part inside a hold is a small chip at the freeze ({chip.X:0}, {chip.Width:0} px)");
+            trim.ToggleFinishedView(); Layout(); tl.Fit(); Layout();
+            // A zoom placed inside the hold zooms only there.
+            tl.ZoomMode = true;
+            click.Invoke(tl, new object[] { new Point(X(3.2), Track()) }); click.Invoke(tl, new object[] { new Point(X(4.8), Track()) }); Layout();
+            var holdZoom = tl.ZoomRegions.FirstOrDefault(z => z.InHolds());
+            Check(holdZoom != null && holdZoom.ZoomAt(new Moment(3, 1.2), tl.Freezes) > 1.2 && holdZoom.ZoomAt(new Moment(3, .1), tl.Freezes) == 1, "A zoom placed inside a hold zooms in there");
+            // Moving the freeze takes them along; removing it puts them into the footage at its moment.
+            var freezeMoved = (Action<int, double>)typeof(TrimTimeline).GetField("FreezeMoved", flags)!.GetValue(tl)!;
+            freezeMoved(0, 3.4);
+            Check(tl.Overlays.Any(o => Near(o.Start, 3.4) && Near(o.StartHold, .5, .03)) && tl.ZoomRegions.Any(z => Near(z.Start, 3.4) && z.InHolds()), "Moving a freeze takes the parts in its hold with it");
+            Call(trim, "RemoveFreeze", 0); Layout();
+            Check(tl.Overlays.Any(o => Near(o.Start, 3.4) && Near(o.End, 4.4, .03) && !o.InHolds()), "Removing the freeze puts its text into the footage there, as long as it was");
+            Call(trim, "SetOverlays", (object)Array.Empty<OverlayItem>()); tl.ZoomRegions = tl.ZoomRegions.Where(z => !Near(z.Start, 3.4)).ToArray();
+            Call(trim, "AddFreeze", 3.0, 2.0, true); Layout(); tl.Fit(); Layout();
             // A new part can't reach across a jump between sections.
             trim.StartBox.Text = "6"; trim.EndBox.Text = "9"; Call(trim, "Add_Click", trim, new RoutedEventArgs());
             trim.StartBox.Text = "0"; trim.EndBox.Text = "2"; Call(trim, "Add_Click", trim, new RoutedEventArgs());
@@ -116,6 +165,21 @@ internal static class SequenceDiagnostics
             var cut = tl.Cuts[^1];
             Check(Near(cut.Start, 8, .05) && Near(cut.End, 9, .05), $"A part placed across a section jump stops at the section's end ({cut.Start:0.##}-{cut.End:0.##})");
             tl.CutMode = false; await Shot(content, "sequence-sections.png");
+            // Full screen: F11 hands the timeline and tools to a slim dock over the video; Esc gives them back.
+            trim.HandleKey(Key.F11, ModifierKeys.None, true); Layout();
+            Check(trim.IsFullscreen && trim.EditorMenu.Visibility != Visibility.Visible && ReferenceEquals(tl.Parent, trim.DockTimeline) && ReferenceEquals(trim.ListControls.Parent, trim.DockTools) && trim.WindowStyle == WindowStyle.None,
+                "F11 goes full screen, with the timeline and tools in the dock");
+            trim.UpdateDock(new Point(700, 900 - 20)); Layout();
+            Check(trim.DockShown && trim.FullscreenDock.ActualHeight <= 96 && tl.OverlaysFolded | tl.Overlays.Count < 2, $"The dock shows near the bottom, and it's slim ({trim.FullscreenDock.ActualHeight:0} px)");
+            await Shot(content, "sequence-fullscreen.png");
+            trim.CutToolButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Check(tl.CutMode, "The dock's tool icons work");
+            trim.HandleKey(Key.Escape, ModifierKeys.None, true);
+            trim.UpdateDock(new Point(700, 100)); await Task.Delay(1700);
+            Check(!tl.CutMode && !trim.DockShown && trim.IsFullscreen, $"Away from the bottom the dock fades away (Esc first put the tool away) [cut {tl.CutMode}, shown {trim.DockShown}, full {trim.IsFullscreen}, placing {tl.IsPlacing}, dragging {tl.IsDragging}, popups {trim.SlowPopup.IsOpen}{trim.FreezePopup.IsOpen}{trim.SpeedPopup.IsOpen}, over {trim.FullscreenDock.IsMouseOver}]");
+            trim.HandleKey(Key.Escape, ModifierKeys.None, true); Layout();
+            Check(!trim.IsFullscreen && trim.EditorMenu.Visibility == Visibility.Visible && ReferenceEquals(tl.Parent, trim.TrimContent) && ReferenceEquals(trim.ListControls.Parent, trim.ToolsHome) && trim.WindowStyle != WindowStyle.None,
+                "Esc leaves full screen and puts everything back");
             trim.ToggleFinishedView(); Layout();
             Check(!tl.Finished && Near(tl.Total, 10), "Switching back shows the whole recording");
         }
@@ -159,6 +223,52 @@ internal static class SequenceDiagnostics
             var (gap, where) = LongestQuiet(pcm);
             Check(gap <= 10, $"No gap in the sound where normal speed and a slow part meet at {join:0} s (quietest run {gap:0} ms at {join - .3 + where / 1000:0.000} s)");
         }
+        // ---- Parts in freeze holds, in the export ----
+        // A 3 s freeze at 2 s: the export holds from 2 s to 5 s, then carries on from 2 s of the recording.
+        async Task<byte[]> Gray(string file, double at, int x, int y, int w, int h)
+        {
+            var raw = Path.Combine(folder, $"g-{Guid.NewGuid():N}.raw");
+            await EditorDiagnostics.Ffmpeg("-y", "-ss", ExportServices.Number(at), "-i", file, "-frames:v", "1", "-vf", $"crop={w}:{h}:{x}:{y},format=gray", "-f", "rawvideo", raw);
+            var bytes = File.ReadAllBytes(raw); File.Delete(raw); return bytes;
+        }
+        async Task<byte[]> Rgb(string file, double at, int x, int y)
+        {
+            var raw = Path.Combine(folder, $"p-{Guid.NewGuid():N}.rgb");
+            await EditorDiagnostics.Ffmpeg("-y", "-ss", ExportServices.Number(at), "-i", file, "-frames:v", "1", "-vf", $"format=rgb24,crop=1:1:{x}:{y}", "-f", "rawvideo", "-pix_fmt", "rgb24", raw);
+            var bytes = File.ReadAllBytes(raw); File.Delete(raw); return bytes;
+        }
+        // White: the test pattern has no white, so it can only be the square.
+        static bool White(byte[] p) => p[0] > 225 && p[1] > 225 && p[2] > 225;
+        static double Change(byte[] a, byte[] b) => a.Zip(b).Average(p => Math.Abs(p.First - p.Second));
+        var holdFreeze = new[] { new FreezeFrame(2, 3) };
+        OverlayItem Square(double x) => OverlayItem.NewShape(0, 1, null) with { ShapeColor = "#FFFFFFFF", ShapeWidth = 240, ShapeHeight = 240, Corner = 0, X = x, Y = .5 };
+        // Left: 1-2 s into the hold only. Right: from the footage until 1 s into the hold.
+        var holdParts = await Export("Parts in a hold", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { Square(.25) with { Start = 2, End = 2, StartHold = 1, EndHold = 2 }, Square(.75) with { Start = 0, End = 2, EndHold = 1, Layer = 1 } } });
+        Check(Math.Abs(ClipMedia.Read(holdParts).Duration - 9) < .2, $"Parts in a hold don't change the export's length ({ClipMedia.Read(holdParts).Duration:0.00} s)");
+        Check(!White(await Rgb(holdParts, 2.5, 160, 180)) && White(await Rgb(holdParts, 3.5, 160, 180)) && !White(await Rgb(holdParts, 4.5, 160, 180)), "A picture placed 1-2 s into a hold shows only then");
+        Check(White(await Rgb(holdParts, 1, 480, 180)) && White(await Rgb(holdParts, 2.5, 480, 180)) && !White(await Rgb(holdParts, 3.5, 480, 180)), "A picture from the footage that ends 1 s into a hold goes then");
+        // A zoom inside the hold, 0.5-2.5 s in: full frame before it, zoomed near its end, full frame after.
+        var zoomInHold = await Export("Zoom in a hold", new ShareExportOptions { Freezes = holdFreeze, ZoomRegions = new[] { new ZoomRegion(2, 2, .5, .5, 2, ZoomCurve.Smooth) { StartHold = .5, EndHold = 2.5 } } });
+        double zoomedApart = Change(await Gray(zoomInHold, 2.2, 0, 0, 640, 360), await Gray(zoomInHold, 4.2, 0, 0, 640, 360)), backApart = Change(await Gray(zoomInHold, 2.2, 0, 0, 640, 360), await Gray(zoomInHold, 4.8, 0, 0, 640, 360));
+        Check(zoomedApart > 12 && backApart < 4 && Math.Abs(ClipMedia.Read(zoomInHold).Duration - 9) < .2, $"A zoom inside a hold zooms the frozen picture just there ({zoomedApart:0.0} zoomed, {backApart:0.0} after)");
+        // A slow zoom spanning the freeze keeps zooming through the hold, unless that's turned off.
+        var slowRamp = new ZoomCurve(new[] { (0.0, 0.0), (3.0, 1.0) });
+        var through = await Export("Zoom through a freeze", new ShareExportOptions { Freezes = holdFreeze, ZoomRegions = new[] { new ZoomRegion(1.5, 5, .5, .5, 3, slowRamp) } });
+        var still = await Export("Zoom held by a freeze", new ShareExportOptions { Freezes = holdFreeze, ZoomRegions = new[] { new ZoomRegion(1.5, 5, .5, .5, 3, slowRamp) { ThroughFreezes = false } } });
+        double throughChange = Change(await Gray(through, 2.2, 0, 0, 640, 360), await Gray(through, 4.8, 0, 0, 640, 360)), stillChange = Change(await Gray(still, 2.2, 0, 0, 640, 360), await Gray(still, 4.8, 0, 0, 640, 360));
+        Check(throughChange > 8 && stillChange < 3, $"A zoom keeps zooming through a freeze by default, and holds still when told to ({throughChange:0.0} vs {stillChange:0.0})");
+        // A video keeps playing through the freeze, with its sound; turned off, it holds still and silent.
+        var inset = Path.Combine(folder, "Inset.mp4");
+        if (!File.Exists(inset))
+            await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=8", "-f", "lavfi", "-i", "sine=frequency=1500:sample_rate=48000:duration=8",
+                "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", inset);
+        var pip = OverlayItem.NewVideo(0, 6, inset, 320, 240) with { X = .5, Y = .5, Scale = .6, ImageCorner = 0 };
+        var playing = await Export("Video through a freeze", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { pip } });
+        var heldVideo = await Export("Video held by a freeze", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { pip with { ThroughFreezes = false } } });
+        double playingChange = Change(await Gray(playing, 2.3, 290, 150, 60, 60), await Gray(playing, 4.7, 290, 150, 60, 60)), heldChange = Change(await Gray(heldVideo, 2.3, 290, 150, 60, 60), await Gray(heldVideo, 4.7, 290, 150, 60, 60));
+        var playingSound = await Pcm(playing, 3, 1); var heldSound = await Pcm(heldVideo, 3, 1);
+        Check(playingChange > 6 && heldChange < 3, $"A video keeps playing through a freeze by default, and holds still when told to ({playingChange:0.0} vs {heldChange:0.0})");
+        Check(Tone(playingSound, 1500) > 300 && Tone(heldSound, 1500) < Tone(playingSound, 1500) * .1, $"Its sound plays through the hold too ({Tone(playingSound, 1500):0} vs {Tone(heldSound, 1500):0})");
         var project = TrimProject.Create(source, Array.Empty<KeepSection>(), 0, 6, 0, false) with { Sounds = new[] { new SoundItem(music, 0, 2) { Speed = 99, Hold = -3 } } };
         var cleaned = JsonSerializer.Deserialize<TrimProject>(JsonSerializer.Serialize(project))!;
         var cleanedSound = ((TrimProject)typeof(TrimProject).GetMethod("Cleaned", flags)!.Invoke(cleaned, null)!).Sounds![0];

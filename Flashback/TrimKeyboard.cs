@@ -89,7 +89,7 @@ public partial class TrimWindow
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
         foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
             (UndoMenu,TrimAction.Undo),(RedoMenu,TrimAction.Redo),(AddSectionMenu,TrimAction.AddSection),(SplitMenu,TrimAction.Split),(RemoveMenu,TrimAction.RemoveSection),
-            (ZoomInMenu,TrimAction.ZoomIn),(ZoomOutMenu,TrimAction.ZoomOut),(GoToTimeMenu,TrimAction.GoToTime),(ShortcutGuideMenu,TrimAction.ShortcutGuide) })
+            (ZoomInMenu,TrimAction.ZoomIn),(ZoomOutMenu,TrimAction.ZoomOut),(GoToTimeMenu,TrimAction.GoToTime),(FullscreenMenu,TrimAction.Fullscreen),(ShortcutGuideMenu,TrimAction.ShortcutGuide) })
             menu.InputGestureText=Key(action);
     }
     // Steps along the preset speeds, starting from whatever speed the slider left.
@@ -127,6 +127,7 @@ public partial class TrimWindow
             case TrimAction.MarkedStart: SeekTo(Timeline.Start); break;
             case TrimAction.MarkedEnd: SeekTo(Timeline.End); break;
             case TrimAction.GoToTime: Timecode_Click(this,none); break;
+            case TrimAction.Fullscreen: ToggleFullscreen(); break;
             case TrimAction.CutTool: CutTool_Click(this,none); break;
             case TrimAction.SpeedTool: SlowTool_Click(this,none); break;
             case TrimAction.ZoomTool: ZoomTool_Click(this,none); break;

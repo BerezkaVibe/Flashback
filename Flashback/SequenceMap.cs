@@ -135,6 +135,31 @@ internal sealed class SequenceMap
         }
         return spans;
     }
+    // Where a moment that may sit partway into a hold lands (end: an end with no hold time stays with the
+    // footage before it).
+    internal double ToOutput(Moment moment, bool end)
+    {
+        if (moment.Hold > 0 && Hold(moment.At) is { } hold) return hold.From + Math.Min(moment.Hold, hold.To - hold.From);
+        return end ? EndToOutput(moment.At) : ToOutput(moment.At);
+    }
+    // The stretches of the finished video a part covers when its start or end can sit partway into a hold:
+    // the usual stretches, with the hold before its start (and after its end) trimmed off. A part that lives
+    // inside one hold is that part of the hold; a hold outside what's kept gives nothing.
+    internal List<(double From, double To)> Spans(Moment from, Moment to)
+    {
+        if (from.Hold <= 0 && to.Hold <= 0) return Spans(from.At, to.At);
+        bool oneHold = Math.Abs(from.At - to.At) < 1e-9;
+        if (oneHold && Hold(from.At) == null) return new();
+        var spans = Spans(from.At, to.Hold > 0 ? to.At + 1e-7 : to.At);
+        if (from.Hold > 0 && Hold(from.At) is { } first)
+            for (int i = 0; i < spans.Count; i++)
+                if (spans[i].From <= first.From + 1e-9 && spans[i].To >= first.From - 1e-9) { spans[i] = (first.From + Math.Min(from.Hold, first.To - first.From), spans[i].To); break; }
+        if (to.Hold > 0 && Hold(to.At) is { } last)
+            for (int i = 0; i < spans.Count; i++)
+                if (spans[i].From <= last.To + 1e-9 && spans[i].To >= last.From - 1e-9) { spans[i] = (spans[i].From, Math.Min(spans[i].To, last.From + Math.Min(to.Hold, last.To - last.From))); break; }
+        spans.RemoveAll(s => s.To - s.From <= 1e-6);
+        return spans;
+    }
     // A freeze's hold in the finished video, if it's inside what's kept.
     internal (double From, double To)? Hold(double at)
     {

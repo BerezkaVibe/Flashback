@@ -18,7 +18,7 @@ public partial class TrimWindow
 
     private void InitZoom()
     {
-        Timeline.ZoomAdded += ZoomAdded; Timeline.ZoomTagClicked += OpenZoom; Timeline.ZoomRemoved += RemoveZoom;
+        Timeline.ZoomAdded += ZoomAdded; Timeline.ZoomAddedAt += ZoomAddedAt; Timeline.ZoomTagClicked += OpenZoom; Timeline.ZoomRemoved += RemoveZoom;
         ZoomGraph.EditStarted += Snapshot; ZoomGraph.Changed += ZoomGraphChanged; ZoomGraph.EditFinished += ZoomEdited;
         ZoomTarget.EditStarted += Snapshot; ZoomTarget.Changed += ZoomTargetChanged; ZoomTarget.EditFinished += ZoomEdited;
         savedZoomPresets = ZoomPreset.LoadSaved();
@@ -34,13 +34,16 @@ public partial class TrimWindow
     private ZoomRegion? SelectedZoomRegion => Timeline.SelectedZoom >= 0 && Timeline.SelectedZoom < Timeline.ZoomRegions.Count ? Timeline.ZoomRegions[Timeline.SelectedZoom] : null;
     private ZoomPreset CurrentPreset => (ZoomPresetBox.SelectedItem as ComboBoxItem)?.Tag as ZoomPreset ?? ZoomPreset.BuiltIns[0];
 
-    private void ZoomAdded(double start, double end)
+    private void ZoomAdded(double start, double end) => ZoomAddedAt(new Moment(start), new Moment(end));
+    // Placed in the finished view, its start or end can be partway through a freeze's hold.
+    private void ZoomAddedAt(Moment from, Moment to)
     {
-        if (Timeline.ZoomRegions.Any(r => r.End > start && r.Start < end)) { StatusLabel.Text = "That overlaps another zoom. Click its tag to edit it instead."; return; }
+        double start = from.At, end = to.At;
+        if (Timeline.ZoomRegions.Any(r => HoldTiming.Overlaps(r.From(), r.To(), from, to))) { StatusLabel.Text = "That overlaps another zoom. Click its tag to edit it instead."; return; }
         if (OverlapsVideoCut(start, end)) { StatusLabel.Text = "A zoom can't overlap a video cut-out. Pick a stretch outside the red cut-outs."; return; }
         Snapshot();
         var preset = CurrentPreset;
-        var region = new ZoomRegion(start, end, .5, .5, preset.MaxZoom, preset.Curve);
+        var region = new ZoomRegion(start, end, .5, .5, preset.MaxZoom, preset.Curve) { StartHold = from.Hold, EndHold = to.Hold };
         Timeline.ZoomRegions = Timeline.ZoomRegions.Append(region).OrderBy(r => r.Start).ToArray();
         UpdateExportHint();
         OpenZoom(Timeline.ZoomRegions.ToList().IndexOf(region));
@@ -56,8 +59,14 @@ public partial class TrimWindow
         ZoomPanel.Visibility = ZoomTarget.Visibility = Visibility.Visible;
         ZoomTarget.VideoWidth = media.Width > 0 ? media.Width : 1920; ZoomTarget.VideoHeight = media.Height > 0 ? media.Height : 1080;
         LoadZoomUi();
-        // Show the moment the zoom is fully in, so aiming the box is easy.
-        SeekTo(Math.Min(r.End - .01, r.Start + Math.Min(r.In.Length, (r.End - r.Start) / 2)));
+        // Show the moment the zoom is fully in, so aiming the box is easy (in the finished video's time when it
+        // starts or stops partway through a hold).
+        if (Timeline.Finished && (r.InHolds() || Timeline.Freezes.Count > 0))
+        {
+            double from = Timeline.ViewOf(r.From(), false), length = Timeline.ViewOf(r.To(), true) - from;
+            SeekView(from + Math.Max(0, Math.Min(length - .01, Math.Min(r.In.Length, length / 2))));
+        }
+        else SeekTo(Math.Min(r.End - .01, r.Start + Math.Min(r.In.Length, (r.End - r.Start) / 2)));
     }
     private void CloseZoom()
     {
@@ -74,12 +83,14 @@ public partial class TrimWindow
         editingZoomOut &= r.ZoomOut && r.Out != null;
         ZoomGraph.MaxZoom = r.MaxZoom; ZoomGraph.Curve = editingZoomOut ? r.OutCurve : r.In;
         ZoomTarget.Set(r.X, r.Y, r.MaxZoom);
-        ZoomOutCheck.IsChecked = r.ZoomOut; ZoomOutSameCheck.IsChecked = r.Out == null;
+        ZoomOutCheck.IsChecked = r.ZoomOut; ZoomOutSameCheck.IsChecked = r.Out == null; ZoomThroughCheck.IsChecked = r.ThroughFreezes;
         ZoomOutSameCheck.Visibility = r.ZoomOut ? Visibility.Visible : Visibility.Collapsed;
         ZoomCurveTabs.Visibility = r.ZoomOut && r.Out != null ? Visibility.Visible : Visibility.Collapsed;
         ZoomInTab.SetResourceReference(Control.BorderBrushProperty, editingZoomOut ? "Outline" : "Accent");
         ZoomOutTab.SetResourceReference(Control.BorderBrushProperty, editingZoomOut ? "Accent" : "Outline");
-        ZoomTitle.Text = $"{KeepSection.TimeText(r.Start)} – {KeepSection.TimeText(r.End)}";
+        // As the timeline shows it (the finished video's times in that view, holds included).
+        var (shownStart, shownEnd) = ShownSpan(r);
+        ZoomTitle.Text = $"{KeepSection.TimeText(shownStart)} – {KeepSection.TimeText(shownEnd)}";
         zoomTiming?.Invoke();
         ShowZoomReadout(r);
         // Show which preset this matches, or Custom after hand edits.
@@ -177,6 +188,16 @@ public partial class TrimWindow
         editingZoomOut = zoomOut && !same && ReferenceEquals(sender, ZoomOutSameCheck);
         LoadZoomUi(); UpdateExportHint();
     }
+    // Keep zooming while a freeze holds the picture, or hold still with it.
+    private void ZoomThrough_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedZoomRegion is null) return;
+        Snapshot();
+        bool through = ZoomThroughCheck.IsChecked == true;
+        UpdateSelectedZoom(r => r with { ThroughFreezes = through });
+        LoadZoomUi(); UpdateExportHint(); ApplyZoomPreview();
+        StatusLabel.Text = through ? "This zoom keeps zooming through freeze frames." : "This zoom holds still with the picture during freeze frames.";
+    }
     private void ZoomTab_Click(object sender, RoutedEventArgs e) { editingZoomOut = ReferenceEquals(sender, ZoomOutTab); LoadZoomUi(); }
     private void ZoomRemove_Click(object sender, RoutedEventArgs e) => RemoveZoom(Timeline.SelectedZoom);
     private void RemoveZoom(int index)
@@ -193,9 +214,12 @@ public partial class TrimWindow
     private void ApplyZoomPreview()
     {
         if (Player == null) return;
-        var zoom = Timeline.ZoomRegions.FirstOrDefault(r => playhead >= r.Start && playhead < r.End);
+        // Zooms can start or stop partway through a freeze's hold and keep zooming through one, so this goes by
+        // where in the finished video the preview is (see HoldTiming).
+        var now = new Moment(playhead, Timeline.HoldOffset);
+        var zoom = Timeline.ZoomRegions.FirstOrDefault(r => r.Covers(now));
         bool aiming = ZoomPanel.Visibility == Visibility.Visible && !playing;
-        double z = zoom == null || aiming ? 1 : zoom.ZoomAt(playhead);
+        double z = zoom == null || aiming ? 1 : zoom.ZoomAt(now, Timeline.Freezes);
         if (SelectedZoomRegion is { } selected)
             ZoomGraph.Marker = playhead < selected.Start || playhead >= selected.End ? double.NaN
                 : editingZoomOut ? selected.End - playhead : playhead - selected.Start;
