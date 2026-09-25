@@ -177,6 +177,42 @@ internal static class SequenceDiagnostics
         for (int s = 0; s < n; s++) { run = rms[s] < typical * .2 ? run + 1 : 0; if (run > best) { best = run; bestAt = s - run + 1; } }
         return (best * 5, bestAt * 5);
     }
+    // Sliders: the coloured fill runs right up to the dot with no gap, and the track ends where the dot's
+    // travel does. Renders sliders at several values and reads the pixels along the track. slider-test.png.
+    internal static void Sliders()
+    {
+        Directory.CreateDirectory(Storage.Root);
+        var accent = ((SolidColorBrush)Application.Current.FindResource("Accent")).Color;
+        var track = ((SolidColorBrush)Application.Current.FindResource("Outline")).Color;
+        var values = new[] { 0, .3, .7, 1 };
+        var panel = new System.Windows.Controls.StackPanel { Width = 240, Background = new SolidColorBrush(Color.FromRgb(17, 20, 25)) };
+        foreach (double v in values) panel.Children.Add(new System.Windows.Controls.Slider { Minimum = 0, Maximum = 1, Value = v, Width = 200, Margin = new Thickness(20, 4, 20, 4) });
+        panel.Measure(new Size(240, 400)); panel.Arrange(new Rect(panel.DesiredSize)); panel.UpdateLayout();
+        int w = (int)panel.ActualWidth, h = (int)panel.ActualHeight;
+        var bitmap = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32); bitmap.Render(panel);
+        var pixels = new byte[w * h * 4]; bitmap.CopyPixels(pixels, w * 4, 0);
+        var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var file = File.Create(Path.Combine(Storage.Root, "slider-test.png"))) png.Save(file);
+        bool Like(int x, int y, Color c) { int i = (y * w + x) * 4; return Math.Abs(pixels[i + 2] - c.R) < 24 && Math.Abs(pixels[i + 1] - c.G) < 24 && Math.Abs(pixels[i] - c.B) < 24; }
+        var lines = new List<string>(); bool ok = true;
+        for (int s = 0; s < values.Length; s++)
+        {
+            var slider = (System.Windows.Controls.Slider)panel.Children[s];
+            var at = slider.TranslatePoint(new Point(0, slider.ActualHeight / 2), panel);
+            int y = (int)at.Y, left = (int)at.X, right = left + (int)slider.ActualWidth - 1;
+            double dot = left + 13 + values[s] * (slider.ActualWidth - 26);
+            // Along the middle of the track: accent from the track's start to the dot, then grey to its end.
+            int firstAccent = Enumerable.Range(left, right - left + 1).FirstOrDefault(x => Like(x, y, accent), -1);
+            int lastAccent = Enumerable.Range(left, right - left + 1).LastOrDefault(x => Like(x, y, accent), -1);
+            bool gap = Enumerable.Range(Math.Max(firstAccent, 0), Math.Max(0, lastAccent - firstAccent)).Any(x => !Like(x, y, accent));
+            bool greyPastEnds = Enumerable.Range(left, 6).Any(x => Like(x, y, track)) || Enumerable.Range(right - 5, 6).Any(x => Like(x, y, track));
+            bool fine = !gap && !greyPastEnds && Math.Abs(lastAccent - (dot + 6)) <= 2;
+            ok &= fine;
+            lines.Add($"{values[s]:0.0}: accent {firstAccent - left}..{lastAccent - left} px, dot centre {dot - left:0} px, gap {gap}, track past the ends {greyPastEnds} → {(fine ? "PASS" : "FAIL")}");
+        }
+        File.WriteAllLines(Path.Combine(Storage.Root, "slider-test.txt"), lines);
+        if (!ok) throw new Exception("FAILED: sliders don't line up with their dot\n" + string.Join("\n", lines));
+    }
     private static double Tone(byte[] pcm, double hz)
     {
         double re = 0, im = 0; int n = pcm.Length / 2;
