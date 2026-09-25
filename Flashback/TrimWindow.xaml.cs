@@ -81,7 +81,8 @@ public partial class TrimWindow : Window
         Closed += (_, _) => { closed = true; OverlayView.CloseVideos(); OverlayRenderer.ClearCaches(); };
         // The font list takes a moment to gather; have it ready before the first text is added.
         _ = Task.Run(FontChoices);
-        IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0) clock.Start(); };
+        IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0 && !playersReleased) clock.Start(); };
+        InitBackground();
     }
     internal string SourcePath => source;
     internal bool LoadClip(string path, bool confirmChanges = true, bool offerRecovery = true)
@@ -91,7 +92,7 @@ public partial class TrimWindow : Window
         var imported=TrimImport.Read(new[] { path });
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
         if (confirmChanges && !ConfirmLeave("Save your changes to this clip first?")) return false;
-        if(!FlushProject()) return false; if (!confirmChanges && source.Length>0) TrimRecovery.Forget(source); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
+        if(!FlushProject()) return false; if (!confirmChanges && source.Length>0) TrimRecovery.Forget(source); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); playersReleased=false; pausedInBackground=false; source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; Player.SpeedRatio=PreviewRate;
