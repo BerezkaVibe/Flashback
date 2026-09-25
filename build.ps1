@@ -1,4 +1,6 @@
-param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.3')
+# -FfmpegLibs: the bin folder of an FFmpeg 6.1 LGPL shared build (avcodec-60.dll and friends) for the FFmpeg
+# preview player. Without it the editor keeps using the Windows player.
+param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.3', [string]$FfmpegLibs = '')
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $env:DOTNET_CLI_HOME = Join-Path $projectRoot '.dotnet-home'
@@ -16,6 +18,11 @@ Copy-Item -LiteralPath (Join-Path $projectRoot '.packages/microsoft.netcore.app.
 Copy-Item -LiteralPath (Join-Path $projectRoot '.packages/microsoft.windowsdesktop.app.runtime.win-x64/8.0.31/LICENSE') -Destination (Join-Path $projectRoot 'licenses/WindowsDesktop-LICENSE.txt')
 New-Item -ItemType Directory -Force (Join-Path $destination 'tools') | Out-Null
 Copy-Item -LiteralPath $FfmpegPath -Destination (Join-Path $destination 'tools/ffmpeg.exe')
+if ($FfmpegLibs -ne '') {
+    if (-not (Test-Path -LiteralPath (Join-Path $FfmpegLibs 'avcodec-60.dll'))) { throw 'FfmpegLibs must be the bin folder of an FFmpeg 6.1 LGPL shared build (avcodec-60.dll).' }
+    New-Item -ItemType Directory -Force (Join-Path $destination 'ffmpeg') | Out-Null
+    Copy-Item -Path (Join-Path $FfmpegLibs '*.dll') -Destination (Join-Path $destination 'ffmpeg')
+} else { Write-Warning 'No -FfmpegLibs: the FFmpeg preview player is left out and the editor uses the Windows player.' }
 foreach ($file in @('README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'VALIDATION.md')) { Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $destination }
 if (Test-Path (Join-Path $projectRoot 'licenses')) { Copy-Item -LiteralPath (Join-Path $projectRoot 'licenses') -Destination $destination -Recurse -Force }
 New-Item -ItemType Directory -Force (Join-Path $projectRoot 'dist') | Out-Null

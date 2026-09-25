@@ -101,6 +101,7 @@
       <CheckBox x:Name="WaveformsCheck" Content="Audio waveforms in the editor" Click="PerformanceToggle_Click" ToolTip="Off: the audio lanes still work, without reading the whole soundtrack to draw them"/>
       <CheckBox x:Name="PreviewEffectsCheck" Content="Shadows and animations in the editor preview" Click="PerformanceToggle_Click" ToolTip="Off: text and pictures show without shadows or entrance animations while editing. Exports still include them."/>
       <CheckBox x:Name="AnimationsCheck" Content="Interface animations" Click="PerformanceToggle_Click" ToolTip="The pulsing record light, sliding audio lanes and similar touches"/>
+      <CheckBox x:Name="FfmpegPreviewCheck" Content="FFmpeg preview player (experimental)" Margin="0,6,0,0" ToolTip="The editor previews with FFmpeg, decoding on the graphics card: exact frames, every audio track as it exports. Takes effect the next time the editor opens."/>
       <TextBlock Text="Exports" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
       <CheckBox x:Name="GpuExportCheck" Content="GPU-accelerated export" ToolTip="Decodes your clip on the graphics card while exporting. Turn off if exports fail or look wrong."/>
       <TextBlock Text="Exports decode on the graphics card: about 3.5× faster and a third of the CPU, even while a game is running." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,6"/>

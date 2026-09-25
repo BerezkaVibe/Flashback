@@ -47,6 +47,9 @@ public sealed class Settings
     // Each app playing sound is recorded on its own layer (up to AppMixSource.Slots, the rest together), so it
     // can be removed in the editor later. Off by default: it opens a capture stream per app while recording.
     public bool SeparateAppAudio { get; set; }
+    // The editor previews with the FFmpeg player (FFmpeg's libraries, decoding on the graphics card) instead of
+    // the Windows one. Experimental, so off by default; takes effect the next time the editor opens.
+    public bool FfmpegPreview { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public bool AppLayers => SeparateAppAudio && DesktopAudio && AppMixSource.Supported;
     public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }

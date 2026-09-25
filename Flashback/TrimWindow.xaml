@@ -12,7 +12,7 @@
     <Button x:Name="FullscreenButton" Content="&#xE740;" FontFamily="Segoe MDL2 Assets" FontSize="12" Width="24" Height="24" MinHeight="24" Padding="0" Margin="8,0,0,0" Background="Transparent" BorderBrush="Transparent" Foreground="{DynamicResource Muted}" Click="Fullscreen_Click" ToolTip="Full screen · F11" AutomationProperties.Name="Full screen"/>
    </StackPanel></Grid>
   <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <Border x:Name="PreviewFrame" Background="#000000" CornerRadius="8" ClipToBounds="True"><MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Close" ScrubbingEnabled="True" Stretch="Uniform" MediaOpened="Player_Opened" MediaEnded="Player_Ended" MediaFailed="Player_Failed"/></Border>
+   <Border x:Name="PreviewFrame" Background="#000000" CornerRadius="8" ClipToBounds="True"><Grid x:Name="PlayerHost"><MediaElement x:Name="WindowsPlayer" LoadedBehavior="Manual" UnloadedBehavior="Close" ScrubbingEnabled="True" Stretch="Uniform" MediaOpened="Player_Opened" MediaEnded="Player_Ended" MediaFailed="WindowsPlayer_Failed"/></Grid></Border>
    <Border x:Name="CensorOverlay" Background="#000000" CornerRadius="8" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="Blacked out in the export" Foreground="#9DA6B1" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
    <local:OverlayLayer x:Name="OverlayView" AutomationProperties.Name="Text and pictures"/>
    <local:CropOverlay x:Name="CropArea" Visibility="Collapsed" AutomationProperties.Name="Crop area"/>

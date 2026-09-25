@@ -297,8 +297,18 @@ public partial class TrimWindow
     private bool LaneMuted(int lane) => media.HasSeparateTracks && LaneVolume(lane) < .005;
     private void RefreshLaneStates()
     {
+        ApplyPreviewTracks();
         if (!media.HasSeparateTracks || Timeline.Lanes.Count != laneTracks.Length) return;
         Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i), Volume = LaneVolume(i) }).ToArray();
+    }
+    // The FFmpeg preview plays the separate tracks at their lanes' volumes, as the export mixes them (a muted
+    // app layer isn't heard); with every lane at 100% it plays the whole mix. The Windows player can only
+    // play the whole mix.
+    private void ApplyPreviewTracks()
+    {
+        if (Player?.Engine is not { } engine) return;
+        bool custom = media.HasSeparateTracks && laneTracks.Length > 0 && laneTracks.Any(t => Math.Abs(TrackVolume(t) - 1) > .005);
+        engine.SetTrackVolumes(custom ? laneTracks.Distinct().ToDictionary(t => t, TrackVolume) : null);
     }
     private void SetTrackVolume(int track, double volume)
     {
@@ -320,7 +330,7 @@ public partial class TrimWindow
         int track = laneTracks[lane]; var layer = Timeline.Lanes[lane];
         popupSound = null; var panel = SoundControls; panel.Children.Clear();
         panel.Children.Add(new TextBlock { Text = "♪ " + layer.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 2) });
-        var note = new TextBlock { Text = "Recorded on its own layer. Mute it to take it out of the export, or use the cut and volume tools on its row for just part of it. (The preview still plays everything.)", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+        var note = new TextBlock { Text = "Recorded on its own layer. Mute it to take it out of the export, or use the cut and volume tools on its row for just part of it." + (Player.UsesFfmpeg ? " The preview plays it as the export will." : " (The Windows preview player still plays everything; the FFmpeg one in Settings > Performance plays it as the export will.)"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
         note.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); panel.Children.Add(note);
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
         var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");

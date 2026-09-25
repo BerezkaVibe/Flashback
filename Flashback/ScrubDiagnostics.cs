@@ -119,18 +119,18 @@ internal static class ScrubDiagnostics
                 // Frame gaps count from here, not from before the plain pass above.
                 last = Stopwatch.GetTimestamp();
                 CompositionTarget.Rendering += tick;
-                string shown = Hash(trim.Player); int changes = 0; var sweep = Stopwatch.StartNew();
+                string shown = Hash(trim.Player.Visual); int changes = 0; var sweep = Stopwatch.StartNew();
                 while (sweep.Elapsed.TotalSeconds < 4)
                 {
                     double f = sweep.Elapsed.TotalSeconds / 4, x = x0 + (x1 - x0) * (f < .5 ? f * 2 : 2 - f * 2);
                     tl.MoveTo(x); await Task.Delay(8);
-                    var h = Hash(trim.Player); if (h != shown) { changes++; shown = h; }
+                    var h = Hash(trim.Player.Visual); if (h != shown) { changes++; shown = h; }
                 }
                 CompositionTarget.Rendering -= tick;
                 double cpuPct = (Process.GetCurrentProcess().TotalProcessorTime - cpu).TotalMilliseconds / sweep.Elapsed.TotalMilliseconds * 100;
                 var settle = Stopwatch.StartNew(); double settled = 0;
                 tl.MoveTo(x0 + (x1 - x0) * .37);
-                while (settle.ElapsedMilliseconds < 3000) { await Task.Delay(5); var h = Hash(trim.Player); if (h != shown) { shown = h; settled = settle.Elapsed.TotalMilliseconds; } }
+                while (settle.ElapsedMilliseconds < 3000) { await Task.Delay(5); var h = Hash(trim.Player.Visual); if (h != shown) { shown = h; settled = settle.Elapsed.TotalMilliseconds; } }
                 tl.ReleaseMouseCapture();
                 gaps.Sort();
                 report.Add($"[{label}] picture {changes / 4.0:0.#} updates/s, caught up {settled:0} ms after stop; " +

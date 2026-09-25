@@ -26,6 +26,9 @@
     <!-- Compact the large-object heap more eagerly; frame buffers live there. -->
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <!-- The FFmpeg preview player: FFmpeg 6.1 bindings (the libraries ship in the ffmpeg folder) and Direct3D 9Ex for WPF. -->
+    <PackageReference Include="FFmpeg.AutoGen" Version="6.1.0.1" />
+    <PackageReference Include="Vortice.Direct3D9" Version="3.8.3" />
   </ItemGroup>
 </Project>
 

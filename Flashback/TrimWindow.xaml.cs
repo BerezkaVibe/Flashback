@@ -40,6 +40,7 @@ public partial class TrimWindow : Window
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
         InitializeComponent(); WindowTheme.Attach(this); previewEnabled = !renderOnly;
+        Player = CreatePlayer();
         LoadKeys();
         Activated += (_, _) => LoadKeys();
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
@@ -244,10 +245,31 @@ public partial class TrimWindow : Window
     private void Pause() { if (freezing is { } held) parkedHold = HoldAt(held.Part.At); Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
-    private void Player_Opened(object sender, RoutedEventArgs e) { Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
+    private void Player_Opened(object sender, RoutedEventArgs e) { ApplyPreviewTracks(); Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
-    private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
-    { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
+    private void WindowsPlayer_Failed(object sender, ExceptionRoutedEventArgs e) => PreviewFailed(e.ErrorException);
+    private void PreviewFailed(Exception error)
+    { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + error.Message; }
+    // The preview player: the Windows one, or the FFmpeg one when it's chosen in Settings > Performance and its
+    // libraries are there (the Windows one otherwise, with a note why).
+    internal PreviewPlayer Player { get; private set; }
+    internal static bool? UseFfmpegPreview;
+    private PreviewPlayer CreatePlayer()
+    {
+        bool wanted = previewEnabled && (UseFfmpegPreview ?? Storage.Load(out _).FfmpegPreview);
+        if (!wanted) return new PreviewPlayer(WindowsPlayer, null);
+        if (!FfmpegLibrary.Available)
+        {
+            Dispatcher.BeginInvoke(() => StatusLabel.Text = "The FFmpeg preview player's libraries aren't installed, so the Windows player is used. " + FfmpegLibrary.Error);
+            return new PreviewPlayer(WindowsPlayer, null);
+        }
+        var engine = new FfmpegPreviewPlayer();
+        engine.Opened += () => Player_Opened(this, new RoutedEventArgs());
+        engine.Ended += () => Player_Ended(this, new RoutedEventArgs());
+        engine.Failed += PreviewFailed;
+        PlayerHost.Children.Add(engine.View);
+        return new PreviewPlayer(WindowsPlayer, engine);
+    }
     // hold: start that far into the hold of a freeze at start (finished view).
     private void StartPlayback(double start, int section = -1, double hold = 0)
     {

@@ -213,6 +213,18 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--ffmpeg-engine-test"))
+        {
+            try { await FfmpegEngineDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--player-compare-test"))
+        {
+            try { await PlayerCompareDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--background-test"))
         {
             try { await BackgroundDiagnostics.RunAsync(); Shutdown(0); }
