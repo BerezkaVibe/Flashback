@@ -1,4 +1,4 @@
-# Flashback 0.9.1 for Windows
+# Flashback 0.9.2 for Windows
 
 A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding. Close with X to keep recording in the system tray; minimize normally to the taskbar.
 
@@ -6,6 +6,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Recent changes
 
+- **0.9.2**: Fixes exports that could occasionally get stuck forever when a video plays over the clip (picture-in-picture); an export that stops making progress is now also stopped and tried again. Zooms and videos with "Keep going through freezes" off now hold still in a freeze they end partway through, then go back to normal when they end.
 - **0.9.1**: Text, pictures, shapes, videos and zooms can start or stop partway through a freeze frame's hold: place them inside the hold in the finished-video view (or drag them in), turn a picture off halfway through a freeze, or zoom in on the frozen frame. Zooms and videos keep going through freezes by default (a zoom keeps zooming, a video keeps playing with its sound); untick "Keep going through freezes" to have them hold still with the picture. Moving a freeze takes the parts in its hold along. Full screen editing (F11, the button by the volume, or View > Full screen): the video fills the screen and a slim dock with the timeline and tools fades up when the pointer nears the bottom; Esc leaves. Videos over the clip get "Fit to video length", so the whole file plays. The preview carries on smoothly after a freeze instead of restarting the video.
 - **0.9.0** (released together with 0.9.1): A finished-video view for the timeline: the small swap icon beside the video track switches from the whole recording to the video as it will export, with sections in play order, slowed and sped-up parts at their real length, and freeze frames as highlighted holds (drag the end slit to change how long one holds). Everything slides with its footage when holds and speed parts change, music included. Music and sounds get their own speed (0.25× to 4×), with or without keeping their pitch, or can match the speed of the part under them, and can start partway into a freeze's hold. The preview plays music where the export does. A preview volume slider (top right of the editor) goes from 100%, the usual level, up to 200%. Tools put themselves away after placing a part, so a stray click doesn't start another. Fixes: a short gap in the sound where a slowed or sped-up part meets normal speed (in the export, and less of a skip in the preview), sliders whose coloured fill stopped short of the dot, and Compress leaving out freeze frames.
 - **0.8.3**: Much faster exports: text, pictures and shapes are prepared in parallel and remembered, so exporting again after small changes skips most of the wait; busy exports run nearly twice as fast. Dragging the playhead keeps up with the cursor on big edits. Fixes: large edits failing to export, freeze frames inside zooms holding too long, a freeze with an inset video's sound failing to export, opening another video keeping the last one's freezes and music, pasting freeze frames, arrow nudges on keyframed items, joined clips keeping separate desktop and microphone tracks.
@@ -28,7 +29,7 @@ A portable replay recorder using NVIDIA NVENC or AMD AMF hardware H.264 encoding
 
 ## Start and save
 
-1. Quit any older Flashback from its tray menu. Run `Flashback-0.9.1-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
+1. Quit any older Flashback from its tray menu. Run `Flashback-0.9.2-Setup.exe`, choose Install, then Launch. After installation, open Flashback from your Start menu or desktop shortcut. No separate .NET installation is needed. Uninstall from Windows Settings > Apps; your clips and settings are kept.
 2. Open the bottom-left gear. Under Video & display choose the display, replay length, resolution, quality and FPS. Under Storage & startup choose where clips are saved. Click Apply settings.
 3. Press Start recording to start buffering; it becomes a Recording button while active. Pausing clears temporary replay history, not saved clips.
 4. Press the save icon/button or the save hotkey. A five-minute setting is a maximum: if you have recorded less, the clip contains the available footage. The first completed segment takes about two seconds.

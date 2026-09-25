@@ -158,7 +158,23 @@ internal static class ExportServices
     // about 13% more CPU in all; more add little. Exports run below normal priority, so games come first.
     internal static int FilterThreads = Math.Clamp(Environment.ProcessorCount / 3, 1, 4);
 
+    // How long ffmpeg may go without getting any further before it's taken to be stuck.
+    internal static TimeSpan StallLimit = TimeSpan.FromMinutes(2);
     internal static async Task RunAsync(IEnumerable<string> arguments, CancellationToken token, IProgress<double>? progress = null, double duration = 1, string? workingDirectory = null)
+    {
+        // ffmpeg can very occasionally get stuck for good; a stuck run is stopped and tried once more.
+        var list = arguments.ToList();
+        for (int attempt = 0; ; attempt++)
+        {
+            if (await RunOnceAsync(list, token, progress, duration, workingDirectory)) return;
+            if (attempt == 1) throw new IOException("The export stopped making progress, so it was stopped. Try exporting again; if it keeps happening, copy this error and report it.");
+            // The half-written output goes, so the second try can write it again.
+            string last = list[^1];
+            try { string path = Path.IsPathRooted(last) || workingDirectory == null ? last : Path.Combine(workingDirectory, last); if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+    // False when it got stuck and was stopped.
+    private static async Task<bool> RunOnceAsync(IReadOnlyList<string> arguments, CancellationToken token, IProgress<double>? progress, double duration, string? workingDirectory)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = workingDirectory ?? "" };
@@ -168,17 +184,38 @@ internal static class ExportServices
         using var process = Process.Start(info) ?? throw new IOException("Could not start the exporter.");
         job.Add(process); process.PriorityClass = ProcessPriorityClass.BelowNormal;
         var errors = process.StandardError.ReadToEndAsync();
+        long reached = -1, moved = Stopwatch.GetTimestamp();
         var output = Task.Run(async () => {
             while (await process.StandardOutput.ReadLineAsync() is { } line)
                 if (line.StartsWith("out_time_us=") && long.TryParse(line[12..], out var time))
+                {
+                    if (time > Interlocked.Read(ref reached)) { Interlocked.Exchange(ref reached, time); Interlocked.Exchange(ref moved, Stopwatch.GetTimestamp()); }
                     progress?.Report(Math.Clamp(time / 1_000_000d / duration, 0, .99));
+                }
+        });
+        bool stuck = false;
+        using var done = new CancellationTokenSource();
+        var watchdog = Task.Run(async () =>
+        {
+            try
+            {
+                while (!done.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), done.Token);
+                    if (Stopwatch.GetElapsedTime(Interlocked.Read(ref moved)) > StallLimit) { stuck = true; try { process.Kill(true); } catch { } return; }
+                }
+            }
+            catch (OperationCanceledException) { }
         });
         try { await process.WaitForExitAsync(token); }
-        catch { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); await output; await errors; throw; }
+        catch { done.Cancel(); if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); await output; await errors; await watchdog; throw; }
+        done.Cancel(); await watchdog;
         await output; string error = await errors;
         try { LastProcessCpu = process.TotalProcessorTime; } catch { }
         token.ThrowIfCancellationRequested();
+        if (stuck) return false;
         if (process.ExitCode != 0) throw new IOException("Export failed: " + error);
+        return true;
     }
 
     // A zoom ramp that's already all the way in: a zoom held still in a hold is drawn as one at its level.
@@ -344,25 +381,32 @@ internal static class ExportServices
                                 double from = Math.Max(0, pieceStart - item.Start), to = Math.Min(item.Length, pieceEnd - item.Start), lead = Math.Max(0, item.Start - pieceStart);
                                 if (place.Still) { from = place.From - place.Start; to = from + (place.To - place.From); lead = place.From; }
                                 if (to - from <= .01) { step--; continue; }
-                                int input = AddInput("-ss", Number(item.VideoOffset + from), "-t", Number(place.Still ? frame * 2 : to - from), "-i", item.VideoPath);
-                                int mask = AddInput("-loop", "1", "-t", Number(lead + to - from + 1), "-i", pip.Mask);
+                                // (Held still, a moment's worth is read: a couple of frames straight after a seek can come out empty.)
+                                int input = AddInput("-ss", Number(item.VideoOffset + from), "-t", Number(place.Still ? .5 : to - from), "-i", item.VideoPath);
+                                // The mask and frame are single pictures that the filters repeat for every frame. Read as
+                                // looping inputs they flooded ffmpeg with frames long before the pieces they belong to
+                                // were reached, which sometimes left an export stuck for good.
+                                int mask = AddInput("-i", pip.Mask);
                                 string holdStill = place.Still ? $",trim=end_frame=1,tpad=stop_mode=clone:stop_duration={Number(to - from)}" : "";
                                 var chain = new List<string> { $"[{input}:v:0]setpts=PTS-STARTPTS{holdStill},crop={pip.CropW}:{pip.CropH}:{pip.CropX}:{pip.CropY},scale={pip.Width}:{pip.Height},format=rgba[{next}v]",
                                     $"[{mask}:v]format=rgba,alphaextract[{next}k]", $"[{next}v][{next}k]alphamerge[{next}m]" };
                                 string framed = $"{next}m";
                                 if (pip.Border is { } border)
                                 {
-                                    int borderInput = AddInput("-loop", "1", "-t", Number(lead + to - from + 1), "-i", border);
+                                    int borderInput = AddInput("-i", border);
                                     chain.Add($"[{framed}]pad={pip.Width + pip.Pad * 2}:{pip.Height + pip.Pad * 2}:{pip.Pad}:{pip.Pad}:color=0x00000000[{next}q]");
-                                    chain.Add($"[{borderInput}:v]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=pass[{next}b]");
+                                    chain.Add($"[{borderInput}:v]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=repeat[{next}b]");
                                     framed = $"{next}b";
                                 }
                                 double angle = item.Rotation * Math.PI / 180;
                                 string turn = Math.Abs(angle) > 1e-4 ? $",rotate=a={Number(angle)}:ow=rotw({Number(angle)}):oh=roth({Number(angle)}):c=0x00000000" : "";
                                 string fade = item.Opacity < .999 ? $",colorchannelmixer=aa={Number(item.Opacity)}" : "";
                                 string wait = lead > 1e-3 ? $",tpad=start_duration={Number(lead)}:color=0x00000000" : "";
-                                chain.Add($"[{framed}]null{turn}{fade}{wait}[{next}p]");
-                                chain.Add($"[{label}][{next}p]overlay=x={Number(pip.CenterX)}-overlay_w/2:y={Number(pip.CenterY)}-overlay_h/2:eof_action=pass:enable='gte(t,{Number(lead)})*lt(t,{Number(lead + to - from)})'[{next}]");
+                                // No do-nothing "null" steps: with them this ffmpeg sometimes stalled for good.
+                                string placed = turn + fade + wait;
+                                string picture = placed.Length > 0 ? $"{next}p" : framed;
+                                if (placed.Length > 0) chain.Add($"[{framed}]{placed[1..]}[{next}p]");
+                                chain.Add($"[{label}][{picture}]overlay=x={Number(pip.CenterX)}-overlay_w/2:y={Number(pip.CenterY)}-overlay_h/2:eof_action=pass:enable='gte(t,{Number(lead)})*lt(t,{Number(lead + to - from)})'[{next}]");
                                 filters.AddRange(chain);
                                 // Its sound plays wherever it plays, holds it keeps going through included.
                                 if (audio && pip.HasSound && item.VideoVolume > 0 && !place.Still)
@@ -397,7 +441,9 @@ internal static class ExportServices
                     if (zoom.Length > 0) { filters.Add($"[{label}]{zoom[1..]}[z{i}]"); label = $"z{i}"; }
                     Overlay(false);
                     string tail = slowVideo;
-                    filters.Add($"[{label}]{(tail.Length > 0 ? tail[1..] : "null")}[v{i}]"); labels += $"[v{i}]";
+                    // Straight into the join when there's nothing more to do (no do-nothing "null" step).
+                    if (tail.Length > 0) { filters.Add($"[{label}]{tail[1..]}[v{i}]"); labels += $"[v{i}]"; }
+                    else labels += $"[{label}]";
                 }
                 // A picture-in-picture video's own sound joins this piece's sound before any speed change.
                 string WithPip(string piece) => pipSounds.Count == 0 ? piece : $"{piece}[{i}pa];[{i}pa]{string.Concat(pipSounds)}amix=inputs={pipSounds.Count + 1}:duration=first:normalize=0";

@@ -1,4 +1,4 @@
-param([string]$Version='0.9.1')
+param([string]$Version='0.9.2')
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $published=Join-Path $root "artifacts/Flashback-$Version"
