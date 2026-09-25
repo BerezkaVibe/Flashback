@@ -138,7 +138,7 @@
      </Popup>
      <Button x:Name="ZoomToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE71E;" Click="ZoomTool_Click" ToolTip="Zoom: click two spots to zoom in on that part" AutomationProperties.Name="Zoom tool"/>
       <Button x:Name="TextToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8D2;" Click="TextTool_Click" ToolTip="Text: click two spots to add a caption for that part" AutomationProperties.Name="Text tool"/>
-      <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture or video: click two spots to add a picture, GIF or video for that part" AutomationProperties.Name="Picture or video tool"/>
+      <Button x:Name="ImageToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xE8B9;" Click="ImageTool_Click" ToolTip="Picture, video or sound: click two spots to add a picture, GIF, video or music file for that part" AutomationProperties.Name="Picture, video or sound tool"/>
       <Button x:Name="ShapeToolButton" Style="{StaticResource IconButton}" Width="30" Height="26" MinHeight="26" FontSize="13" Content="&#xEB3C;" Click="ShapeTool_Click" ToolTip="Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area" AutomationProperties.Name="Shape tool"/>
       <Button x:Name="DrawToolButton" Style="{StaticResource IconButton}" Width="40" Height="26" MinHeight="26" Click="DrawTool_Click" AutomationProperties.Name="Draw tool">
        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

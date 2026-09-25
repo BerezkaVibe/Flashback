@@ -83,6 +83,22 @@ internal static class SequenceDiagnostics
         var inside = holdMap.Spans(M(2, 1), M(2, 2));
         Check(inside.Count == 1 && Near(inside[0].From, 3) && Near(inside[0].To, 4) && Near(holdMap.Spans(M(1), M(2, 1.5))[0].To, 3.5), "The finished video shows a part just where it is in the hold");
 
+        // ---- A video's own sound, unlinked into a sound of its own ----
+        // On the first map: 4-5 s plays at half speed (over 2 s); the freeze at 1 s holds 2 s (6-8 s finished).
+        var slowPip = new OverlayItem { Kind = OverlayKind.Video, Start = 4, End = 5, VideoPath = "Inset.mp4", VideoOffset = 1.5, VideoVolume = .8 };
+        var slowPipSound = SoundItem.FromVideo(slowPip, map, 2);
+        Check(slowPipSound is { Start: 4, Row: 2, Offset: 1.5, Volume: .8, Hold: 0, Path: "Inset.mp4" } && Near(slowPipSound.Length, 2) && Near(slowPipSound.Speed, .5),
+            "An unlinked video's sound starts where the video does, from the same place in its file, as loud, and slows with a slowed part");
+        var heldPip = slowPip with { Start = 1, End = 2, StartHold = .5, ThroughFreezes = true };
+        var heldPipSound = SoundItem.FromVideo(heldPip, map, 0);
+        Check(heldPipSound is { Hold: .5, Speed: 1 } && Near(heldPipSound.Length, 2.5) && Near(map.ToOutput(heldPipSound.Start) + heldPipSound.Hold, map.ToOutput(heldPip.From(), false)),
+            "A video's sound unlinked partway into a hold starts there and plays on through it at normal speed");
+        var stillPip = slowPip with { Start = .5, End = 1.5, ThroughFreezes = false };
+        Check(SoundItem.FromVideo(stillPip, map, 0) is { Speed: 1 } spanning && Near(spanning.Length, 3),
+            "A video's sound unlinked across a freeze keeps its normal speed and carries on through the hold");
+        Check(!new OverlayItem().SoundUnlinked && !JsonSerializer.Deserialize<OverlayItem>("{\"Kind\":3,\"Start\":1,\"End\":2}", new JsonSerializerOptions { IncludeFields = true })!.SoundUnlinked,
+            "Videos saved before keep their sound linked");
+
         // ---- Everything slides with the video ----
         var folder = Path.Combine(Storage.Root, "sequence"); Directory.CreateDirectory(folder);
         var source = Path.Combine(folder, "Source.mp4");

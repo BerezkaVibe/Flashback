@@ -408,8 +408,9 @@ internal static class ExportServices
                                 if (placed.Length > 0) chain.Add($"[{framed}]{placed[1..]}[{next}p]");
                                 chain.Add($"[{label}][{picture}]overlay=x={Number(pip.CenterX)}-overlay_w/2:y={Number(pip.CenterY)}-overlay_h/2:eof_action=pass:enable='gte(t,{Number(lead)})*lt(t,{Number(lead + to - from)})'[{next}]");
                                 filters.AddRange(chain);
-                                // Its sound plays wherever it plays, holds it keeps going through included.
-                                if (audio && pip.HasSound && item.VideoVolume > 0 && !place.Still)
+                                // Its sound plays wherever it plays, holds it keeps going through included (unless it
+                                // was unlinked into a sound of its own, which is mixed with the other sounds).
+                                if (audio && pip.HasSound && item.VideoVolume > 0 && !item.SoundUnlinked && !place.Still)
                                 {
                                     filters.Add($"[{input}:a:0]asetpts=PTS-STARTPTS,volume={Number(item.VideoVolume)},adelay=delays={Number(lead * 1000)}:all=1[{next}s]");
                                     pipSounds.Add($"[{next}s]");

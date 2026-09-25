@@ -32,6 +32,7 @@ public partial class TrimWindow
         Timeline.SoundMoved += (old, next) => { ReplaceSound(old, next); FocusPart(next); };
         Timeline.SoundEditFinished += () => { UpdateExportHint(); UpdateSummary(); };
         Timeline.LanesExpandedChanged += ShowAudioTools;
+        Timeline.VideoHasSound = VideoHasSound; Timeline.VideoSoundPicked += OpenVideoSoundPopup;
         VolumeTimingHost.Children.Add(TimingEditor(() => popupVolume is { } v && Timeline.VolumeRegions.Contains(v) ? v : null, out volumeTiming));
         foreach (double value in VolumeChoiceValues)
         {
@@ -247,6 +248,76 @@ public partial class TrimWindow
         remove.Click += (_, _) => { if (popupSound is { } s) RemoveSound(s); };
         panel.Children.Add(remove);
         SoundPopup.IsOpen = true;
+    }
+
+    // ---- Videos' own sound ----
+    // A video over the clip that has sound shows it on the audio timeline, linked to the video. Its pop-up
+    // sets how loud it is, or unlinks it into a sound of its own (to move, trim, fade or speed up apart from
+    // the video); the video then plays silent.
+    private readonly Dictionary<string, bool> videosWithSound = new(StringComparer.OrdinalIgnoreCase);
+    private bool VideoHasSound(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        if (videosWithSound.TryGetValue(path, out bool has)) return has;
+        try { has = File.Exists(path) && ClipMedia.Read(path).HasAudio; } catch { has = false; }
+        return videosWithSound[path] = has;
+    }
+    private void OpenVideoSoundPopup(int index)
+    {
+        if (exportCancellation != null || index < 0 || index >= Timeline.Overlays.Count || Timeline.Overlays[index] is not { Kind: OverlayKind.Video } video) return;
+        FocusPart(video); popupSound = null;
+        string path = video.VideoPath;
+        // The video as it is now, if it's still there (edits replace it at the same place in the list).
+        OverlayItem? Current() => index < Timeline.Overlays.Count && Timeline.Overlays[index] is { Kind: OverlayKind.Video, SoundUnlinked: false } o && o.VideoPath == path ? o : null;
+        var panel = SoundControls; panel.Children.Clear();
+        string control = ""; long lastChange = 0;
+        void Edit(string name, Func<OverlayItem, OverlayItem> change)
+        {
+            if (Current() is not { } current) return;
+            if (name != control || Stopwatch.GetElapsedTime(lastChange).TotalSeconds > 1.2) Snapshot();
+            control = name; lastChange = Stopwatch.GetTimestamp();
+            var next = change(current).Validated(); ReplaceOverlay(index, next); FocusPart(next); UpdateExportHint();
+            if (Timeline.SelectedOverlay == index) LoadOverlayUi();
+        }
+        panel.Children.Add(new TextBlock { Text = "♪ " + video.Label, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 2) });
+        var note = new TextBlock { Text = "The video's own sound. It's linked to the video, so it moves and trims with it.", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+        note.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); panel.Children.Add(note);
+        var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+        var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+        static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
+        var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = Level(video.VideoVolume * 100) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+        var slider = new Slider { Minimum = 0, Maximum = 200, Value = video.VideoVolume * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, ToolTip = "How loud the video's sound is in the export (the preview plays it up to 100%)" };
+        slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); Edit("volume", o => o with { VideoVolume = Math.Round(e.NewValue) / 100 }); };
+        DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
+        row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);
+        Button AddButton(string text, string tip, Action click)
+        {
+            var b = new Button { Content = text, FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch, ToolTip = tip };
+            b.SetResourceReference(StyleProperty, "TrimButton"); b.Click += (_, _) => click(); panel.Children.Add(b); return b;
+        }
+        AddButton("Unlink from the video", "Make it a sound of its own: move it, trim it, fade it or change its speed apart from the video", () => UnlinkVideoSound(index, path));
+        var settings = AddButton("Video settings", "Open the video's own settings", () => { SoundPopup.IsOpen = false; OpenOverlay(index); });
+        settings.Background = Brushes.Transparent; settings.BorderBrush = Brushes.Transparent;
+        SoundPopup.IsOpen = true;
+    }
+    private void UnlinkVideoSound(int index, string path)
+    {
+        if (index >= Timeline.Overlays.Count || Timeline.Overlays[index] is not { Kind: OverlayKind.Video, SoundUnlinked: false } video || video.VideoPath != path) return;
+        // It starts where the video does and plays as long as the video shows, so it's where it was; the row is
+        // free where it plays.
+        var map = Timeline.Map;
+        double at = map.ToOutput(video.From(), false), length = map.Spans(video.From(), video.To()).Sum(s => s.To - s.From);
+        int row = 0;
+        while (Timeline.Sounds.Any(s => s.Row == row && map.ToOutput(s.Start) + s.Hold < at + length - 1e-9 && map.ToOutput(s.Start) + s.Hold + s.Length > at + 1e-9)) row++;
+        if (SoundItem.FromVideo(video, map, row) is not { } sound) { StatusLabel.Text = "That video isn't in the finished video, so there's no sound to unlink."; return; }
+        Snapshot();
+        ReplaceOverlay(index, video with { SoundUnlinked = true });
+        SetSounds(Timeline.Sounds.Append(sound).ToArray());
+        if (Timeline.SelectedOverlay == index) LoadOverlayUi();
+        UpdateExportHint(); UpdateSummary(); ProjectChanged();
+        OpenSoundPopup(sound);
+        StatusLabel.Text = $"Unlinked the sound of {video.Label}. It's a sound of its own now: move it, trim it, fade it or change its speed; the video plays silent."
+            + (Math.Abs(sound.Speed - 1) > 1e-9 ? $" It plays at {sound.Speed:0.##}× to stay with the video's speed." : "");
     }
 
     // ---- Preview ----

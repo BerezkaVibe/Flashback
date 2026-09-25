@@ -210,7 +210,46 @@ internal sealed class TrimTimeline : FrameworkElement
     private readonly List<(Rect Tag, VolumeRegion Part)> volumeTags = new();
     private const double SoundHeight = 18;
     private int SoundRows => sounds.Count == 0 ? 0 : sounds.Max(s => s.Row) + 1;
-    private double SoundTop(int row) => LanesTop + lanes.Count * (LaneHeight + LaneGap) + row * (SoundHeight + LaneGap);
+    private double SoundTop(int row) => VideoSoundTop(VideoSoundRows + row);
+    // Videos over the clip that have sound show it on their own rows between the lanes and the sounds, linked
+    // to the video: the bar is where the video plays, and dragging it (or its ends) moves the video. A click
+    // opens its volume and Unlink; unlinked, it becomes a sound of its own and leaves these rows.
+    private Func<string, bool> videoHasSound = _ => false;
+    internal Func<string, bool> VideoHasSound { get => videoHasSound; set { videoHasSound = value; overlayVersion++; Height = PreferredHeight; InvalidateVisual(); } }
+    internal event Action<int>? VideoSoundPicked;
+    private readonly List<(int Index, int Row)> videoSounds = new();
+    private int videoSoundsVersion = -1, videoSoundRows;
+    // Which videos have a linked sound, and on which row (rows are packed so their bars don't overlap).
+    private IReadOnlyList<(int Index, int Row)> VideoSounds
+    {
+        get
+        {
+            if (videoSoundsVersion == overlayVersion) return videoSounds;
+            videoSoundsVersion = overlayVersion; videoSounds.Clear();
+            var rows = new List<List<OverlayItem>>();
+            foreach (int i in Enumerable.Range(0, overlays.Count).Where(i => overlays[i] is { Kind: OverlayKind.Video, SoundUnlinked: false } o && videoHasSound(o.VideoPath))
+                .OrderBy(i => overlays[i].Start).ThenBy(i => overlays[i].StartHold))
+            {
+                var o = overlays[i];
+                int row = rows.FindIndex(r => !r.Any(x => x.Overlaps(o)));
+                if (row < 0) { row = rows.Count; rows.Add(new List<OverlayItem>()); }
+                rows[row].Add(o); videoSounds.Add((i, row));
+            }
+            videoSoundRows = rows.Count;
+            return videoSounds;
+        }
+    }
+    private int VideoSoundRows { get { _ = VideoSounds; return videoSoundRows; } }
+    private double VideoSoundTop(int row) => LanesTop + lanes.Count * (LaneHeight + LaneGap) + row * (SoundHeight + LaneGap);
+    private IEnumerable<Rect> VideoSoundRects(OverlayItem o, int row) => XSpans(o.From(), o.To()).Select(s => new Rect(s.X0, VideoSoundTop(row), Math.Max(3, s.X1 - s.X0), SoundHeight));
+    // The linked sound under a point: its video's index and the bar that was hit.
+    private (int Index, Rect Rect) VideoSoundAt(Point p)
+    {
+        if (!lanesExpanded) return (-1, Rect.Empty);
+        foreach (var (i, row) in VideoSounds.Reverse())
+            foreach (var r in VideoSoundRects(overlays[i], row)) if (Rect.Inflate(r, 2, 1).Contains(p)) return (i, r);
+        return (-1, Rect.Empty);
+    }
     // Where a sound plays in view time: from its anchor (plus any hold offset) for its real length.
     private (double From, double To) SoundView(SoundItem s) { if (!Mapped) return (s.Start, s.End); double at = sequence!.ToOutput(s.Start) + s.Hold; return (at, at + s.Length); }
     private Rect SoundRect(SoundItem s) { var (a, b) = SoundView(s); double x = VX(a); return new Rect(x, SoundTop(s.Row), Math.Max(3, VX(b) - x), SoundHeight); }
@@ -243,7 +282,8 @@ internal sealed class TrimTimeline : FrameworkElement
         set
         {
             // Style edits (color, size, rotation…) don't change the timeline, so it isn't redrawn for them.
-            bool same = value.Count == overlays.Count && value.Zip(overlays).All(p => ReferenceEquals(p.First, p.Second) || (p.First.Start == p.Second.Start && p.First.End == p.Second.End && p.First.Layer == p.Second.Layer && p.First.Kind == p.Second.Kind && p.First.Label == p.Second.Label));
+            bool same = value.Count == overlays.Count && value.Zip(overlays).All(p => ReferenceEquals(p.First, p.Second) || (p.First.Start == p.Second.Start && p.First.End == p.Second.End && p.First.Layer == p.Second.Layer && p.First.Kind == p.Second.Kind && p.First.Label == p.Second.Label
+                && p.First.VideoVolume == p.Second.VideoVolume && p.First.SoundUnlinked == p.Second.SoundUnlinked));
             overlays = value;
             if (same) return;
             overlayVersion++; Height = PreferredHeight; InvalidateVisual();
@@ -414,6 +454,8 @@ internal sealed class TrimTimeline : FrameworkElement
     private double grabOffset;
     // The item being dragged: its index, its state before the drag and whether it has moved yet.
     private int dragOverlay = -1; private OverlayItem? dragOriginal; private bool overlayDragMoved;
+    // The drag began on the video's linked sound: it moves the video in time but leaves its layer alone.
+    private bool dragFromSound;
     private OverlayItem[] dragStartList = Array.Empty<OverlayItem>();
     private const double Inset = 20, TrackHeight = 32, LaneHeight = 24, LaneGap = 3, ScrollHeight = 6;
     private double LanesTop => TrackTop + TrackHeight + 4;
@@ -438,9 +480,9 @@ internal sealed class TrimTimeline : FrameworkElement
     private double LaneReveal { get => (double)GetValue(LaneRevealProperty); set => SetValue(LaneRevealProperty, value); }
     internal event Action? LanesToggleRequested, LanesExpandedChanged;
     private double LaneTop(int i) => LanesTop + i * (LaneHeight + LaneGap);
-    private double LanesSpan => lanes.Count * (LaneHeight + LaneGap) + SoundRows * (SoundHeight + LaneGap);
-    // The fold-away audio area holds the recorded lanes and any added sounds.
-    private bool HasAudioArea => lanes.Count > 0 || sounds.Count > 0;
+    private double LanesSpan => lanes.Count * (LaneHeight + LaneGap) + (VideoSoundRows + SoundRows) * (SoundHeight + LaneGap);
+    // The fold-away audio area holds the recorded lanes, videos' sounds and any added sounds.
+    private bool HasAudioArea => lanes.Count > 0 || sounds.Count > 0 || VideoSoundRows > 0;
     private double ScrollTop => LanesTop + LanesSpan * LaneReveal + 2;
     internal double PreferredHeight => Math.Max(56, ScrollTop + ScrollHeight + 4);
     private static readonly Brush Track = Brush("#252D36"), Kept = Brush("#456D5D"), Accent = Brush("#9CE2C1"), Ink = Brush("#EDF0F3"), Muted = Brush("#9DA6B1");
@@ -793,9 +835,25 @@ internal sealed class TrimTimeline : FrameworkElement
             volumeTags.Add((tag, v));
         }
     }
-    // Sounds: green bars on their own rows under the lanes, with fade-in and fade-out wedges.
+    // Sounds: green bars on their own rows under the lanes, with fade-in and fade-out wedges. Videos' linked
+    // sounds come first, in blue like the videos, dashed when muted.
+    private static readonly Brush VideoSoundFill = Brush("#5A60A5FA");
     private void DrawSounds(DrawingContext dc, double width, double dpi)
     {
+        for (int r = 0; r < VideoSoundRows; r++) dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, VideoSoundTop(r), width, SoundHeight), 4, 4);
+        foreach (var (i, row) in VideoSounds)
+        {
+            var o = overlays[i]; bool focused = IsFocused(o) || i == selectedOverlay, muted = o.VideoVolume < .005;
+            var edge = new Pen(focused ? Ink : MediaFill, focused ? 1.5 : 1) { DashStyle = muted && !focused ? DashStyles.Dash : null };
+            foreach (var rect in VideoSoundRects(o, row))
+            {
+                dc.DrawRoundedRectangle(VideoSoundFill, edge, rect, 4, 4);
+                string level = muted ? " · muted" : Math.Abs(o.VideoVolume - 1) > .005 ? $" · {o.VideoVolume * 100:0}%" : "";
+                var label = Text("♪ " + o.Label + level, 10, Ink, dpi);
+                label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
+                if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
+            }
+        }
         for (int r = 0; r < SoundRows; r++) dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, SoundTop(r), width, SoundHeight), 4, 4);
         foreach (var s in sounds)
         {
@@ -1102,6 +1160,14 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         if (pendingCut == null && cutTags.FindIndex(t => t.Tag.Contains(point)) is int cutTag and >= 0) { CutTagClicked?.Invoke(cutTags[cutTag].Cut); e.Handled = true; return; }
         if (pendingCut == null && lanesExpanded && volumeTags.FindIndex(t => t.Tag.Contains(point)) is int volumeTag and >= 0) { VolumeTagClicked?.Invoke(volumeTags[volumeTag].Part); e.Handled = true; return; }
+        if (pendingCut == null && VideoSoundAt(point) is { Index: >= 0 } linked)
+        {
+            // Press on a video's sound: a click opens it, a drag moves (or trims) the video it's linked to.
+            var rect = linked.Rect;
+            drag = point.X - rect.Left <= 5 && rect.Width > 14 ? Drag.OverlayStart : rect.Right - point.X <= 5 && rect.Width > 14 ? Drag.OverlayEnd : Drag.OverlayMove;
+            dragOverlay = linked.Index; dragOriginal = overlays[linked.Index]; dragStartList = overlays.ToArray(); overlayDragMoved = false; dragFromSound = true; pressPoint = point;
+            CaptureMouse(); e.Handled = true; return;
+        }
         if (pendingCut == null && SoundAt(point) is { } sound)
         {
             // Press on a sound: a click opens it, a drag moves it (or its ends) and between rows.
@@ -1291,6 +1357,13 @@ internal sealed class TrimTimeline : FrameworkElement
             ToolTip = $"{hoverSound.Label} · click for volume and fades, drag to move, drag an end to trim · right-click removes";
             return;
         }
+        if (pendingCut == null && VideoSoundAt(p) is { Index: >= 0 } hoverLinked)
+        {
+            var rect = hoverLinked.Rect;
+            Cursor = rect.Width > 14 && (p.X - rect.Left <= 5 || rect.Right - p.X <= 5) ? Cursors.SizeWE : Cursors.SizeAll;
+            ToolTip = $"The sound of {overlays[hoverLinked.Index].Label}, linked to the video: dragging it moves the video too · click for its volume, or to unlink it";
+            return;
+        }
         if (pendingCut == null && OverlayAt(p) is int hoverItem and >= 0)
         {
             var rect = OverlayRect(overlays[hoverItem]);
@@ -1329,6 +1402,8 @@ internal sealed class TrimTimeline : FrameworkElement
         base.OnMouseRightButtonDown(e);
         if (pendingCut == null && OverlayAt(e.GetPosition(this)) is int item and >= 0) { OverlayRemoved?.Invoke(item); e.Handled = true; return; }
         if (pendingCut == null && SoundAt(e.GetPosition(this)) is { } sound) { SoundRemoved?.Invoke(sound); e.Handled = true; return; }
+        // A video's sound goes with its video, so right-click opens it (to mute or unlink it) rather than removing anything.
+        if (pendingCut == null && VideoSoundAt(e.GetPosition(this)) is { Index: >= 0 } linked) { VideoSoundPicked?.Invoke(linked.Index); e.Handled = true; return; }
         if (volumeMode && pendingCut == null)
         {
             var at = e.GetPosition(this); int lane = BandAt(at); double when = TimeAt(at.X);
@@ -1373,9 +1448,9 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         if (drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
         {
-            int picked = dragOverlay; bool moved = overlayDragMoved;
+            int picked = dragOverlay; bool moved = overlayDragMoved, fromSound = dragFromSound;
             ReleaseMouseCapture(); e.Handled = true;
-            if (!moved && picked >= 0) OverlayPicked?.Invoke(picked);
+            if (!moved && picked >= 0) { if (fromSound) VideoSoundPicked?.Invoke(picked); else OverlayPicked?.Invoke(picked); }
             return;
         }
         if (cutPress) { cutPress = false; ReleaseMouseCapture(); PlaceCutPoint(pressPoint); e.Handled = true; return; }
@@ -1407,7 +1482,7 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         if (drag is Drag.OverlayMove or Drag.OverlayStart or Drag.OverlayEnd)
         {
-            drag = Drag.None; dragOverlay = -1; dragOriginal = null;
+            drag = Drag.None; dragOverlay = -1; dragOriginal = null; dragFromSound = false;
             if (overlayDragMoved) { overlayDragMoved = false; Overlays = OverlayOrder.Compact(overlays); OverlayEditFinished?.Invoke(); }
             return;
         }
@@ -1471,7 +1546,7 @@ internal sealed class TrimTimeline : FrameworkElement
             int layer = o.Layer;
             // Above the top row brings it to the front; down on the video track sends it to the back;
             // onto another row puts it there, trading places with whatever overlaps it.
-            int target = p.Y >= TrackTop ? -1 : Math.Min(RowAt(p.Y), top);
+            int target = dragFromSound ? o.Layer : p.Y >= TrackTop ? -1 : Math.Min(RowAt(p.Y), top);
             bool Overlaps(OverlayItem x) => HoldTiming.Overlaps(x.From(), x.To(), from, to);
             if (target < 0 && !(o.Layer == 0 && Free(0, from, to)))
             {

@@ -97,7 +97,7 @@ internal sealed class OverlayLayer : FrameworkElement
         return content;
     }
     private readonly Dictionary<(OverlayItem, int, int, double), Drawing> looks = new();
-    private static OverlayItem Look(OverlayItem o) => o with { Start = 0, End = 0, X = 0, Y = 0, Scale = 1, Rotation = 0, Opacity = 1, Layer = 0, StickToVideo = true, In = OverlayMotion.None, Out = OverlayMotion.None, InLength = 0, OutLength = 0, Shadow = NoShadow, Keys = Array.Empty<OverlayKeyframe>(), VideoOffset = 0, VideoVolume = 1 };
+    private static OverlayItem Look(OverlayItem o) => o with { Start = 0, End = 0, X = 0, Y = 0, Scale = 1, Rotation = 0, Opacity = 1, Layer = 0, StickToVideo = true, In = OverlayMotion.None, Out = OverlayMotion.None, InLength = 0, OutLength = 0, Shadow = NoShadow, Keys = Array.Empty<OverlayKeyframe>(), VideoOffset = 0, VideoVolume = 1, SoundUnlinked = false };
     private static readonly OverlayShadow NoShadow = new();
     private readonly Dictionary<OverlayItem, OverlayItem> plain = new(ReferenceEqualityComparer.Instance);
     private OverlayItem Plain(OverlayItem o)
@@ -262,8 +262,9 @@ internal sealed class OverlayLayer : FrameworkElement
             double local = At(item).Local;
             var want = TimeSpan.FromSeconds(Math.Max(0, local + item.VideoOffset));
             // While a freeze holds the picture (speed 0) a video that keeps going plays on at the preview's rate.
+            // (Its sound, once unlinked, plays as a sound of its own instead.)
             double rate = speed > 0 ? speed : HoldTiming.HoldAt(time, freezes) > 0 && item.Clock(Now with { Hold = Now.Hold + .02 }, freezes) > local + 1e-4 ? HoldRate : 0;
-            player.Volume = playing && (rate > 0 || speed > 0) ? Math.Clamp(item.VideoVolume * Loudness, 0, 1) : 0;
+            player.Volume = playing && (rate > 0 || speed > 0) ? Math.Clamp((item.SoundUnlinked ? 0 : item.VideoVolume) * Loudness, 0, 1) : 0;
             if (playing && rate > 0)
             {
                 if (Math.Abs(player.SpeedRatio - rate) > 1e-6) player.SpeedRatio = rate;
