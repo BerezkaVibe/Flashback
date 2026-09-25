@@ -44,7 +44,11 @@ internal sealed unsafe class FfmpegPresenter : IDisposable
     private ID3D11Texture2D? shared;
     private ID3D11VideoProcessorOutputView? outputView;
     private ID3D11Query? done;
+    // A view of each decoder frame slot shown, for the texture array frames come from now (views of an older
+    // array are let go, as they'd keep all of it alive).
     private readonly Dictionary<(IntPtr, int), ID3D11VideoProcessorInputView> inputViews = new();
+    private IntPtr viewArray;
+    internal int CachedViews => inputViews.Count;
     private IDirect3D9Ex? d3d9;
     private IDirect3DDevice9Ex? device9;
     private IDirect3DTexture9? texture9;
@@ -133,6 +137,7 @@ internal sealed unsafe class FfmpegPresenter : IDisposable
         {
             // data[0] is the decoder's texture array, data[1] the frame's slice of it.
             var key = ((IntPtr)frame->data[0], (int)(IntPtr)frame->data[1]);
+            if (key.Item1 != viewArray || inputViews.Count > 128) { ReleaseViews(); viewArray = key.Item1; }
             if (!inputViews.TryGetValue(key, out var input))
             {
                 using var texture = new ID3D11Texture2D(key.Item1); texture.AddRef();
@@ -160,10 +165,14 @@ internal sealed unsafe class FfmpegPresenter : IDisposable
     }
     // The picture changed from the graphics-card one to the CPU one (the Image shows Source again).
     internal event Action? SourceChanged;
-    private void ReleasePictures()
+    private void ReleaseViews()
     {
         foreach (var view in inputViews.Values) view.Dispose();
-        inputViews.Clear();
+        inputViews.Clear(); viewArray = IntPtr.Zero;
+    }
+    private void ReleasePictures()
+    {
+        ReleaseViews();
         outputView?.Dispose(); outputView = null; processor?.Dispose(); processor = null; enumerator?.Dispose(); enumerator = null;
         surface9?.Dispose(); surface9 = null; texture9?.Dispose(); texture9 = null; shared?.Dispose(); shared = null;
         image = null; bitmap = null;

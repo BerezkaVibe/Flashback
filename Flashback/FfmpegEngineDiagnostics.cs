@@ -74,6 +74,17 @@ internal static class FfmpegEngineDiagnostics
             video.Seek(5); int asked = 0;
             bool gaveUp = !video.Seek(3.9, () => ++asked > 20);
             Check(gaveUp && video.Seek(2.95) && Math.Abs(video.FrameTime - 177 / 60.0) < 1e-3 && Math.Abs(Luma() - Expected(177)) <= 2, $"Decoding {how}, a seek gives up when a newer one comes, and the next lands exactly");
+            if (graphicsCard)
+            {
+                // Scrubbing on the graphics card: keyframe seeks keep using the clip's one pool of frames, and
+                // the pictures shown don't pile up.
+                presenter.Prepare(video.Width, video.Height, video.FrameRate);
+                var scrub = new Random(9); var process = Process.GetCurrentProcess(); process.Refresh(); long before = process.PrivateMemorySize64;
+                for (int i = 0; i < 300; i++) if (video.Seek(scrub.NextDouble() * 9.9)) presenter.Present(video.Frame);
+                process.Refresh(); double grew = (process.PrivateMemorySize64 - before) / 1048576.0;
+                Check(video.PoolsMade == 1 && presenter.CachedViews <= 64, $"300 scrub seeks on the graphics card keep one pool of frames ({video.PoolsMade} made, {presenter.CachedViews} views kept)");
+                Note($"300 graphics-card scrub seeks: private memory {grew:+0;-0} MiB");
+            }
             var done = copy; ffmpeg.av_frame_free(&done);
             using var large = new FfmpegVideoReader(big, graphicsCard ? presenter.HardwareDevice : null);
             var seeks = new List<double>(); var r = new Random(5);

@@ -79,6 +79,18 @@ internal static class PlayerCompareDiagnostics
                 for (int i = 0; i < 60; i++) { trim.SeekTo((300 + i * 3 + .5) / 60, defer: i < 59); await Task.Delay(16); }
                 var (settledHit, settledMs) = await Land(300 + 59 * 3, 3000);
                 Line($"Scrub (60 moves over 1 s): last position {(settledHit ? $"on screen {settledMs:0} ms after letting go" : "not shown exactly")}");
+                // A long scrub (20 s of dragging back and forth, as someone looking for a moment would): memory
+                // afterwards, and whether the last position still shows promptly.
+                var proc = Process.GetCurrentProcess(); proc.Refresh(); long memoryBefore = proc.PrivateMemorySize64;
+                int last = 0;
+                for (int i = 0; i < 1200; i++)
+                {
+                    double sweep = (i % 400) / 400.0; last = (int)(60 + 1500 * (sweep < .5 ? sweep * 2 : 2 - sweep * 2));
+                    trim.SeekTo((last + .5) / 60, defer: i < 1199); await Task.Delay(16);
+                }
+                var (longHit, longMs) = await Land(last, 5000);
+                await Task.Delay(500); GC.Collect(); proc.Refresh();
+                Line($"Long scrub (20 s back and forth): memory {(proc.PrivateMemorySize64 - memoryBefore) / 1048576.0:+0;-0} MiB, last position {(longHit ? $"on screen {longMs:0} ms after letting go" : "not shown exactly")}");
                 // CPU and memory: paused, then playing (without reading the picture back, which costs CPU itself).
                 var process = Process.GetCurrentProcess();
                 async Task<string> Load(double seconds)

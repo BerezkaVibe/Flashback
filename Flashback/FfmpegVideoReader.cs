@@ -18,6 +18,14 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
     private readonly AVRational timeBase;
     private readonly long origin;
     private bool ended, hasPending;
+    // Graphics-card decoding: one pool of frames (a Direct3D 11 texture array) for the whole clip. Left to
+    // itself the decoder makes a new pool at every keyframe seek, which made each seek allocate ~80 MB of
+    // graphics memory, and let the pools pile up while anything still held one of their frames.
+    private AVBufferRef* pool;
+    private (int Width, int Height, AVPixelFormat Format) poolShape;
+    private readonly AVCodecContext_get_format? pickFormat; // kept alive while the decoder can call it
+    // Frames pools made for this clip (1 unless the video changes size partway).
+    internal int PoolsMade { get; private set; }
     internal double Duration { get; }
     internal double FrameRate { get; }
     internal int Width { get; }
@@ -47,7 +55,9 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         {
             codec->hw_device_ctx = ffmpeg.av_buffer_ref(hardwareDevice);
             // Room for the frames the player holds on to (the one on screen and a few ahead).
-            codec->extra_hw_frames = 6;
+            codec->extra_hw_frames = ExtraFrames;
+            pickFormat = PickFormat;
+            codec->get_format = pickFormat;
             Hardware = true;
         }
         else codec->thread_count = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
@@ -57,6 +67,39 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         var rate = s->avg_frame_rate.num > 0 ? s->avg_frame_rate : s->r_frame_rate;
         FrameRate = rate.num > 0 && rate.den > 0 ? rate.num / (double)rate.den : 60;
         Duration = format->duration > 0 ? format->duration / (double)ffmpeg.AV_TIME_BASE : s->duration * ffmpeg.av_q2d(timeBase);
+    }
+    private const int ExtraFrames = 10;
+    // The decoder asks which picture format to decode to (at the start, and again after each keyframe seek):
+    // graphics-card frames from the clip's one pool, made the first time and handed back every time after.
+    private AVPixelFormat PickFormat(AVCodecContext* context, AVPixelFormat* offered)
+    {
+        try
+        {
+            for (var f = offered; *f != AVPixelFormat.AV_PIX_FMT_NONE; f++)
+            {
+                if (*f != AVPixelFormat.AV_PIX_FMT_D3D11) continue;
+                var shape = (context->coded_width, context->coded_height, context->sw_pix_fmt);
+                if (pool == null || shape != poolShape)
+                {
+                    AVBufferRef* made = null;
+                    if (ffmpeg.avcodec_get_hw_frames_parameters(context, context->hw_device_ctx, AVPixelFormat.AV_PIX_FMT_D3D11, &made) < 0) return *f;
+                    var frames = (AVHWFramesContext*)made->data;
+                    if (frames->initial_pool_size > 0) frames->initial_pool_size += ExtraFrames;
+                    if (ffmpeg.av_hwframe_ctx_init(made) < 0) { ffmpeg.av_buffer_unref(&made); return *f; }
+                    if (pool != null) { var old = pool; ffmpeg.av_buffer_unref(&old); }
+                    pool = made; poolShape = shape; PoolsMade++;
+                }
+                // (libavcodec lets go of the last reference before asking; this makes sure.)
+                if (context->hw_frames_ctx != null) ffmpeg.av_buffer_unref(&context->hw_frames_ctx);
+                context->hw_frames_ctx = ffmpeg.av_buffer_ref(pool);
+                return *f;
+            }
+            // No graphics-card format for this video: the first one decoded on the CPU.
+            for (var f = offered; *f != AVPixelFormat.AV_PIX_FMT_NONE; f++)
+                if ((ffmpeg.av_pix_fmt_desc_get(*f)->flags & ffmpeg.AV_PIX_FMT_FLAG_HWACCEL) == 0) return *f;
+        }
+        catch { }
+        return *offered;
     }
     private double TimeOf(AVFrame* frame)
     {
@@ -126,6 +169,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         fixed (AVFrame** p = &pending) ffmpeg.av_frame_free(p);
         var pk = packet; ffmpeg.av_packet_free(&pk);
         fixed (AVCodecContext** c = &codec) ffmpeg.avcodec_free_context(c);
+        if (pool != null) { var p = pool; ffmpeg.av_buffer_unref(&p); pool = null; }
         fixed (AVFormatContext** f = &format) ffmpeg.avformat_close_input(f);
     }
 }
