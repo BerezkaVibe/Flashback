@@ -267,6 +267,8 @@ internal sealed class TrimTimeline : FrameworkElement
     }
     private int RowAt(double y) => Rows == 0 ? -1 : (int)Math.Clamp(Math.Floor((8 + Rows * (RowHeight + RowGap) - y) / (RowHeight + RowGap)), -1, Rows);
     internal event Action<CutRegion>? CutAdded, CutRemoved;
+    // A second click finished placing a part (cut, speed, zoom, text, picture, shape, volume or sound).
+    internal event Action? PartPlaced;
     // The part last clicked (a cut, speed part, zoom or text/picture item), outlined in white;
     // Delete removes it. Clicking a part's body selects it and still moves the playhead.
     private object? focusedPart;
@@ -987,6 +989,9 @@ internal sealed class TrimTimeline : FrameworkElement
                 else if (overlayMode is { } kind) OverlayAdded?.Invoke(a, b, kind);
                 else if (zoomMode) ZoomAdded?.Invoke(a, b);
                 else if (slowMode) SlowAdded?.Invoke(a, b); else CutAdded?.Invoke(new CutRegion(from.Lane, a, b));
+                // One part per use: the tool puts itself away so a stray click doesn't start another.
+                PartPlaced?.Invoke();
+                if (!Placing) { cutHover = null; Cursor = Cursors.Hand; ToolTip = null; }
             }
         }
         InvalidateVisual();

@@ -277,7 +277,7 @@ public partial class TrimWindow
                 double fade = 1;
                 if (s.FadeIn > 0) fade = Math.Min(fade, local / s.FadeIn);
                 if (s.FadeOut > 0) fade = Math.Min(fade, (s.Length - local) / s.FadeOut);
-                player.Volume = Math.Clamp(s.Volume * Math.Clamp(fade, 0, 1), 0, 1);
+                player.Volume = Math.Clamp(s.Volume * Math.Clamp(fade, 0, 1) * PreviewLoudness, 0, 1);
                 player.SpeedRatio = PreviewRate * speed;
                 var expected = TimeSpan.FromSeconds(s.Offset + local * speed);
                 if (!soundsPlaying.Contains(key)) { player.Position = expected; player.Play(); soundsPlaying.Add(key); }

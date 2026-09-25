@@ -219,6 +219,9 @@ internal sealed class OverlayLayer : FrameworkElement
         }
         return (item.VideoPath, nth);
     }
+    // How loud inset videos play in the preview, on the players' own scale: 0.5 is normal (the level the
+    // clip itself plays at), 1 twice that. The editor's volume slider sets it.
+    internal double Loudness { get; set; } = .5;
     private MediaPlayer? PlayerFor(OverlayItem item)
     {
         if (VideoKey(item) is not { } key) return null;
@@ -239,7 +242,7 @@ internal sealed class OverlayLayer : FrameworkElement
             if (item.Kind != OverlayKind.Video || !Visible(item) || PlayerFor(item) is not { } player) continue;
             used.Add(player);
             var want = TimeSpan.FromSeconds(Math.Max(0, time - item.Start + item.VideoOffset));
-            player.Volume = playing ? Math.Clamp(item.VideoVolume, 0, 1) : 0;
+            player.Volume = playing ? Math.Clamp(item.VideoVolume * Loudness, 0, 1) : 0;
             if (playing && speed > 0)
             {
                 if (Math.Abs(player.SpeedRatio - speed) > 1e-6) player.SpeedRatio = speed;

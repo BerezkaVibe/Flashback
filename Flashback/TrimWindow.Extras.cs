@@ -96,6 +96,33 @@ public partial class TrimWindow
 
     // Cut out: black out the picture or mute one audio lane for a stretch, keeping its time.
     private bool userMuted;
+    // Preview volume. 100% is the level the preview has always played at (the Windows player's default,
+    // half its range), which leaves room to boost to 200%. Music and inset videos follow it too, so they
+    // keep the balance the export has. What's heard while editing only; the export isn't changed.
+    private double PreviewLoudness => userMuted ? 0 : (PreviewVolumeSlider?.Value ?? 100) / 100 * .5;
+    private void PreviewVolume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (PreviewVolumeLabel == null) return;
+        // It clicks into place at 100%.
+        if (e.NewValue != 100 && Math.Abs(e.NewValue - 100) < 4) { PreviewVolumeSlider.Value = 100; return; }
+        ApplyPreviewVolume();
+    }
+    private void ApplyPreviewVolume()
+    {
+        double percent = PreviewVolumeSlider.Value;
+        Player.Volume = PreviewLoudness; OverlayView.Loudness = PreviewLoudness;
+        if (Timeline.Sounds.Count > 0) SyncSounds();
+        PreviewVolumeLabel.Text = $"{percent:0}%";
+        // Speaker: crossed out when muted, more waves as it gets louder, lit up while boosted.
+        PreviewVolumeIcon.Content = userMuted || percent < .5 ? "" : percent <= 50 ? "" : percent <= 100 ? "" : "";
+        if (percent > 100 && !userMuted) { PreviewVolumeIcon.SetResourceReference(ForegroundProperty, "Accent"); PreviewVolumeLabel.SetResourceReference(TextBlock.ForegroundProperty, "Accent"); }
+        else { PreviewVolumeIcon.SetResourceReference(ForegroundProperty, "Muted"); PreviewVolumeLabel.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); }
+    }
+    private void PreviewMute_Click(object sender, RoutedEventArgs e)
+    {
+        userMuted = !userMuted; ApplyPreviewCuts(); ApplyPreviewVolume();
+        StatusLabel.Text = userMuted ? "Preview muted." : $"Preview volume {PreviewVolumeSlider.Value:0}%.";
+    }
     private void CutTool_Click(object sender, RoutedEventArgs e)
     {
         if (source.Length == 0 || exportCancellation != null) return;

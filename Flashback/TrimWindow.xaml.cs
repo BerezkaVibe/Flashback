@@ -34,6 +34,8 @@ public partial class TrimWindow : Window
     // doesn't hold it again).
     private (FreezeFrame Part, long Began)? freezing;
     private double? freezeDone;
+    // Where playback last restarted for a change of speed.
+    private double? speedEdge;
     public event Action<ClipResult>? Exported;
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
@@ -48,6 +50,8 @@ public partial class TrimWindow : Window
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging, Timeline.HoldOffset);
         Timeline.SpeedStepRequested += StepPreviewRate;
         Timeline.SlowAdded += SlowAdded; Timeline.SlowTagClicked += SlowTagClicked; Timeline.SlowRemoved += SlowRemoved;
+        // After a part is placed the tool switches off (setting any tool off clears them all).
+        Timeline.PartPlaced += () => { Timeline.CutMode = false; ShowCutTool(); };
         LoadSlowChoices();
         InitZoom();
         InitOverlays();
@@ -160,10 +164,17 @@ public partial class TrimWindow : Window
         if (freezeDone is double done && (actual > done + .15 || actual < done - .05)) freezeDone = null;
         if (Timeline.Freezes.FirstOrDefault(f => f.At >= playhead - 1e-6 && f.At <= actual + .001 && (freezeDone is not double d || Math.Abs(d - f.At) > 1e-6)) is { } freeze)
         { Player.Pause(); Player.Position = TimeSpan.FromSeconds(freeze.At); freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp()); SetPlayhead(freeze.At); return; }
+        // Speed parts play at their speed in the preview as well. Changing speed mid-play makes the player
+        // skip a moment of picture and sound, so it restarts at the new speed from exactly where that
+        // speed begins instead.
+        // (Just after that restart the player can report a hair before the edge; that still counts as the edge.)
+        double speed = PreviewRate * RegionSpeedAt(speedEdge is double e && actual >= e - .1 && actual < e ? e : actual);
+        if (Math.Abs(Player.SpeedRatio - speed) > 1e-6)
+        {
+            double edge = Timeline.SlowRegions.SelectMany(r => new[] { r.Start, r.End }).Where(t => t > playhead - 1e-6 && t <= actual + 1e-6).DefaultIfEmpty(actual).Min();
+            speedEdge = edge; StartPlayback(edge, previewSection); return;
+        }
         SetPlayhead(actual);
-        // Speed parts play at their speed in the preview as well.
-        double speed = PreviewRate * RegionSpeedAt(actual);
-        if (Math.Abs(Player.SpeedRatio - speed) > 1e-6) Player.SpeedRatio = speed;
     }
     private void SetPlayhead(double time)
     {
@@ -183,7 +194,7 @@ public partial class TrimWindow : Window
     {
         // Pausing is only needed when something plays: a drag sends a seek for every mouse move.
         if (playing || freezing != null) Pause();
-        parkedHold = hold; freezeDone = null;
+        parkedHold = hold; freezeDone = null; speedEdge = null;
         SetPlayhead(time); pendingSeek = true;
         if (!defer) FlushSeek();
     }
@@ -223,8 +234,10 @@ public partial class TrimWindow : Window
     // hold: start that far into the hold of a freeze at start (finished view).
     private void StartPlayback(double start, int section = -1, double hold = 0)
     {
-        // Seek while paused, then play, so audio and video restart from the same point.
+        // Seek while paused, then play, so audio and video restart from the same point (at the speed
+        // of the part it starts in).
         Player.Pause();
+        Player.SpeedRatio=PreviewRate*RegionSpeedAt(start);
         SetPlayhead(start); previewSection=section;
         pendingSeek=true; FlushSeek();
         Player.ScrubbingEnabled=false;

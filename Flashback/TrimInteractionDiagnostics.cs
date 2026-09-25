@@ -98,7 +98,8 @@ internal static class TrimInteractionDiagnostics
             place.Invoke(tl,new object[]{new Point(tl.XAt(6)+2,26)});
             var made=tl.Cuts[tl.Cuts.Count-1];
             Check(!tl.HasPendingCut && made.Lane==-1 && Math.Abs(made.Start-3)<.02 && Math.Abs(made.End-6)<1e-9,"Second click finishes the cut and locks onto the playhead within 3 px");
-            place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); trim.HandleKey(Key.Escape,ModifierKeys.None,true);
+            Check(!tl.CutMode && !tl.HasPendingCut && trim.StatusLabel.Text.Length>0,"Placing a part puts the tool away, so another click doesn't start a second one");
+            tl.CutMode=true; place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); trim.HandleKey(Key.Escape,ModifierKeys.None,true);
             Check(!tl.HasPendingCut && !tl.CutMode,"One Esc leaves the cut tool and drops a half-placed cut");
             trim.HandleKey(Key.X,ModifierKeys.None,false); Check(tl.CutMode,"X turns on the cut tool");
             trim.HandleKey(Key.R,ModifierKeys.None,false); Check(tl.SlowMode && !tl.CutMode,"R switches to the speed tool");
@@ -107,7 +108,8 @@ internal static class TrimInteractionDiagnostics
             tl.SlowMode=true; int slowBefore=tl.SlowRegions.Count;
             place.Invoke(tl,new object[]{new Point(tl.XAt(7),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(8.5),26)});
             Check(tl.SlowRegions.Count==slowBefore+1 && tl.SlowRegions[^1].Speed==.5 && Math.Abs(tl.SlowRegions[^1].Start-7)<.02,"Two clicks add a 0.5x slow-motion part");
-            place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(9.5),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(6.5),26)});
+            tl.SlowMode=true; place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(9.5),26)});
+            tl.SlowMode=true; place.Invoke(tl,new object[]{new Point(tl.XAt(5),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(6.5),26)});
             Check(tl.SlowRegions.Count==slowBefore+1,"Slow motion can't overlap a cut or another slow part");
             var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
             typeof(TrimWindow).GetMethod("SlowTagClicked",flags)!.Invoke(trim,new object[]{tl.SlowRegions.Count-1});
@@ -140,7 +142,8 @@ internal static class TrimInteractionDiagnostics
             trim.ZoomTarget.Set(.8,.3,3);
             typeof(TrimWindow).GetMethod("ZoomTargetChanged",flags)!.Invoke(trim,null);
             Check(Math.Abs(tl.ZoomRegions[0].X-.8)<1e-9 && Math.Abs(tl.ZoomRegions[0].MaxZoom-3)<1e-9 && trim.ZoomGraph.MaxZoom==3,"The target box aims the zoom and sets max zoom, and the graph follows");
-            place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(10),26)});
+            Check(!tl.ZoomMode,"The zoom tool puts itself away after placing a zoom");
+            tl.ZoomMode=true; place.Invoke(tl,new object[]{new Point(tl.XAt(8),26)}); place.Invoke(tl,new object[]{new Point(tl.XAt(10),26)});
             Check(tl.ZoomRegions.Count==1,"Zooms can't overlap each other");
             trim.HandleKey(Key.Escape,ModifierKeys.None,true); Check(!tl.ZoomMode,"Esc leaves the zoom tool");
             typeof(TrimWindow).GetMethod("ZoomRemove_Click",flags)!.Invoke(trim,new object[]{trim,new RoutedEventArgs()});
@@ -155,7 +158,7 @@ internal static class TrimInteractionDiagnostics
             Check(tl.Overlays.Count==1 && tl.Overlays[0].Kind==OverlayKind.Text && Math.Abs(tl.Overlays[0].Start-2)<.05 && Math.Abs(tl.Overlays[0].End-4)<.05,"Two clicks add text for that stretch");
             Check(trim.OverlayPanel.Visibility==Visibility.Visible && tl.SelectedOverlay==0 && trim.ZoomPanel.Visibility!=Visibility.Visible,"New text opens its editor beside the video");
             Check(tl.ActualHeight>0 && tl.Height>tl.PreferredHeight-1,"The timeline grows a slim layer row for text");
-            place.Invoke(tl,new object[]{new Point(tl.XAt(3),30)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),30)});
+            tl.OverlayMode=OverlayKind.Text; place.Invoke(tl,new object[]{new Point(tl.XAt(3),30)}); place.Invoke(tl,new object[]{new Point(tl.XAt(5),30)});
             Check(tl.Overlays.Count==2 && tl.Overlays[0].Layer==0 && tl.Overlays[1].Layer==1,"Overlapping text goes on the layer above");
             // Dragging the bottom item up onto the other's row trades their layers.
             var saved=tl.Overlays.ToArray(); var tf=typeof(TrimTimeline);

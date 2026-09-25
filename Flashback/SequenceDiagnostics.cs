@@ -65,7 +65,17 @@ internal static class SequenceDiagnostics
             void Layout() { content.Measure(new Size(1400, 900)); content.Arrange(new Rect(0, 0, 1400, 900)); content.UpdateLayout(); }
             Layout();
             var tl = trim.Timeline;
-            tl.ZoomRegions = new[] { new ZoomRegion(6, 7, .5, .5, 2, ZoomPreset.BuiltIns[2].Curve) };
+            // The preview volume: 100% is how it always played, 200% twice that, the speaker mutes.
+            Check(Near(trim.Player.Volume, .5) && trim.PreviewVolumeLabel.Text == "100%", "The preview volume starts at 100%, as loud as it has always played");
+            trim.PreviewVolumeSlider.Value = 200;
+            Check(Near(trim.Player.Volume, 1) && Near(trim.OverlayView.Loudness, 1) && trim.PreviewVolumeLabel.Text == "200%", "The preview volume boosts to 200%");
+            trim.PreviewVolumeSlider.Value = 102;
+            Check(trim.PreviewVolumeSlider.Value == 100, "The preview volume clicks into place at 100%");
+            Call(trim, "PreviewMute_Click", trim, new RoutedEventArgs());
+            Check(trim.Player.Volume == 0 && (string)trim.PreviewVolumeIcon.Content == "", "The speaker button mutes the preview");
+            Call(trim, "PreviewMute_Click", trim, new RoutedEventArgs());
+            await Shot(content, "sequence-volume.png");
+            tl.ZoomRegions =new[] { new ZoomRegion(6, 7, .5, .5, 2, ZoomPreset.BuiltIns[2].Curve) };
             Call(trim, "SetSounds", (IReadOnlyList<SoundItem>)new[] { new SoundItem(music, 6, 7) });
             trim.ToggleFinishedView(); Layout();
             Check(tl.Finished && Near(tl.Total, 10), "The finished view turns on, as long as the clip with nothing changed");
@@ -140,12 +150,32 @@ internal static class SequenceDiagnostics
         var tapeEarly = await Pcm(tape, .3, .8); var tapeLate = await Pcm(tape, 1.3, .5); var keptLate = await Pcm(kept, 1.3, .5);
         Check(Tone(tapeEarly, 1000) > Tone(tapeEarly, 2000) * 4 && Tone(tapeLate, 1000) > 1000, $"A sound at half speed without keeping pitch sounds an octave lower for twice as long ({Tone(tapeEarly, 1000):0} vs {Tone(tapeEarly, 2000):0})");
         Check(Tone(keptLate, 2000) > Tone(keptLate, 1000) * 4 && Tone(keptLate, 2000) > 1000, "Keeping its pitch, a slowed sound stays on the same note");
+        // Where normal speed meets a slow part (and back), the clip's own sound carries on without a gap:
+        // a steady tone, 2-3 s at half speed, so the joins are at 2 s and 4 s of the export.
+        var slowed = await Export("Slow part joins", new ShareExportOptions { SlowRegions = new[] { new SpeedRegion(2, 3, .5) } });
+        foreach (double join in new[] { 2.0, 4.0 })
+        {
+            var pcm = await Pcm(slowed, join - .3, .6);
+            var (gap, where) = LongestQuiet(pcm);
+            Check(gap <= 10, $"No gap in the sound where normal speed and a slow part meet at {join:0} s (quietest run {gap:0} ms at {join - .3 + where / 1000:0.000} s)");
+        }
         var project = TrimProject.Create(source, Array.Empty<KeepSection>(), 0, 6, 0, false) with { Sounds = new[] { new SoundItem(music, 0, 2) { Speed = 99, Hold = -3 } } };
         var cleaned = JsonSerializer.Deserialize<TrimProject>(JsonSerializer.Serialize(project))!;
         var cleanedSound = ((TrimProject)typeof(TrimProject).GetMethod("Cleaned", flags)!.Invoke(cleaned, null)!).Sounds![0];
         Check(cleanedSound.Speed == SoundItem.MaxSpeed && cleanedSound.Hold == 0 && JsonSerializer.Deserialize<SoundItem>("{\"Path\":\"a\",\"Start\":0,\"End\":1}")!.Speed == 1, "Sound speeds and holds are saved, checked, and default to normal for older projects");
 
         await LiveAsync(source, Check);
+    }
+    // The longest run of near-silence in 16-bit mono 48 kHz audio, in 5 ms slices: its length and start (ms).
+    private static (double Ms, double At) LongestQuiet(byte[] pcm)
+    {
+        int slice = 240, n = pcm.Length / 2 / slice;
+        var rms = new double[n];
+        for (int s = 0; s < n; s++) { double sum = 0; for (int i = 0; i < slice; i++) { double v = BitConverter.ToInt16(pcm, (s * slice + i) * 2); sum += v * v; } rms[s] = Math.Sqrt(sum / slice); }
+        double typical = rms.OrderBy(v => v).ElementAt(n / 2);
+        int best = 0, bestAt = 0, run = 0;
+        for (int s = 0; s < n; s++) { run = rms[s] < typical * .2 ? run + 1 : 0; if (run > best) { best = run; bestAt = s - run + 1; } }
+        return (best * 5, bestAt * 5);
     }
     private static double Tone(byte[] pcm, double hz)
     {
@@ -178,6 +208,16 @@ internal static class SequenceDiagnostics
             live.StartBox.Text = "6"; live.EndBox.Text = "8"; typeof(TrimWindow).GetMethod("Add_Click", flags)!.Invoke(live, new object[] { live, new RoutedEventArgs() });
             live.MoveSection(1, 0);
             live.Timeline.SlowRegions = new[] { new SpeedRegion(7, 8, .5) };
+            // Playing into a slow part doesn't skip any of it: the player's position, sampled finely,
+            // never runs ahead of where the speed can have taken it.
+            live.SeekTo(6.4); await Task.Delay(500);
+            var trace = new List<(double Wall, double At)>(); var watch = Stopwatch.StartNew();
+            live.HandleKey(Key.Space, ModifierKeys.None, true);
+            while (watch.Elapsed.TotalSeconds < 2.6) { trace.Add((watch.Elapsed.TotalSeconds, live.Player.Position.TotalSeconds)); await Task.Delay(15); }
+            live.HandleKey(Key.Space, ModifierKeys.None, true);
+            double skip = trace.Zip(trace.Skip(1)).Where(p => p.First.At >= 6.8 && p.First.At < 7.6).Select(p => (p.Second.At - p.First.At) - (p.Second.Wall - p.First.Wall) * (p.First.At >= 7 ? .5 : 1)).DefaultIfEmpty(0).Max();
+            File.WriteAllLines(Path.Combine(Storage.Root, "slow-entry-trace.txt"), trace.Select(t => $"{t.Wall:0.000} {t.At:0.000}"));
+            Check(trace[^1].At > 7.3 && skip < .08, $"Playing into a slow part skips none of it (largest jump ahead {skip * 1000:0} ms, reached {trace[^1].At:0.00} s)");
             typeof(TrimWindow).GetMethod("AddFreeze", flags)!.Invoke(live, new object[] { 2.0, 1.0, true });
             live.ToggleFinishedView(); await Task.Delay(400);
             Check(Math.Abs(live.Timeline.Total - 6) < .05, $"The finished view lays out sections, the slow part and the hold ({live.Timeline.Total:0.##} s)");

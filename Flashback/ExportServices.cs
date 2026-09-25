@@ -226,9 +226,14 @@ internal static class ExportServices
             for (int i = 0; i < pieces.Count; i++)
             {
                 var piece = pieces[i]; double start = piece.Start, end = piece.Freeze ? piece.Start + frame : piece.End, speed = piece.Speed, length = end - start;
-                string trim = $"atrim=duration={Number(length)},asetpts=PTS-STARTPTS";
-                // Speed changes stretch or squeeze this piece after its cuts are applied in source time.
+                // Speed changes stretch or squeeze this piece after its cuts are applied in source time. The
+                // tempo filter comes up a little short at the end of what it's given, which left a gap in the
+                // sound where a sped-up or slowed piece meets the next one: it's given a moment more of the
+                // recording, then cut to exactly the piece's length.
+                double more = speed != 1 && !piece.Freeze ? .25 : 0;
+                string trim = $"atrim=duration={Number(length + more)},asetpts=PTS-STARTPTS";
                 string slowVideo = speed != 1 ? $",setpts=PTS/{Number(speed)}" : "", slowAudio = speed != 1 ? "," + ShareExportOptions.AudioTempo(speed) : "";
+                string slowSound = speed != 1 ? slowAudio + $",atrim=duration={Number(length / speed)}" : "";
                 // Cuts inside this piece, as times relative to its start: black video or silence.
                 string? Window(int lane)
                 {
@@ -241,7 +246,7 @@ internal static class ExportServices
                     .Select(v => $",volume={Number(v.Gain)}:enable='between(t,{Number(Math.Max(0, v.Start - start))},{Number(Math.Min(length, v.End - start))})'"));
                 string Mute(int lane) => Gain(lane) + (Window(lane) is { } w ? $",volume=0:enable='{w}'" : "");
                 if (video && decode is { } hw) inputs.AddRange(new[] { "-hwaccel", hw });
-                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(piece.Freeze ? length + frame * 2 : length), "-i", source });
+                inputs.AddRange(new[] { "-threads", "1", "-ss", Number(start), "-t", Number(piece.Freeze ? length + frame * 2 : length + more), "-i", source });
                 var pipSounds = new List<string>();
                 if (video)
                 {
@@ -337,10 +342,10 @@ internal static class ExportServices
                 else if (mixTracks)
                 {
                     // Rebuild the mix from the desktop and microphone tracks with the chosen volumes and cuts.
-                    filters.Add(WithPip($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0") + $"{slowAudio}{audioShape}[a{i}]");
+                    filters.Add(WithPip($"[{i}:a:1]{trim},volume={Number(options.DesktopVolume)}{Mute(0)}[d{i}];[{i}:a:2]{trim},volume={Number(options.MicrophoneVolume)}{Mute(1)}[m{i}];[d{i}][m{i}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:level=0") + $"{slowSound}{audioShape}[a{i}]");
                     labels += $"[a{i}]";
                 }
-                else if (audio) { filters.Add(WithPip($"[{i}:a:0]{trim}{Mute(0)}") + $"{slowAudio}{audioShape}[a{i}]"); labels += $"[a{i}]"; }
+                else if (audio) { filters.Add(WithPip($"[{i}:a:0]{trim}{Mute(0)}") + $"{slowSound}{audioShape}[a{i}]"); labels += $"[a{i}]"; }
             }
             filters.Add(labels + $"concat=n={pieces.Count}:v={(video ? 1 : 0)}:a={(audio ? 1 : 0)}" + (video ? "[joined]" : "") + (audio ? "[a]" : ""));
             // Music and sound files are mixed over the finished timeline, so speed parts leave them alone.

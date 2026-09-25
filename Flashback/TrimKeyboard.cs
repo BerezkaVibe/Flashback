@@ -27,7 +27,7 @@ public partial class TrimWindow
             realign.Stop(); realign.Start();
         }
         ShowPreviewRate();
-        StatusLabel.Text=$"Preview {rate:0.##}× · {(userMuted ? "muted" : $"volume {Player.Volume:P0}")}";
+        StatusLabel.Text=$"Preview {rate:0.##}× · {(userMuted ? "muted" : $"volume {PreviewVolumeSlider.Value:0}%")}";
     }
     private void StepFrame(int direction)
     {
@@ -111,9 +111,9 @@ public partial class TrimWindow
             case TrimAction.Faster: StepPreviewRate(1); break;
             case TrimAction.MuchSlower: StepPreviewRate(-2); break;
             case TrimAction.MuchFaster: StepPreviewRate(2); break;
-            case TrimAction.Mute: userMuted=!userMuted; ApplyPreviewCuts(); SetPreviewRate(PreviewRate); break;
+            case TrimAction.Mute: userMuted=!userMuted; ApplyPreviewCuts(); ApplyPreviewVolume(); SetPreviewRate(PreviewRate); break;
             case TrimAction.VolumeUp or TrimAction.VolumeDown:
-                Player.Volume=Math.Clamp(Player.Volume+(action==TrimAction.VolumeUp ? .1 : -.1),0,1); SetPreviewRate(PreviewRate); break;
+                PreviewVolumeSlider.Value=Math.Clamp(PreviewVolumeSlider.Value+(action==TrimAction.VolumeUp ? 10 : -10),0,200); SetPreviewRate(PreviewRate); break;
             case TrimAction.PreviousFrame or TrimAction.FrameBack: StepFrame(-1); break;
             case TrimAction.NextFrame or TrimAction.FrameForward: StepFrame(1); break;
             case TrimAction.HalfSecondBack: StepView(-.5); break;
