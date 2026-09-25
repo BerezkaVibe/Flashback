@@ -22,6 +22,7 @@ public partial class App : Application
         if (editor >= 0)
         {
             string? clip = editor + 1 < e.Args.Length && !e.Args[editor + 1].StartsWith("--") ? e.Args[editor + 1] : null;
+            TrimWindow.AskToSave = true;
             var trim = new TrimWindow(clip); MainWindow = trim;
             trim.Closed += (_, _) => Shutdown(0);
             trim.Show(); return;
@@ -282,6 +283,7 @@ public partial class App : Application
         }
         singleton = new Mutex(true, @"Local\Flashback.ReplayRecorder", out bool created);
         if (!created) { MessageBox.Show("Flashback is already running. Open it from the system tray.", "Flashback"); Shutdown(); return; }
+        TrimWindow.AskToSave = true;
         var main = new MainWindow(); MainWindow = main;
         if (!e.Args.Contains("--tray")) main.Show();
         await main.AutoStartAsync();

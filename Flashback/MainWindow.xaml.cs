@@ -98,6 +98,8 @@ public partial class MainWindow : Window
         if (warning != null) Tell(warning, true);
         Closing += OnClosing;
         StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) ClearError(); };
+        // However it's put away to the tray, an error showing then is gone when it's opened again.
+        IsVisibleChanged += (_, _) => { if (!IsVisible) ClearError(); };
         Deactivated += (_, _) => { StopShortcutCapture(); try { hotkeys.Resume(); } catch { } };
         Activated += (_, _) =>
         {

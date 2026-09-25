@@ -238,6 +238,18 @@ internal static class TrimInteractionDiagnostics
             Check(TrimRecovery.Find(path) is { } back && back.Overlays?.Length==overlaysSaved && back.HasEdits(12),"The recovery copy keeps an unsaved edit for next time");
             TrimRecovery.Forget(path);
             Check(TrimRecovery.Find(path)==null,"Starting fresh forgets the recovery copy");
+            // Saving: edits are kept only when saved, and opening the clip brings its last save back.
+            var unsaved=typeof(TrimWindow).GetProperty("Unsaved",flags)!; bool Unsaved() => (bool)unsaved.GetValue(trim)!;
+            TrimSaves.Forget(path);
+            Check(Unsaved() && trim.SaveEditLabel.Text=="Save","Edits since the clip was opened are unsaved, and the Save button says so");
+            typeof(TrimWindow).GetMethod("SaveEdit",flags)!.Invoke(trim,null);
+            Check(!Unsaved() && TrimSaves.Find(path) is { } kept && kept.Overlays?.Length==overlaysSaved && trim.SaveEditLabel.Text=="Saved","Save keeps the edit for this clip");
+            trim.SeekTo(3); Check(!Unsaved(),"Moving the playhead isn't a change to save");
+            typeof(TrimWindow).GetMethod("ApplyProject",flags)!.Invoke(trim,new object[]{TrimProject.Create(path,Array.Empty<KeepSection>(),0,12,0,false)});
+            Check(Unsaved() && tl.Overlays.Count==0,"Changes after a save are unsaved");
+            typeof(TrimWindow).GetMethod("OpenSavedEdit",flags)!.Invoke(trim,null);
+            Check(!Unsaved() && tl.Overlays.Count==overlaysSaved,"Opening the clip again brings back its last save, without the changes made after it");
+            TrimSaves.Forget(path);
             typeof(TrimWindow).GetMethod("SetOverlays",flags)!.Invoke(trim,new object[]{Array.Empty<OverlayItem>()});
             // Changing when parts start and end: typed times, picking on the timeline, dragging ends, cut-out tags.
             void Raise(string name, params object[] args) => ((Delegate?)typeof(TrimTimeline).GetField(name,flags)!.GetValue(tl))?.DynamicInvoke(args);

@@ -36,12 +36,69 @@ public partial class TrimWindow
         projectSaveTimer.Tick -= ProjectSave_Tick; projectSaveTimer.Tick += ProjectSave_Tick;
         projectSaveTimer.Stop(); projectSaveTimer.Start();
     }
-    private void ProjectSave_Tick(object? sender,EventArgs e) { FlushProject(); KeepRecovery(); }
+    private void ProjectSave_Tick(object? sender,EventArgs e) { FlushProject(); KeepRecovery(); ShowSaveState(); }
+    // Only while there are unsaved changes, and only for a crash: closing normally removes it.
     private void KeepRecovery()
     {
         if (source.Length==0 || restoringProject) return;
+        if (Unsaved) TrimRecovery.Keep(CurrentProject()); else TrimRecovery.Forget(source);
+    }
+
+    // ---- Saving ----
+    // Edits are kept only when saved (the Save button or Ctrl+S). Opening the clip again brings its last save
+    // back; closing the editor or opening another clip with changes since then asks to save or discard them.
+    private string? savedEdit;
+    // The edit as it's compared for changes (where the playhead is doesn't count).
+    private static string EditKey(TrimProject project) => (project with { Position=0 }).Serialize();
+    private bool Unsaved => source.Length>0 && savedEdit!=null && EditKey(CurrentProject())!=savedEdit;
+    private void MarkSaved() { savedEdit=source.Length>0 ? EditKey(CurrentProject()) : null; ShowSaveState(); }
+    private void ShowSaveState()
+    {
+        bool unsaved=Unsaved;
+        if (unsaved) SaveEditButton.SetResourceReference(ForegroundProperty,"Accent"); else SaveEditButton.ClearValue(ForegroundProperty);
+        SaveEditButton.ToolTip=(unsaved ? "Save your changes to this clip" : "Your edits to this clip are saved")+" · "+TrimShortcuts.Display(keys[TrimAction.SaveProject]);
+        SaveEditLabel.Text=unsaved ? "Save" : "Saved";
+    }
+    private bool SaveEdit()
+    {
+        if (source.Length==0 || exportCancellation!=null) return source.Length==0;
         var project=CurrentProject();
-        if (project.HasEdits(media.Duration)) TrimRecovery.Keep(project); else TrimRecovery.Forget(source);
+        try
+        {
+            // An edit with nothing in it leaves nothing saved.
+            if (project.HasEdits(media.Duration)) TrimSaves.Keep(project); else TrimSaves.Forget(source);
+            if (projectPath!=null) SaveProject(projectPath);
+        }
+        catch (Exception ex) { StatusLabel.Text="Your edits couldn't be saved. "+ex.Message; return false; }
+        MarkSaved(); TrimRecovery.Forget(source);
+        StatusLabel.Text="Saved. Your edits come back when you open this clip again.";
+        return true;
+    }
+    private void SaveEdit_Click(object sender,RoutedEventArgs e) => SaveEdit();
+    // Before leaving the clip (closing, or opening another): save or discard changes since the last save.
+    // False: stay.
+    // (Only in the app itself: the tests open and close editors without anyone to answer.)
+    internal static bool AskToSave;
+    private bool ConfirmLeave(string title)
+    {
+        if (source.Length==0) return true;
+        if (AskToSave && Unsaved)
+        {
+            var choice=ThemedDialog.Choose(this,title,"Save keeps them for when you open this clip again. Discard goes back to your last save.","Save","Discard");
+            if (choice==null || (choice==true && !SaveEdit())) return false;
+        }
+        TrimRecovery.Forget(source);
+        return true;
+    }
+    // Opening a clip: its last save comes back.
+    private void OpenSavedEdit()
+    {
+        if (TrimSaves.Find(source) is { } saved && saved.HasEdits(media.Duration))
+        {
+            try { ApplyProject(saved); StatusLabel.Text="Your saved edit is back."+(saved.Saved is { } at ? $" Saved {at:g}." : ""); }
+            catch { StatusLabel.Text="Your saved edit for this clip couldn't be opened."; }
+        }
+        MarkSaved();
     }
     // Puts a saved edit back: from a project file, or the recovery copy.
     internal void ApplyProject(TrimProject project)
@@ -60,14 +117,14 @@ public partial class TrimWindow
         }
         finally { restoringProject=false; }
     }
-    // Offered once when a clip with an unsaved edit is opened again.
+    // Offered once when Flashback closed (a crash, or Windows shutting down) before changes were saved or discarded.
     private void OfferRecovery()
     {
-        if (closed || source.Length==0 || TrimRecovery.Find(source) is not { } saved || !saved.HasEdits(media.Duration)) return;
+        if (closed || source.Length==0 || TrimRecovery.Find(source) is not { } saved || EditKey(saved)==savedEdit) { if (source.Length>0) TrimRecovery.Forget(source); return; }
         string when=saved.Saved is { } at ? (DateTime.Now-at).TotalMinutes<1 ? "a moment ago" : DateTime.Now-at<TimeSpan.FromHours(1) ? $"{(int)(DateTime.Now-at).TotalMinutes} min ago" : at.Date==DateTime.Today ? "earlier today at "+at.ToString("t") : "on "+at.ToString("g") : "earlier";
-        if (ThemedDialog.Confirm(this,"Pick up where you left off?",$"You were editing this clip {when}. Restore that edit, with its sections, cut-outs, speed, zoom, text and pictures?","Restore edit"))
-        { Snapshot(); ApplyProject(saved); StatusLabel.Text="Your last edit is back. Undo returns to a fresh start."; }
-        else TrimRecovery.Forget(source);
+        if (ThemedDialog.Confirm(this,"Bring back unsaved changes?",$"Flashback closed {when} before your changes to this clip were saved or discarded. Bring them back? (They stay unsaved until you save.)","Bring them back","Discard"))
+        { Snapshot(); ApplyProject(saved); ShowSaveState(); StatusLabel.Text="Your unsaved changes are back. Save to keep them."; }
+        TrimRecovery.Forget(source);
     }
     private bool FlushProject()
     {
@@ -97,7 +154,7 @@ public partial class TrimWindow
         ApplyProject(project); projectPath=path; savedProject=project;
         StatusLabel.Text="Opened project: "+Path.GetFileName(path); return true;
     }
-    private void SaveProject_Click(object sender,RoutedEventArgs e)
+    private void SaveProjectMenu_Click(object sender,RoutedEventArgs e)
     {
         if(source.Length==0 || exportCancellation!=null) return;
         if(projectPath==null) { SaveProjectAs_Click(sender,e); return; }

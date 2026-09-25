@@ -71,9 +71,9 @@ public partial class TrimWindow : Window
         Closing += (_, e) =>
         {
             if (exportCancellation != null) { closeAfterCancel = true; exportCancellation.Cancel(); e.Cancel = true; return; }
-            if(!FlushProject()) { e.Cancel=true; return; }
-            // Write any edit still waiting on the autosave timer.
-            if (projectSaveTimer?.IsEnabled==true) { projectSaveTimer.Stop(); KeepRecovery(); }
+            // Changes since the last save: save them, discard them, or stay.
+            if(!ConfirmLeave("Save your changes before closing?") || !FlushProject()) { e.Cancel=true; return; }
+            projectSaveTimer?.Stop();
             Pause(); clock.Stop(); Player.Close(); CloseSounds();
             if (fullscreen) ToggleFullscreen();
         };
@@ -90,9 +90,8 @@ public partial class TrimWindow : Window
         // Read and validate first so a bad drop cannot erase an existing edit.
         var imported=TrimImport.Read(new[] { path });
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
-        bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
-        if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current edits. Your original video is unchanged.","Open video")) return false;
-        if(!FlushProject()) return false; if (projectSaveTimer?.IsEnabled==true) KeepRecovery(); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
+        if (confirmChanges && !ConfirmLeave("Save your changes to this clip first?")) return false;
+        if(!FlushProject()) return false; if (!confirmChanges && source.Length>0) TrimRecovery.Forget(source); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; Player.SpeedRatio=PreviewRate;
@@ -100,9 +99,12 @@ public partial class TrimWindow : Window
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
         if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
-        // An unsaved edit of this clip from before is offered back once the window is up.
+        // Changes left unsaved by a crash are offered once the window is up.
+        savedEdit=null;
         if (previewEnabled && offerRecovery) { if (IsLoaded) Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); else { void Once(object? s, RoutedEventArgs a) { Loaded -= Once; Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); } Loaded += Once; } }
         LoadLanes();
+        // Its last save comes back (only in the app itself, so the tests start clean).
+        if (previewEnabled && offerRecovery && AskToSave) OpenSavedEdit(); else MarkSaved();
         return true;
     }
     private void ImportError(string message) { StatusLabel.Text=message; ImportStatus.Text=message; }

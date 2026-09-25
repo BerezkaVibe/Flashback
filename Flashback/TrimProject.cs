@@ -82,8 +82,30 @@ internal sealed record TrimProject(int Version, string Source, long SourceBytes,
     }
 }
 
-// Unsaved edits are kept here, one file per clip, so a closed or crashed trimmer can pick up where it
-// left off. Only the ten most recent clips are kept.
+// Edits saved with the editor's Save button, one file per clip; opening the clip again brings its saved
+// edit back. The 200 most recently saved clips are kept.
+internal static class TrimSaves
+{
+    private static string Folder => Path.Combine(Storage.Root, "edits");
+    private static string PathFor(string source) =>
+        Path.Combine(Folder, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source.ToLowerInvariant())))[..24] + ".flashtrim");
+    internal static void Keep(TrimProject project)
+    {
+        Directory.CreateDirectory(Folder);
+        project.Save(PathFor(project.Source), checkExtension: false);
+        foreach (var old in new DirectoryInfo(Folder).GetFiles("*.flashtrim").OrderByDescending(f => f.LastWriteTimeUtc).Skip(200)) try { old.Delete(); } catch { }
+    }
+    internal static TrimProject? Find(string source)
+    {
+        try { string path = PathFor(source); return File.Exists(path) ? TrimProject.Read(path) : null; }
+        catch { return null; }
+    }
+    internal static void Forget(string source) { try { File.Delete(PathFor(source)); } catch { } }
+}
+
+// Only a safety net for a crash: while there are unsaved changes a copy is kept here (one file per clip),
+// and it's removed whenever the editor is closed normally, saved or discarded. One left behind means
+// Flashback closed before that choice, and it's offered back. Only the ten most recent clips are kept.
 internal static class TrimRecovery
 {
     private static string Folder => Path.Combine(Storage.Root, "recovery");

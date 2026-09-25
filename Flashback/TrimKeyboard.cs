@@ -86,7 +86,7 @@ public partial class TrimWindow
         VolumeToolButton.ToolTip="Volume: click two spots on an audio lane to make that part louder or quieter · "+Key(TrimAction.VolumeTool);
         SoundToolButton.ToolTip="Sound: click two spots to add music or a sound file · "+Key(TrimAction.SoundTool);
         MarkEndKey.Text=Key(TrimAction.MarkEnd); MarkEndButton.ToolTip="Set end at playhead · "+MarkEndKey.Text; AutomationProperties.SetName(MarkEndButton,"Set end, shortcut "+MarkEndKey.Text);
-        foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveProjectMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
+        foreach (var (menu,action) in new (MenuItem,TrimAction)[] { (OpenVideoMenu,TrimAction.OpenVideo),(SaveEditMenu,TrimAction.SaveProject),(ExportMenu,TrimAction.Export),(SnapshotMenu,TrimAction.Snapshot),
             (UndoMenu,TrimAction.Undo),(RedoMenu,TrimAction.Redo),(AddSectionMenu,TrimAction.AddSection),(SplitMenu,TrimAction.Split),(RemoveMenu,TrimAction.RemoveSection),
             (ZoomInMenu,TrimAction.ZoomIn),(ZoomOutMenu,TrimAction.ZoomOut),(GoToTimeMenu,TrimAction.GoToTime),(FullscreenMenu,TrimAction.Fullscreen),(ShortcutGuideMenu,TrimAction.ShortcutGuide) })
             menu.InputGestureText=Key(action);
@@ -156,7 +156,7 @@ public partial class TrimWindow
             case TrimAction.Snapshot: Snapshot_Click(this,none); break;
             case TrimAction.Export: Export_Click(this,none); break;
             case TrimAction.OpenVideo: OpenVideo_Click(this,none); break;
-            case TrimAction.SaveProject: SaveProject_Click(this,none); break;
+            case TrimAction.SaveProject: SaveEdit(); break;
             case TrimAction.ShortcutGuide: ShortcutGuide_Click(this,none); break;
         }
     }

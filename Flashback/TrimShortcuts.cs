@@ -73,7 +73,7 @@ internal static class TrimShortcuts
         new(TrimAction.Snapshot,"View and file","Save snapshot","C"),
         new(TrimAction.Export,"View and file","Export sections","E"),
         new(TrimAction.OpenVideo,"View and file","Open video","Ctrl+O"),
-        new(TrimAction.SaveProject,"View and file","Save project","Ctrl+S"),
+        new(TrimAction.SaveProject,"View and file","Save your edits to this clip","Ctrl+S"),
         new(TrimAction.ShortcutGuide,"View and file","Shortcut guide","Shift+OemQuestion"),
         new(TrimAction.Fullscreen,"View and file","Full screen","F11"),
     };
