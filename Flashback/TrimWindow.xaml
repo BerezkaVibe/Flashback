@@ -233,7 +233,7 @@
       <Grid x:Name="TrackMixPanel" Visibility="Collapsed" Margin="0,8,0,0">
        <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-       <TextBlock Text="Desktop" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+       <TextBlock x:Name="DesktopMixName" Text="Desktop" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
        <Slider x:Name="DesktopMix" Grid.Column="1" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Desktop audio volume"/>
        <TextBlock x:Name="DesktopMixLabel" Grid.Column="2" Text="100%" TextAlignment="Right" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/>
        <TextBlock Grid.Row="1" Text="Microphone" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,4,0,0"/>

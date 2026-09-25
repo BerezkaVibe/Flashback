@@ -42,3 +42,42 @@ internal sealed record SoundItem(string Path, double Start, double End, double O
         return new SoundItem(video.VideoPath, video.Start, video.Start + length, video.VideoOffset, video.VideoVolume, Row: row) { Hold = video.StartHold, Speed = speed };
     }
 }
+
+// An app's own layer in a clip recorded with app layers: where it made sound, as bars named for the app.
+internal static class AppLayer
+{
+    // Waveform peaks (square-rooted, one per 10 ms; see AudioWaveforms) above this are sound, about -50 dB.
+    private const float Heard = .055f;
+    // Gaps shorter than this join the bars either side; bars shorter than MinBar (clicks) are dropped.
+    private const double Join = 1.5, MinBar = .15;
+    // The stretches of the clip (seconds) where the layer has sound, split where its app changes and named
+    // for the app then. Without peaks (waveforms off, or not read yet) each app's whole stretch is a bar.
+    internal static List<(double From, double To, string App)> Bars(float[] peaks, IReadOnlyList<(string App, double From)> apps, double duration)
+    {
+        var runs = new List<(double From, double To)>();
+        if (peaks.Length == 0) runs.Add((0, duration));
+        else
+        {
+            int start = -1, last = -1;
+            for (int i = 0; i < peaks.Length; i++)
+            {
+                if (peaks[i] < Heard) continue;
+                if (start >= 0 && (i - last) / 100.0 > Join) { runs.Add((start / 100.0, (last + 1) / 100.0)); start = -1; }
+                if (start < 0) start = i;
+                last = i;
+            }
+            if (start >= 0) runs.Add((start / 100.0, (last + 1) / 100.0));
+            runs.RemoveAll(r => r.To - r.From < MinBar);
+        }
+        var ordered = apps.OrderBy(a => a.From).ToList();
+        var bars = new List<(double, double, string)>();
+        foreach (var (from, to) in runs)
+            for (int a = 0; a < ordered.Count; a++)
+            {
+                double a0 = a == 0 ? 0 : ordered[a].From, a1 = a + 1 < ordered.Count ? ordered[a + 1].From : double.MaxValue;
+                double b0 = Math.Max(from, a0), b1 = Math.Min(Math.Min(to, a1), duration);
+                if (b1 - b0 >= MinBar / 2) bars.Add((b0, b1, ordered[a].App));
+            }
+        return bars;
+    }
+}

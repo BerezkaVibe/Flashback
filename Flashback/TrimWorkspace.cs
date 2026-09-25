@@ -26,7 +26,16 @@ public partial class TrimWindow
     {
         Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(), Volumes=Timeline.VolumeRegions.ToArray(), Sounds=Timeline.Sounds.ToArray(), Freezes=Timeline.Freezes.ToArray(),
         Crop=CropArea.Crop is { } c && CurrentCrop()!=null ? new[] { c.X,c.Y,c.Width,c.Height } : null,
+        TrackVolumes=CurrentTrackVolumes(),
     };
+    // Separate tracks' volumes that aren't 100% (desktop or Other apps, microphone, app layers), by track.
+    private Dictionary<int,double>? CurrentTrackVolumes()
+    {
+        if (!media.HasSeparateTracks) return null;
+        var all=new Dictionary<int,double>(trackVolumes) { [1]=DesktopMix.Value/100, [2]=MicrophoneMix.Value/100 };
+        var changed=all.Where(p => Math.Abs(p.Value-1)>.005).ToDictionary(p => p.Key,p => p.Value);
+        return changed.Count>0 ? changed : null;
+    }
     // Called after any edit. Half a second later the named project (if autosaving) and the
     // recovery copy are written, so a closed or crashed trimmer can pick up where it left off.
     private void ProjectChanged()
@@ -53,6 +62,10 @@ public partial class TrimWindow
             Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.Freezes=project.Freezes ?? Array.Empty<FreezeFrame>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
             CloseOverlay(); CloseZoom(); SetOverlays(OverlayOrder.Compact(project.Overlays ?? Array.Empty<OverlayItem>()));
             Timeline.VolumeRegions=project.Volumes ?? Array.Empty<VolumeRegion>(); SetSounds(project.Sounds ?? Array.Empty<SoundItem>());
+            trackVolumes.Clear(); DesktopMix.Value=100; MicrophoneMix.Value=100;
+            foreach (var (track,volume) in project.TrackVolumes ?? new Dictionary<int,double>())
+                if (track==1) DesktopMix.Value=volume*100; else if (track==2) MicrophoneMix.Value=volume*100; else if (track>2) trackVolumes[track]=volume;
+            RefreshLaneStates();
             ResetCrop();
             if (project.Crop is { } c && media.Width>0) { CropArea.VideoWidth=media.Width; CropArea.VideoHeight=media.Height; CropArea.Crop=new Rect(c[0],c[1],c[2],c[3]); RefreshCropState(); }
             SetRange(project.Start,project.End); SeekTo(project.Position); Timeline.Fit(); Timeline.Reveal(project.Position);
@@ -142,7 +155,7 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds, Freezes=Timeline.Freezes };
+        var options=WithLanes(ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds, Freezes=Timeline.Freezes });
         options.Validate(); return options;
     }
     // What the export keeps, before validation: the sections, or the marked range.
