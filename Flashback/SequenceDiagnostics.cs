@@ -83,6 +83,22 @@ internal static class SequenceDiagnostics
         var inside = holdMap.Spans(M(2, 1), M(2, 2));
         Check(inside.Count == 1 && Near(inside[0].From, 3) && Near(inside[0].To, 4) && Near(holdMap.Spans(M(1), M(2, 1.5))[0].To, 3.5), "The finished video shows a part just where it is in the hold");
 
+        // ---- A video's own sound, unlinked into a sound of its own ----
+        // On the first map: 4-5 s plays at half speed (over 2 s); the freeze at 1 s holds 2 s (6-8 s finished).
+        var slowPip = new OverlayItem { Kind = OverlayKind.Video, Start = 4, End = 5, VideoPath = "Inset.mp4", VideoOffset = 1.5, VideoVolume = .8 };
+        var slowPipSound = SoundItem.FromVideo(slowPip, map, 2);
+        Check(slowPipSound is { Start: 4, Row: 2, Offset: 1.5, Volume: .8, Hold: 0, Path: "Inset.mp4" } && Near(slowPipSound.Length, 2) && Near(slowPipSound.Speed, .5),
+            "An unlinked video's sound starts where the video does, from the same place in its file, as loud, and slows with a slowed part");
+        var heldPip = slowPip with { Start = 1, End = 2, StartHold = .5, ThroughFreezes = true };
+        var heldPipSound = SoundItem.FromVideo(heldPip, map, 0);
+        Check(heldPipSound is { Hold: .5, Speed: 1 } && Near(heldPipSound.Length, 2.5) && Near(map.ToOutput(heldPipSound.Start) + heldPipSound.Hold, map.ToOutput(heldPip.From(), false)),
+            "A video's sound unlinked partway into a hold starts there and plays on through it at normal speed");
+        var stillPip = slowPip with { Start = .5, End = 1.5, ThroughFreezes = false };
+        Check(SoundItem.FromVideo(stillPip, map, 0) is { Speed: 1 } spanning && Near(spanning.Length, 3),
+            "A video's sound unlinked across a freeze keeps its normal speed and carries on through the hold");
+        Check(!new OverlayItem().SoundUnlinked && !JsonSerializer.Deserialize<OverlayItem>("{\"Kind\":3,\"Start\":1,\"End\":2}", new JsonSerializerOptions { IncludeFields = true })!.SoundUnlinked,
+            "Videos saved before keep their sound linked");
+
         // ---- Everything slides with the video ----
         var folder = Path.Combine(Storage.Root, "sequence"); Directory.CreateDirectory(folder);
         var source = Path.Combine(folder, "Source.mp4");
@@ -289,6 +305,64 @@ internal static class SequenceDiagnostics
         double stillInHold = Change(await Gray(endsHeld, 2.3, 290, 150, 60, 60), await Gray(endsHeld, 4.3, 290, 150, 60, 60)), goneAfter = Change(await Gray(endsHeld, 4.3, 290, 150, 60, 60), await Gray(endsHeld, 4.8, 290, 150, 60, 60));
         var endsHeldSound = await Pcm(endsHeld, 3, 1);
         Check(stillInHold < 3 && goneAfter > 6 && Tone(endsHeldSound, 1500) < 100, $"A video that ends partway into a hold holds its frame there, silent, and goes at its end ({stillInHold:0.0} held, {goneAfter:0.0} gone, sound {Tone(endsHeldSound, 1500):0})");
+        // ---- A video's sound unlinked into a sound of its own ----
+        // A video from 1 s, playing through the hold. Unlinked, the video plays silent; the sound it became
+        // plays just where the linked sound did (not before the video, through the hold, after it) and as
+        // loud, and the export keeps its length.
+        var fromOne = pip with { Start = 1 };
+        var holdSequence = new SequenceMap(new[] { new KeepSection(0, 6) }, new ShareExportOptions { Freezes = holdFreeze });
+        var linkedLate = await Export("Video from 1 s", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne } });
+        var silentLate = await Export("Video from 1 s, sound unlinked", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne with { SoundUnlinked = true } } });
+        var ownSound = SoundItem.FromVideo(fromOne, holdSequence, 0)!;
+        var unlinkedLate = await Export("Video from 1 s, its sound on its own", new ShareExportOptions { Freezes = holdFreeze, Overlays = new[] { fromOne with { SoundUnlinked = true } }, Sounds = new[] { ownSound } });
+        double linkedLevel = Tone(await Pcm(linkedLate, 3, 1), 1500);
+        Check(linkedLevel > 300 && Tone(await Pcm(silentLate, 3, 1), 1500) < linkedLevel * .1, $"A video whose sound was unlinked plays silent ({Tone(await Pcm(silentLate, 3, 1), 1500):0} vs {linkedLevel:0})");
+        var levels = new List<string>(); bool alike = true;
+        foreach (var (at, sounding) in new[] { (.2, false), (1.3, true), (3.0, true), (6.5, true) })
+        {
+            double linked = Tone(await Pcm(linkedLate, at, .5), 1500), own = Tone(await Pcm(unlinkedLate, at, .5), 1500);
+            alike &= sounding ? linked > 300 && own > linked * .6 && own < linked * 1.6 : linked < 100 && own < 100;
+            levels.Add($"{at:0.0} s: {own:0} on its own, {linked:0} linked");
+        }
+        Check(alike && Math.Abs(ClipMedia.Read(unlinkedLate).Duration - 9) < .2,
+            $"A video's sound on its own plays where the linked sound did, as loud, and the export keeps its length ({string.Join("; ", levels)}; {ClipMedia.Read(unlinkedLate).Duration:0.00} s)");
+
+        // ---- A clip recorded with app layers ----
+        // Tracks as the recorder saves them: the whole mix, Other apps (300 Hz), the microphone (off), Spotify
+        // (900 Hz), Google Chrome then Discord (1500 Hz) and four empty layers, named as the recorder names them.
+        var layered = Path.Combine(folder, "App layers.mp4");
+        var log = new LayerLog(); log.Open(1, "Spotify", 100); log.Open(2, "Google Chrome", 100); log.Close(2, 104); log.Open(2, "Discord", 104);
+        var titles = Recorder.LayerTitles(log, 101, 107, microphone: false).ToList();
+        Check(titles.Contains("title=Apps: Spotify@0.00") && titles.Contains("title=Apps: Google Chrome@0.00;Discord@3.00") && titles.Contains("title=Microphone (off)") && titles.Count(t => t == "title=Apps: ") == 4,
+            "A saved clip's app layers are named for their apps, and when each starts in the clip");
+        var make = new List<string> { "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6" };
+        foreach (var tone in new[] { "sine=frequency=300:duration=6,volume=0.5", "anullsrc=r=48000:cl=stereo:d=6", "sine=frequency=900:duration=6,volume=0.5", "sine=frequency=1500:duration=6,volume=0.5" }) make.AddRange(new[] { "-f", "lavfi", "-i", tone });
+        make.AddRange(new[] { "-filter_complex", "[1:a][3:a][4:a]amix=inputs=3:normalize=0[all];[2:a]asplit=5[m][q1][q2][q3][q4]", "-map", "0:v", "-map", "[all]", "-map", "1:a", "-map", "[m]", "-map", "3:a", "-map", "4:a", "-map", "[q1]", "-map", "[q2]", "-map", "[q3]", "-map", "[q4]",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", "-ar", "48000", "-shortest" });
+        make.AddRange(titles); make.Add(layered);
+        await EditorDiagnostics.Ffmpeg(make.ToArray());
+        var read = await AudioWaveforms.TitlesAsync(layered, CancellationToken.None);
+        Check(read.Count == 9 && read[1] == "Other apps" && LayerLog.Parse(read[3]) is [("Spotify", 0)] && LayerLog.Parse(read[4]) is [("Google Chrome", 0), ("Discord", 3)] && LayerLog.Parse(read[5]).Count == 0,
+            $"The editor reads the app layers back from the clip ({string.Join(" | ", read)})");
+        async Task<string> ExportLayers(string name, ShareExportOptions with)
+        {
+            var output = Path.Combine(folder, name + ".mp4"); if (File.Exists(output)) File.Delete(output);
+            await ExportServices.PreciseAsync(layered, output, new[] { new KeepSection(0, 6) }, null, CancellationToken.None, true, with);
+            return output;
+        }
+        // Lanes as the editor lays them out: Other apps, Spotify, Chrome and Discord (the empty layers and the
+        // microphone that was off aren't lanes). Spotify muted; Chrome's layer cut out from 1 to 2 s.
+        var laneTracks = new[] { 1, 3, 4 };
+        var removed = await ExportLayers("Spotify removed", new ShareExportOptions { LaneTracks = laneTracks, LaneVolumes = new[] { 1.0, 0, 1 }, Cuts = new[] { new CutRegion(2, 1, 2) } });
+        var whole = await ExportLayers("App layers untouched", new ShareExportOptions());
+        async Task<(double Other, double Spotify, double Chrome)> Tones(string file, double at) { var pcm = await Pcm(file, at, .5); return (Tone(pcm, 300), Tone(pcm, 900), Tone(pcm, 1500)); }
+        var (wholeOther, wholeSpotify, wholeChrome) = await Tones(whole, 3);
+        var (removedOther, removedSpotify, removedChrome) = await Tones(removed, 3);
+        var (_, _, cutChrome) = await Tones(removed, 1.2);
+        Check(wholeSpotify > 300 && removedSpotify < wholeSpotify * .05 && removedOther > wholeOther * .6 && removedChrome > wholeChrome * .6,
+            $"Muting an app's layer takes just that app out of the export (Spotify {removedSpotify:0} vs {wholeSpotify:0}; others {removedOther:0}/{wholeOther:0}, {removedChrome:0}/{wholeChrome:0})");
+        Check(cutChrome < wholeChrome * .05 && Math.Abs(ClipMedia.Read(removed).Duration - 6) < .2, $"A cut-out on an app's layer silences it just there ({cutChrome:0} at 1.2 s), and the export keeps its length");
+
         var project = TrimProject.Create(source, Array.Empty<KeepSection>(), 0, 6, 0, false) with { Sounds = new[] { new SoundItem(music, 0, 2) { Speed = 99, Hold = -3 } } };
         var cleaned = JsonSerializer.Deserialize<TrimProject>(JsonSerializer.Serialize(project))!;
         var cleanedSound = ((TrimProject)typeof(TrimProject).GetMethod("Cleaned", flags)!.Invoke(cleaned, null)!).Sounds![0];

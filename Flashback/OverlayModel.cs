@@ -122,6 +122,9 @@ internal sealed record OverlayItem
     public string VideoPath { get; init; } = "";
     public double VideoOffset { get; init; }
     public double VideoVolume { get; init; } = 1;
+    // A video's sound shows on the audio timeline, linked to it. Unlinked, it was made a sound of its own
+    // (a SoundItem) and the video plays silent.
+    public bool SoundUnlinked { get; init; }
     public int VideoWidth { get; init; }
     public int VideoHeight { get; init; }
 

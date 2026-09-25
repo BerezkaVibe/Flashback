@@ -97,6 +97,9 @@ public partial class MainWindow : Window
         if (!renderOnly) timer.Start();
         if (warning != null) Tell(warning, true);
         Closing += OnClosing;
+        StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) ClearError(); };
+        // However it's put away to the tray, an error showing then is gone when it's opened again.
+        IsVisibleChanged += (_, _) => { if (!IsVisible) ClearError(); };
         Deactivated += (_, _) => { StopShortcutCapture(); try { hotkeys.Resume(); } catch { } };
         Activated += (_, _) =>
         {
@@ -125,7 +128,8 @@ public partial class MainWindow : Window
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
-        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; AutoGameCheck.IsChecked = settings.AutoStartWithGames;
+        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; FfmpegPreviewCheck.IsChecked = settings.FfmpegPreview;
+        if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = "Needs Windows 11 (or Windows 10 build 20348 or later)."; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
     private void ReplayLength_Changed(object sender,RoutedPropertyChangedEventArgs<double> e)
     {
@@ -147,7 +151,7 @@ public partial class MainWindow : Window
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
-        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
+        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, FfmpegPreview = FfmpegPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath
@@ -409,6 +413,15 @@ public partial class MainWindow : Window
         MessageLabel.Foreground = new SolidColorBrush(error ? Color.FromRgb(244, 154, 154) : Color.FromRgb(157, 166, 177));
         if (error) try { tray.ShowBalloonTip(5000, "Flashback", message.Length > 220 ? message[..220] : message, Forms.ToolTipIcon.Warning); } catch { }
     }
+    // An error stays until the window is closed to the tray, minimized or the editor is opened; then the
+    // bottom line goes back to its usual text.
+    private void ClearError()
+    {
+        if (CopyErrorButton.Visibility != Visibility.Visible) return;
+        CopyErrorButton.Visibility = Visibility.Collapsed; errorDetails = "";
+        MessageLabel.Text = "Ready when you are."; MessageLabel.ToolTip = null;
+        MessageLabel.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+    }
     private void ReportError(Exception error)
     {
         Tell(error.Message, true);
@@ -436,7 +449,7 @@ public partial class MainWindow : Window
     private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenFolder();
     private void Play_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) Process.Start(new ProcessStartInfo(lastClip) { UseShellExecute = true }); } catch (Exception ex) { Tell(ex.Message, true); } }
     public void ShowWindow() { Show(); WindowState = WindowState.Normal; Activate(); if (LibraryTab.IsSelected) _ = ReloadLibraryAsync(); }
-    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); } }
+    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); ClearError(); } }
     private void SessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
     {
         if (e.Reason == Microsoft.Win32.SessionSwitchReason.SessionLock)

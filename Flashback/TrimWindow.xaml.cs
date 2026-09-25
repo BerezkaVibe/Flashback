@@ -40,12 +40,13 @@ public partial class TrimWindow : Window
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
         InitializeComponent(); WindowTheme.Attach(this); previewEnabled = !renderOnly;
+        Player = CreatePlayer();
         LoadKeys();
         Activated += (_, _) => LoadKeys();
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         Timeline.Duration = media.Duration; Timeline.End = media.Duration; Timeline.FrameRate = media.FrameRate;
         Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
-        Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
+        Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.AppLayerPicked += OpenAppLayerPopup; Timeline.SectionPicked += SectionPicked;
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging, Timeline.HoldOffset);
         Timeline.SpeedStepRequested += StepPreviewRate;
@@ -71,9 +72,9 @@ public partial class TrimWindow : Window
         Closing += (_, e) =>
         {
             if (exportCancellation != null) { closeAfterCancel = true; exportCancellation.Cancel(); e.Cancel = true; return; }
-            if(!FlushProject()) { e.Cancel=true; return; }
-            // Write any edit still waiting on the autosave timer.
-            if (projectSaveTimer?.IsEnabled==true) { projectSaveTimer.Stop(); KeepRecovery(); }
+            // Changes since the last save: save them, discard them, or stay.
+            if(!ConfirmLeave("Save your changes before closing?") || !FlushProject()) { e.Cancel=true; return; }
+            projectSaveTimer?.Stop();
             Pause(); clock.Stop(); Player.Close(); CloseSounds();
             if (fullscreen) ToggleFullscreen();
         };
@@ -81,7 +82,8 @@ public partial class TrimWindow : Window
         Closed += (_, _) => { closed = true; OverlayView.CloseVideos(); OverlayRenderer.ClearCaches(); };
         // The font list takes a moment to gather; have it ready before the first text is added.
         _ = Task.Run(FontChoices);
-        IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0) clock.Start(); };
+        IsVisibleChanged += (_, _) => { if (!IsVisible) { Pause(); clock.Stop(); } else if (previewEnabled && source.Length>0 && !playersReleased) clock.Start(); };
+        InitBackground();
     }
     internal string SourcePath => source;
     internal bool LoadClip(string path, bool confirmChanges = true, bool offerRecovery = true)
@@ -90,9 +92,8 @@ public partial class TrimWindow : Window
         // Read and validate first so a bad drop cannot erase an existing edit.
         var imported=TrimImport.Read(new[] { path });
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
-        bool edited=source.Length>0 && (sections.Count>0 || Timeline.Start>.001 || Math.Abs(Timeline.End-media.Duration)>.001);
-        if (confirmChanges && edited && !ThemedDialog.Confirm(this,"Open another video?","This discards your current edits. Your original video is unchanged.","Open video")) return false;
-        if(!FlushProject()) return false; if (projectSaveTimer?.IsEnabled==true) KeepRecovery(); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
+        if (confirmChanges && !ConfirmLeave("Save your changes to this clip first?")) return false;
+        if(!FlushProject()) return false; if (!confirmChanges && source.Length>0) TrimRecovery.Forget(source); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); playersReleased=false; pausedInBackground=false; source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
         sections.Clear(); undo.Clear(); redo.Clear(); ResetCrop(); ResetCuts();
         Timeline.Duration=media.Duration; Timeline.FrameRate=media.FrameRate; Timeline.Fit(); RecentTrimFiles.Remember(source); SetRange(0,media.Duration); SetPlayhead(0);
         pendingSeek=false; seekAwaiting=false; Player.SpeedRatio=PreviewRate;
@@ -100,9 +101,12 @@ public partial class TrimWindow : Window
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
         if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
-        // An unsaved edit of this clip from before is offered back once the window is up.
+        // Changes left unsaved by a crash are offered once the window is up.
+        savedEdit=null;
         if (previewEnabled && offerRecovery) { if (IsLoaded) Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); else { void Once(object? s, RoutedEventArgs a) { Loaded -= Once; Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); } Loaded += Once; } }
         LoadLanes();
+        // Its last save comes back (only in the app itself, so the tests start clean).
+        if (previewEnabled && offerRecovery && AskToSave) OpenSavedEdit(); else MarkSaved();
         return true;
     }
     private void ImportError(string message) { StatusLabel.Text=message; ImportStatus.Text=message; }
@@ -241,10 +245,31 @@ public partial class TrimWindow : Window
     private void Pause() { if (freezing is { } held) parkedHold = HoldAt(held.Part.At); Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
-    private void Player_Opened(object sender, RoutedEventArgs e) { Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
+    private void Player_Opened(object sender, RoutedEventArgs e) { ApplyPreviewTracks(); Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
-    private void Player_Failed(object sender, ExceptionRoutedEventArgs e)
-    { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + e.ErrorException.Message; }
+    private void WindowsPlayer_Failed(object sender, ExceptionRoutedEventArgs e) => PreviewFailed(e.ErrorException);
+    private void PreviewFailed(Exception error)
+    { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + error.Message; }
+    // The preview player: the Windows one, or the FFmpeg one when it's chosen in Settings > Performance and its
+    // libraries are there (the Windows one otherwise, with a note why).
+    internal PreviewPlayer Player { get; private set; }
+    internal static bool? UseFfmpegPreview;
+    private PreviewPlayer CreatePlayer()
+    {
+        bool wanted = previewEnabled && (UseFfmpegPreview ?? Storage.Load(out _).FfmpegPreview);
+        if (!wanted) return new PreviewPlayer(WindowsPlayer, null);
+        if (!FfmpegLibrary.Available)
+        {
+            Dispatcher.BeginInvoke(() => StatusLabel.Text = "The FFmpeg preview player's libraries aren't installed, so the Windows player is used. " + FfmpegLibrary.Error);
+            return new PreviewPlayer(WindowsPlayer, null);
+        }
+        var engine = new FfmpegPreviewPlayer();
+        engine.Opened += () => Player_Opened(this, new RoutedEventArgs());
+        engine.Ended += () => Player_Ended(this, new RoutedEventArgs());
+        engine.Failed += PreviewFailed;
+        PlayerHost.Children.Add(engine.View);
+        return new PreviewPlayer(WindowsPlayer, engine);
+    }
     // hold: start that far into the hold of a freeze at start (finished view).
     private void StartPlayback(double start, int section = -1, double hold = 0)
     {

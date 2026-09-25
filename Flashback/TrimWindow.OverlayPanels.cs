@@ -141,19 +141,30 @@ public partial class TrimWindow
         OverlayLayer.DrawTool.Line => "Straight line: drag on the video (Shift snaps the angle)",
         _ => "Joined lines: click each corner on the video; double-click or Enter to finish, click the first corner to close",
     };
-    private static System.Windows.Shapes.Path DrawGlyph(OverlayLayer.DrawTool tool, double width = 14, double height = 12)
+    private static System.Windows.Shapes.Path DrawGlyph(OverlayLayer.DrawTool tool, double width = 14, double height = 12) => Glyph(DrawIcon(tool), width, height);
+    private static System.Windows.Shapes.Path Glyph(Geometry data, double width, double height)
     {
-        var icon = new System.Windows.Shapes.Path { Data = DrawIcon(tool), Stretch = Stretch.Uniform, Width = width, Height = height, StrokeThickness = 1.6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round };
+        var icon = new System.Windows.Shapes.Path { Data = data, Stretch = Stretch.Uniform, Width = width, Height = height, StrokeThickness = 1.6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round };
         icon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Ink");
         return icon;
     }
 
-    // ---- The draw tool ----
-    // Like the shape tool: click two spots on the timeline for when it shows, then draw it on the video
-    // the chosen way. The arrow inside the button switches between the three ways.
+    // ---- Shapes and lines ----
+    // One tool for shapes and drawn lines. Like the other tools: click two spots on the timeline for when it
+    // shows. Then it's a shape from the gallery, or drawn on the video the chosen way (freehand, a straight
+    // line or joined lines). The button uses the way last picked from the arrow inside it; D starts it with
+    // shapes and W with drawing.
     private OverlayLayer.DrawTool drawTool = OverlayLayer.DrawTool.Freehand;
-    private bool drawPending;
-    private void DrawTool_Click(object sender, RoutedEventArgs e) => UseDrawTool(!(drawPending && Timeline.OverlayMode == OverlayKind.Shape));
+    private bool drawPending, drawChosen;
+    // Pictures of a triangle, a square and a circle.
+    private static readonly Geometry ShapesIcon = Geometry.Parse("M8,0.75 L12,6.25 H4 Z M0.75,7.25 H7.75 V14.25 H0.75 Z M8.75,11 A3.25,3.25 0 1 1 15.25,11 A3.25,3.25 0 1 1 8.75,11 Z");
+    private void ShapeTool_Click(object sender, RoutedEventArgs e)
+    {
+        if (Timeline.OverlayMode == OverlayKind.Shape) { Timeline.OverlayMode = null; drawPending = false; ShowCutTool(); StatusLabel.Text = "Tool off."; return; }
+        if (drawChosen) UseDrawTool(true); else OverlayTool(OverlayKind.Shape);
+    }
+    private void ShapeKey() { drawChosen = false; ShowShapeWay(); OverlayTool(OverlayKind.Shape); }
+    private void DrawTool_Click(object sender, RoutedEventArgs e) { drawChosen = true; ShowShapeWay(); UseDrawTool(!(drawPending && Timeline.OverlayMode == OverlayKind.Shape)); }
     private void UseDrawTool(bool on)
     {
         if (source.Length == 0 || exportCancellation != null) return;
@@ -161,25 +172,43 @@ public partial class TrimWindow
         ShowCutTool(); SlowPopup.IsOpen = false;
         StatusLabel.Text = on ? "Click two spots on the timeline for when the drawing shows, then draw it on the video. Esc leaves the tool." : "Tool off.";
     }
-    private void DrawToolChoice_Down(object sender, MouseButtonEventArgs e)
+    private void ShapeToolChoice_Down(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        var menu = new ContextMenu { PlacementTarget = DrawToolButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
-        foreach (var tool in new[] { OverlayLayer.DrawTool.Freehand, OverlayLayer.DrawTool.Line, OverlayLayer.DrawTool.Corners })
+        var menu = new ContextMenu { PlacementTarget = ShapeToolButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+        MenuItem Choice(System.Windows.Shapes.Path glyph, string name, string tip, bool chosen, Action pick)
         {
-            var item = new MenuItem { Header = DrawGlyph(tool, 22, 16), ToolTip = DrawTip(tool), IsChecked = tool == drawTool };
-            AutomationProperties.SetName(item, DrawTip(tool));
-            item.Click += (_, _) => { SetDrawTool(tool); UseDrawTool(true); };
-            menu.Items.Add(item);
+            var header = new StackPanel { Orientation = Orientation.Horizontal };
+            glyph.Margin = new Thickness(0, 0, 8, 0); header.Children.Add(glyph);
+            header.Children.Add(new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center });
+            var item = new MenuItem { Header = header, ToolTip = tip, IsChecked = chosen };
+            AutomationProperties.SetName(item, name);
+            item.Click += (_, _) => pick();
+            menu.Items.Add(item); return item;
         }
+        Choice(Glyph(ShapesIcon, 22, 16), "Shapes and stickers", "A shape, sticker, or a blurred or pixelated area, picked in the panel", !drawChosen, () =>
+        {
+            drawChosen = false; ShowShapeWay();
+            if (!(Timeline.OverlayMode == OverlayKind.Shape && !drawPending)) OverlayTool(OverlayKind.Shape);
+        });
+        menu.Items.Add(new Separator());
+        foreach (var tool in new[] { OverlayLayer.DrawTool.Freehand, OverlayLayer.DrawTool.Line, OverlayLayer.DrawTool.Corners })
+            Choice(DrawGlyph(tool, 22, 16), DrawName(tool), DrawTip(tool), drawChosen && tool == drawTool, () => { drawChosen = true; SetDrawTool(tool); UseDrawTool(true); });
         menu.IsOpen = true;
     }
+    private static string DrawName(OverlayLayer.DrawTool tool) => tool switch { OverlayLayer.DrawTool.Freehand => "Draw freehand", OverlayLayer.DrawTool.Line => "Straight line", _ => "Joined lines" };
     private void SetDrawTool(OverlayLayer.DrawTool tool)
     {
-        drawTool = tool; DrawToolIcon.Data = DrawIcon(tool);
-        DrawToolButton.ToolTip = DrawTip(tool) + " · " + TrimShortcuts.Display(keys[TrimAction.DrawTool]) + " · the arrow picks another way";
+        drawTool = tool; ShowShapeWay();
         // An open shape switches to the new way right away.
         if (OverlayView.Drawing is { } drawing && drawing != tool) OverlayView.SetDrawing(tool);
+    }
+    // The button shows the way it will use: the shapes, or the chosen way to draw.
+    private void ShowShapeWay()
+    {
+        ShapeToolIcon.Data = drawChosen ? DrawIcon(drawTool) : ShapesIcon;
+        ShapeToolButton.ToolTip = (drawChosen ? DrawTip(drawTool) + " · " + TrimShortcuts.Display(keys[TrimAction.DrawTool])
+            : "Shapes: click two spots to add a shape, sticker, or a blurred or pixelated area · " + TrimShortcuts.Display(keys[TrimAction.ShapeTool])) + " · the arrow picks a shape or a way to draw";
     }
     // Draw on the video for the selected shape; the drawing replaces its outline.
     private void StartDrawing(OverlayLayer.DrawTool tool)

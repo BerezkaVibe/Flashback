@@ -32,6 +32,7 @@ public partial class TrimWindow
         Timeline.SoundMoved += (old, next) => { ReplaceSound(old, next); FocusPart(next); };
         Timeline.SoundEditFinished += () => { UpdateExportHint(); UpdateSummary(); };
         Timeline.LanesExpandedChanged += ShowAudioTools;
+        Timeline.VideoHasSound = VideoHasSound; Timeline.VideoSoundPicked += OpenVideoSoundPopup;
         VolumeTimingHost.Children.Add(TimingEditor(() => popupVolume is { } v && Timeline.VolumeRegions.Contains(v) ? v : null, out volumeTiming));
         foreach (double value in VolumeChoiceValues)
         {
@@ -249,13 +250,84 @@ public partial class TrimWindow
         SoundPopup.IsOpen = true;
     }
 
+    // ---- Videos' own sound ----
+    // A video over the clip that has sound shows it on the audio timeline, linked to the video. Its pop-up
+    // sets how loud it is, or unlinks it into a sound of its own (to move, trim, fade or speed up apart from
+    // the video); the video then plays silent.
+    private readonly Dictionary<string, bool> videosWithSound = new(StringComparer.OrdinalIgnoreCase);
+    private bool VideoHasSound(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        if (videosWithSound.TryGetValue(path, out bool has)) return has;
+        try { has = File.Exists(path) && ClipMedia.Read(path).HasAudio; } catch { has = false; }
+        return videosWithSound[path] = has;
+    }
+    private void OpenVideoSoundPopup(int index)
+    {
+        if (exportCancellation != null || index < 0 || index >= Timeline.Overlays.Count || Timeline.Overlays[index] is not { Kind: OverlayKind.Video } video) return;
+        FocusPart(video); popupSound = null;
+        string path = video.VideoPath;
+        // The video as it is now, if it's still there (edits replace it at the same place in the list).
+        OverlayItem? Current() => index < Timeline.Overlays.Count && Timeline.Overlays[index] is { Kind: OverlayKind.Video, SoundUnlinked: false } o && o.VideoPath == path ? o : null;
+        var panel = SoundControls; panel.Children.Clear();
+        string control = ""; long lastChange = 0;
+        void Edit(string name, Func<OverlayItem, OverlayItem> change)
+        {
+            if (Current() is not { } current) return;
+            if (name != control || Stopwatch.GetElapsedTime(lastChange).TotalSeconds > 1.2) Snapshot();
+            control = name; lastChange = Stopwatch.GetTimestamp();
+            var next = change(current).Validated(); ReplaceOverlay(index, next); FocusPart(next); UpdateExportHint();
+            if (Timeline.SelectedOverlay == index) LoadOverlayUi();
+        }
+        panel.Children.Add(new TextBlock { Text = "♪ " + video.Label, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 2) });
+        var note = new TextBlock { Text = "The video's own sound. It's linked to the video, so it moves and trims with it.", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+        note.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); panel.Children.Add(note);
+        var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+        var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+        static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
+        var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = Level(video.VideoVolume * 100) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+        var slider = new Slider { Minimum = 0, Maximum = 200, Value = video.VideoVolume * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, ToolTip = "How loud the video's sound is in the export (the preview plays it up to 100%)" };
+        slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); Edit("volume", o => o with { VideoVolume = Math.Round(e.NewValue) / 100 }); };
+        DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
+        row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);
+        Button AddButton(string text, string tip, Action click)
+        {
+            var b = new Button { Content = text, FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch, ToolTip = tip };
+            b.SetResourceReference(StyleProperty, "TrimButton"); b.Click += (_, _) => click(); panel.Children.Add(b); return b;
+        }
+        AddButton("Unlink from the video", "Make it a sound of its own: move it, trim it, fade it or change its speed apart from the video", () => UnlinkVideoSound(index, path));
+        var settings = AddButton("Video settings", "Open the video's own settings", () => { SoundPopup.IsOpen = false; OpenOverlay(index); });
+        settings.Background = Brushes.Transparent; settings.BorderBrush = Brushes.Transparent;
+        SoundPopup.IsOpen = true;
+    }
+    private void UnlinkVideoSound(int index, string path)
+    {
+        if (index >= Timeline.Overlays.Count || Timeline.Overlays[index] is not { Kind: OverlayKind.Video, SoundUnlinked: false } video || video.VideoPath != path) return;
+        // It starts where the video does and plays as long as the video shows, so it's where it was; the row is
+        // free where it plays.
+        var map = Timeline.Map;
+        double at = map.ToOutput(video.From(), false), length = map.Spans(video.From(), video.To()).Sum(s => s.To - s.From);
+        int row = 0;
+        while (Timeline.Sounds.Any(s => s.Row == row && map.ToOutput(s.Start) + s.Hold < at + length - 1e-9 && map.ToOutput(s.Start) + s.Hold + s.Length > at + 1e-9)) row++;
+        if (SoundItem.FromVideo(video, map, row) is not { } sound) { StatusLabel.Text = "That video isn't in the finished video, so there's no sound to unlink."; return; }
+        Snapshot();
+        ReplaceOverlay(index, video with { SoundUnlinked = true });
+        SetSounds(Timeline.Sounds.Append(sound).ToArray());
+        if (Timeline.SelectedOverlay == index) LoadOverlayUi();
+        UpdateExportHint(); UpdateSummary(); ProjectChanged();
+        OpenSoundPopup(sound);
+        StatusLabel.Text = $"Unlinked the sound of {video.Label}. It's a sound of its own now: move it, trim it, fade it or change its speed; the video plays silent."
+            + (Math.Abs(sound.Speed - 1) > 1e-9 ? $" It plays at {sound.Speed:0.##}× to stay with the video's speed." : "");
+    }
+
     // ---- Preview ----
     // Each sound plays through its own player, kept in step with the playhead while the preview plays.
     private readonly Dictionary<string, MediaPlayer> soundPlayers = new();
     private readonly HashSet<string> soundsPlaying = new();
     private void SyncSounds()
     {
-        if (!previewEnabled) return;
+        // (Not while the players are put away in the background; they come back with the editor.)
+        if (!previewEnabled || playersReleased) return;
         var wanted = new HashSet<string>();
         // Sounds play along the finished video, as they're exported: from where they're anchored, for real
         // seconds, through holds and speed parts alike. Footage that isn't kept has no sound over it.
@@ -267,7 +339,8 @@ public partial class TrimWindow
             var s = Timeline.Sounds[i]; string key = i + "|" + s.Path; wanted.Add(key);
             if (!soundPlayers.TryGetValue(key, out var player))
             {
-                player = new MediaPlayer(); try { player.Open(new Uri(s.Path)); } catch { continue; }
+                if (PreviewSoundPath(s.Path) is not { } file) continue;
+                player = new MediaPlayer(); try { player.Open(new Uri(file)); } catch { continue; }
                 soundPlayers[key] = player;
             }
             double at = map!.ToOutput(s.Start) + s.Hold, local = now - at, speed = Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed);
@@ -286,6 +359,59 @@ public partial class TrimWindow
             else if (soundsPlaying.Remove(key)) player.Pause();
         }
         foreach (var gone in soundPlayers.Keys.Where(k => !wanted.Contains(k)).ToList()) { soundPlayers[gone].Close(); soundPlayers.Remove(gone); soundsPlaying.Remove(gone); }
+    }
+    // A sound from a video file (an unlinked video's sound, or a video picked as a sound) plays in the preview
+    // from just its sound, copied out once into a small file in the background, so the preview doesn't also
+    // decode a picture nobody sees. It joins in once that's ready. The copies are kept for next time, under
+    // about 1 GB, the longest unused dropped first.
+    private static readonly string SoundCacheRoot = Path.Combine(Path.GetTempPath(), "Flashback-sound-cache");
+    private static readonly Dictionary<string, Task<string?>> soundCopies = new(StringComparer.OrdinalIgnoreCase);
+    private static string? PreviewSoundPath(string path)
+    {
+        if (!VideoExtensions.Contains(Path.GetExtension(path).ToLowerInvariant())) return path;
+        if (!soundCopies.TryGetValue(path, out var copy) || (copy.IsCompletedSuccessfully && copy.Result is { } done && !File.Exists(done))) soundCopies[path] = copy = Task.Run(() => CopySoundAsync(path));
+        // (If its sound can't be copied out, it plays from the video itself.)
+        return copy.IsCompletedSuccessfully ? copy.Result ?? path : null;
+    }
+    private static async Task<string?> CopySoundAsync(string video)
+    {
+        try
+        {
+            var info = new FileInfo(video);
+            if (!info.Exists) return null;
+            string key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{info.FullName.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")))[..32];
+            Directory.CreateDirectory(SoundCacheRoot);
+            string output = Path.Combine(SoundCacheRoot, key + ".m4a");
+            if (File.Exists(output)) { try { File.SetLastWriteTimeUtc(output, DateTime.UtcNow); } catch { } return output; }
+            string work = Path.Combine(SoundCacheRoot, key + "." + Guid.NewGuid().ToString("N")[..8] + ".m4a");
+            // Copied as it is, which takes a moment; a sound that doesn't fit the file is made AAC instead.
+            foreach (var codec in new[] { new[] { "-c:a", "copy" }, new[] { "-c:a", "aac", "-b:a", "192k" } })
+            {
+                var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                foreach (var a in new[] { "-y", "-v", "error", "-i", video, "-map", "0:a:0", "-vn", "-sn", "-dn" }.Concat(codec).Append(work)) start.ArgumentList.Add(a);
+                using var p = Process.Start(start)!;
+                await p.StandardError.ReadToEndAsync(); await p.WaitForExitAsync();
+                if (p.ExitCode == 0 && File.Exists(work) && new FileInfo(work).Length > 0) { File.Move(work, output, true); TrimSoundCache(); return output; }
+            }
+            try { File.Delete(work); } catch { }
+        }
+        catch { }
+        return null;
+    }
+    private static void TrimSoundCache()
+    {
+        try
+        {
+            var files = new DirectoryInfo(SoundCacheRoot).GetFiles().OrderBy(f => f.LastWriteTimeUtc).ToList();
+            long total = files.Sum(f => f.Length);
+            foreach (var f in files)
+            {
+                if (total <= 1L << 30) break;
+                if (DateTime.UtcNow - f.LastWriteTimeUtc < TimeSpan.FromMinutes(10)) continue;
+                try { f.Delete(); total -= f.Length; } catch { }
+            }
+        }
+        catch { }
     }
     private void StopSounds() { foreach (var (key, player) in soundPlayers) player.Pause(); soundsPlaying.Clear(); }
     private void CloseSounds() { foreach (var player in soundPlayers.Values) player.Close(); soundPlayers.Clear(); soundsPlaying.Clear(); }

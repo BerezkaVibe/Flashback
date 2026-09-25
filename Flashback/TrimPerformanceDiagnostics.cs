@@ -85,6 +85,16 @@ internal static class TrimPerformanceDiagnostics
             var view = trim.OverlayView;
             double hover = Time(500, i => VisualTreeHelper.HitTest(view, new Point(i % 400 + 200, 200 + i % 300)));
             report.AppendLine($"Preview hover hit test: {hover:0.000} ms");
+            // Videos over the clip with their sound on the audio timeline: redrawing the timeline as one's volume
+            // changes (the pop-up's slider), and hit-testing the pointer over their rows.
+            int first = tl.Overlays.Count;
+            for (int i = 0; i < 6; i++) add.Invoke(trim, new object[] { OverlayItem.NewVideo(i * 3, i * 3 + 5, clip, 1920, 1080) with { Scale = .2, X = .1 + i * .15, Y = .85 } });
+            typeof(TrimWindow).GetMethod("CloseOverlay", flags)!.Invoke(trim, null);
+            double volume = Time(100, i => replace.Invoke(trim, new object[] { first, tl.Overlays[first] with { VideoVolume = .5 + i % 10 / 10.0 } }));
+            report.AppendLine($"Video's sound volume edit (timeline redrawn with 6 videos' sound rows): {volume:0.000} ms");
+            var soundAt = typeof(TrimTimeline).GetMethod("VideoSoundAt", flags)!;
+            double soundHover = Time(2000, i => soundAt.Invoke(tl, new object[] { new Point(40 + i % 1100, tl.ActualHeight - 20 - i % 60) }));
+            report.AppendLine($"Timeline hover hit test over videos' sound: {soundHover:0.000} ms");
             report.AppendLine($"Managed memory: {GC.GetTotalMemory(true) / 1048576.0:0.0} MiB, working set {Process.GetCurrentProcess().WorkingSet64 / 1048576.0:0.0} MiB");
         }
         finally { trim.Close(); }

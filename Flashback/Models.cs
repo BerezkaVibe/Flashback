@@ -44,6 +44,13 @@ public sealed class Settings
     public bool PreviewEffects { get; set; } = true;
     public bool UiAnimations { get; set; } = true;
     public bool SeparateAudioTracks { get; set; }
+    // Each app playing sound is recorded on its own layer (up to AppMixSource.Slots, the rest together), so it
+    // can be removed in the editor later. Off by default: it opens a capture stream per app while recording.
+    public bool SeparateAppAudio { get; set; }
+    // The editor previews with the FFmpeg player (FFmpeg's libraries, decoding on the graphics card) instead of
+    // the Windows one. Experimental, so off by default; takes effect the next time the editor opens.
+    public bool FfmpegPreview { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool AppLayers => SeparateAppAudio && DesktopAudio && AppMixSource.Supported;
     public bool AutoStartWithGames { get; set; }
     public bool ShowCursor { get; set; }
     public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Flashback");
@@ -82,11 +89,41 @@ public sealed class Settings
         if (AppVolumes.Values.Any(v => v < 0 || v > 200)) throw new ArgumentException("Choose app recording levels from 0% to 200%.");
         if (OverlaySeconds < 2 || OverlaySeconds > 8) throw new ArgumentException("Choose an overlay duration from 2 to 8 seconds.");
     }
+    // Puts back the default for each setting that doesn't pass Validate (a hand-edited file, or one from another
+    // version), keeping the rest. Returns what was reset.
+    public List<string> Repair()
+    {
+        var d = new Settings(); var reset = new List<string>();
+        void Fix(bool bad, string name, Action restore) { if (bad) { restore(); reset.Add(name); } }
+        static bool Throws(Action check) { try { check(); return false; } catch { return true; } }
+        Fix(ReplaySeconds < 30 || ReplaySeconds > 300 || ReplaySeconds % 5 != 0, "replay length", () => ReplaySeconds = d.ReplaySeconds);
+        Fix(!new[] { 30, 60, 90, 120 }.Contains(FrameRate), "frame rate", () => FrameRate = d.FrameRate);
+        Fix(!new[] { 0, 720, 1080, 1440, 2160 }.Contains(Height), "resolution", () => Height = d.Height);
+        Fix(!new[] { "Compact", "Balanced", "High" }.Contains(Quality), "quality", () => Quality = d.Quality);
+        Fix(DisplayIndex < 0 || DisplayIndex > 15, "display", () => DisplayIndex = d.DisplayIndex);
+        Fix(string.IsNullOrWhiteSpace(OutputFolder) || !Path.IsPathFullyQualified(OutputFolder) || OutputFolder.IndexOfAny(new[] { '\r', '\n' }) >= 0, "clips folder", () => OutputFolder = d.OutputFolder);
+        Fix(!VideoEncoder.Preferences.Contains(Encoder ?? ""), "encoder", () => Encoder = d.Encoder);
+        Fix(Throws(() => Hotkeys.Parse(Hotkey)), "save hotkey", () => Hotkey = d.Hotkey);
+        Fix(Throws(() => { if (Hotkeys.Parse(PauseHotkey) == Hotkeys.Parse(Hotkey)) throw new ArgumentException(); }), "pause hotkey",
+            () => PauseHotkey = Hotkey == d.PauseHotkey ? d.Hotkey : d.PauseHotkey);
+        TrimKeys ??= new(); TrimAddHotkey ??= d.TrimAddHotkey;
+        Fix(Throws(() => TrimShortcuts.Validate(this)), "editor shortcuts", () => { TrimAddHotkey = d.TrimAddHotkey; TrimKeys.Clear(); });
+        Fix(!new[] { "Top right", "Top left", "Bottom right", "Bottom left" }.Contains(OverlayCorner), "saved-clip pop-up corner", () => OverlayCorner = d.OverlayCorner);
+        Fix(DesktopVolume < 0 || DesktopVolume > 200 || MicrophoneVolume < 0 || MicrophoneVolume > 200, "recording volume", () => { DesktopVolume = d.DesktopVolume; MicrophoneVolume = d.MicrophoneVolume; });
+        Fix(!AudioBitrates.Contains(AudioBitrate), "audio quality", () => AudioBitrate = d.AudioBitrate);
+        Fix(!NoiseLevels.Contains(MicNoiseReduction ?? ""), "noise reduction", () => MicNoiseReduction = d.MicNoiseReduction);
+        Fix(AppVolumes == null || AppVolumes.Values.Any(v => v < 0 || v > 200), "app recording levels", () => AppVolumes = d.AppVolumes);
+        Fix(OverlaySeconds < 2 || OverlaySeconds > 8, "saved-clip pop-up time", () => OverlaySeconds = d.OverlaySeconds);
+        Palette ??= d.Palette; AccentColor ??= d.AccentColor; AudioDeviceId ??= ""; MicrophoneDeviceId ??= ""; GameOverride ??= ""; ExternalEditorPath ??= "";
+        // Anything else Validate still refuses: all defaults, as before.
+        if (Throws(Validate)) { var fresh = new Settings(); foreach (var p in typeof(Settings).GetProperties().Where(p => p.CanWrite)) p.SetValue(this, p.GetValue(fresh)); reset.Add("everything else"); }
+        return reset;
+    }
     public bool RequiresBufferRestart(Settings other) => ReplaySeconds != other.ReplaySeconds || FrameRate != other.FrameRate
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
         || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
-        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || MixerActive != other.MixerActive || MicNoiseReduction != other.MicNoiseReduction;
+        || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || SeparateAppAudio != other.SeparateAppAudio || MixerActive != other.MixerActive || MicNoiseReduction != other.MicNoiseReduction;
     public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
     public int BitrateMbps => (int)Math.Round((Quality switch { "Compact" => 8, "High" => 24, _ => 14 }) * (Height switch { 720 => 0.6, 1440 => 1.7, 2160 => 3.0, 0 => 2.0, _ => 1.0 }) * Math.Max(0.65, FrameRate / 60.0));
     public double EstimatedBufferMb => BitrateMbps * (ReplaySeconds + 12) / 8.0 * 1.1;
@@ -96,23 +133,32 @@ public static class Storage
 {
     public static string Root { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flashback");
     public static string ConfigPath => Path.Combine(Root, "settings.json");
+    // Anything that doesn't pass the checks is put back to its default and the fixed settings are saved, so
+    // the notice shows once rather than at every start (and the rest of the preferences are kept).
     public static Settings Load(out string? warning)
     {
         warning = null;
+        Settings s;
         try
         {
             if (!File.Exists(ConfigPath)) return new();
-            var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(ConfigPath)) ?? new();
-            try { TrimShortcuts.Validate(s); }
-            catch (ArgumentException)
-            {
-                s.TrimAddHotkey="+"; s.TrimKeys.Clear();
-                warning="Editor shortcuts were reset to their defaults because two of them shared a key. Other preferences were preserved.";
-            }
-            s.Validate();
+            s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(ConfigPath)) ?? new();
+        }
+        catch (Exception ex)
+        {
+            // Unreadable: kept beside it as settings.json.bad, and replaced with the defaults.
+            warning = "Settings could not be read, so the defaults are back. The old file was kept as settings.json.bad. " + ex.Message;
+            s = new();
+            try { File.Copy(ConfigPath, ConfigPath + ".bad", true); Save(s); } catch { }
             return s;
         }
-        catch (Exception ex) { warning = "Could not load settings; defaults restored. " + ex.Message; return new(); }
+        var reset = s.Repair();
+        if (reset.Count == 0) return s;
+        warning = reset.Contains("editor shortcuts")
+            ? "Editor shortcuts were reset to their defaults because two of them shared a key. Other preferences were preserved."
+            : $"Some settings weren't valid and were put back to their defaults: {string.Join(", ", reset)}. Other preferences were preserved.";
+        try { Save(s); } catch { }
+        return s;
     }
     public static void Save(Settings settings)
     {

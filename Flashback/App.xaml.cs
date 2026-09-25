@@ -22,6 +22,7 @@ public partial class App : Application
         if (editor >= 0)
         {
             string? clip = editor + 1 < e.Args.Length && !e.Args[editor + 1].StartsWith("--") ? e.Args[editor + 1] : null;
+            TrimWindow.AskToSave = true; TrimWindow.LightInBackground = true;
             var trim = new TrimWindow(clip); MainWindow = trim;
             trim.Closed += (_, _) => Shutdown(0);
             trim.Show(); return;
@@ -212,6 +213,24 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--ffmpeg-engine-test"))
+        {
+            try { await FfmpegEngineDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--player-compare-test"))
+        {
+            try { await PlayerCompareDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--background-test"))
+        {
+            try { await BackgroundDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--trim-perf-test"))
         {
             try { await TrimPerformanceDiagnostics.RunAsync(); Shutdown(0); }
@@ -282,6 +301,7 @@ public partial class App : Application
         }
         singleton = new Mutex(true, @"Local\Flashback.ReplayRecorder", out bool created);
         if (!created) { MessageBox.Show("Flashback is already running. Open it from the system tray.", "Flashback"); Shutdown(); return; }
+        TrimWindow.AskToSave = true; TrimWindow.LightInBackground = true;
         var main = new MainWindow(); MainWindow = main;
         if (!e.Args.Contains("--tray")) main.Show();
         await main.AutoStartAsync();

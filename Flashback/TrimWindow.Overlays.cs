@@ -62,12 +62,11 @@ public partial class TrimWindow
     }
     private void TextTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Text);
     private void ImageTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Image);
-    private void ShapeTool_Click(object sender, RoutedEventArgs e) => OverlayTool(OverlayKind.Shape);
     private void OverlayTool(OverlayKind kind)
     {
         if (source.Length == 0 || exportCancellation != null) return;
         Timeline.OverlayMode = Timeline.OverlayMode == kind && !drawPending ? null : kind; drawPending = false; ShowCutTool(); SlowPopup.IsOpen = false;
-        string what = kind switch { OverlayKind.Text => "text", OverlayKind.Shape => "a shape (or a blurred or pixelated area)", _ => "a picture, GIF or video" };
+        string what = kind switch { OverlayKind.Text => "text", OverlayKind.Shape => "a shape (or a blurred or pixelated area)", _ => "a picture, GIF, video or music file" };
         StatusLabel.Text = Timeline.OverlayMode == null ? "Tool off."
             : $"Click two spots to add {what} for that part; the marker locks onto the playhead and other parts' edges. Esc leaves the tool.";
     }
@@ -102,8 +101,15 @@ public partial class TrimWindow
         else if (kind == OverlayKind.Shape) item = OverlayItem.NewShape(start, end, lastShapeStyle is { IsDrawn: true } == drawPending ? lastShapeStyle : null);
         else
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Add a picture or video", Filter = "Pictures, GIFs and videos|" + string.Join(";", PictureExtensions.Concat(VideoExtensions).Select(x => "*" + x)), CheckFileExists = true };
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Add a picture, video or sound", Filter = "Pictures, GIFs, videos and sounds|" + string.Join(";", PictureExtensions.Concat(VideoExtensions).Concat(SoundExtensions).Select(x => "*" + x)), CheckFileExists = true };
             if (dialog.ShowDialog(this) != true) { StatusLabel.Text = "Nothing added."; return; }
+            // A music or sound file goes on the audio timeline for the stretch that was marked, like the sound tool.
+            if (SoundExtensions.Contains(Path.GetExtension(dialog.FileName).ToLowerInvariant()))
+            {
+                double length = Timeline.Finished ? Timeline.ViewOf(to, true) - Timeline.ViewOf(from, false) : end - start;
+                AddSound(dialog.FileName, start, start + Math.Max(FrameStep, length), from.Hold);
+                return;
+            }
             if (NewMedia(start, end, dialog.FileName) is not { } added) return;
             item = added;
         }
@@ -314,7 +320,18 @@ public partial class TrimWindow
             if (video)
             {
                 Header("Sound and start");
-                SliderRow("Volume", "videoVolume", 0, 2, o => o.VideoVolume, (o, v) => o with { VideoVolume = Math.Round(v, 2) }, v => v < .005 ? "Muted" : $"{v * 100:0}%", tip: "How loud this video's own sound is in the export (the preview plays it up to 100%)");
+                When(SliderRow("Volume", "videoVolume", 0, 2, o => o.VideoVolume, (o, v) => o with { VideoVolume = Math.Round(v, 2) }, v => v < .005 ? "Muted" : $"{v * 100:0}%", tip: "How loud this video's own sound is in the export (the preview plays it up to 100%)"), o => !o.SoundUnlinked);
+                // Unlinked, its sound is a sound of its own on the audio timeline; linking it back gives the video its
+                // sound again (the separate sound stays until it's removed).
+                var unlinked = new WrapPanel { Margin = new Thickness(0, 2, 0, 0) };
+                var unlinkedNote = new TextBlock { Text = "Its sound was unlinked and plays as a sound of its own.", FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+                unlinkedNote.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); unlinked.Children.Add(unlinkedNote);
+                SmallButton(unlinked, "Link its sound back", "The video plays its own sound again. Remove the separate sound if you don't want both.", () =>
+                {
+                    EditOverlay("relink", o => o with { SoundUnlinked = false });
+                    StatusLabel.Text = "The video plays its own sound again. The sound you unlinked is still on the audio timeline; remove it if you don't want both.";
+                });
+                OverlayControls.Children.Add(unlinked); When(unlinked, o => o.SoundUnlinked);
                 VideoStartRow();
                 var through = new CheckBox { Content = "Keep playing through freezes", Margin = new Thickness(0, 6, 0, 0), ToolTip = "On: the video keeps playing, with its sound, while a freeze frame holds the picture. Off: it holds still with the picture." };
                 through.Click += (_, _) => EditOverlay("through", o => o with { ThroughFreezes = through.IsChecked == true });

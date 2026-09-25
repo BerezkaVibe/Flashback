@@ -11,6 +11,25 @@ namespace Flashback;
 // Runs once per opened clip at below-normal priority; nothing is kept on disk.
 internal static class AudioWaveforms
 {
+    // Each audio track's name (its title or handler name), in track order, from ffmpeg's summary of the file.
+    internal static async Task<IReadOnlyList<string>> TitlesAsync(string path, CancellationToken token)
+    {
+        var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-hide_banner", "-nostdin", "-i", path }) info.ArgumentList.Add(arg);
+        using var process = Process.Start(info) ?? throw new IOException("Could not read the audio tracks.");
+        string text = await process.StandardError.ReadToEndAsync(token).ConfigureAwait(false);
+        await process.WaitForExitAsync(token).ConfigureAwait(false);
+        var titles = new List<string>(); bool audio = false;
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Contains("Stream #", StringComparison.Ordinal)) { audio = line.Contains(": Audio:", StringComparison.Ordinal); if (audio) titles.Add(""); continue; }
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^\s+(title|handler_name)\s*:\s?(.*?)\s*$");
+            // A title wins over a handler name.
+            if (audio && m.Success && (titles[^1].Length == 0 || m.Groups[1].Value == "title")) titles[^1] = m.Groups[2].Value;
+        }
+        return titles;
+    }
+
     internal static async Task<float[]> LoadAsync(string path, int track, CancellationToken token)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"))

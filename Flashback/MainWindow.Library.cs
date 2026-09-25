@@ -136,6 +136,7 @@ public partial class MainWindow
     private void OpenTrim_Click(object sender,RoutedEventArgs e) => OpenTrimmer();
     private bool OpenTrimmer(string? path = null)
     {
+        ClearError();
         try
         {
             if (trimWindow != null)

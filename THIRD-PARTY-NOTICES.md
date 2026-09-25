@@ -37,3 +37,15 @@ Vortice.Direct3D11, Vortice.DXGI and Vortice.DirectX 3.8.3; Vortice.Mathematics 
 ## Design and protocol references
 
 The trimming workflow was informed by LosslessCut (https://github.com/mifi/lossless-cut); no LosslessCut code is incorporated. OBS Studio's desktop duplication design was reviewed (https://github.com/obsproject/obs-studio), without incorporating its source. Native capture is implemented using Vortice and Windows Direct3D APIs. The optional RTSS notification bridge implements the published RTSSSharedMemoryV2 protocol; RTSS itself is not included or installed by Flashback.
+
+## FFmpeg libraries (preview player)
+
+The editor's FFmpeg preview player loads FFmpeg's shared libraries (avcodec, avformat, avutil, swresample, swscale, avfilter) from the `ffmpeg` folder when they're included in a build. Builds use an LGPL-only FFmpeg 6.1 shared build (no GPL or nonfree components), loaded dynamically and unmodified, so they can be replaced with another compatible build. Licensing: https://ffmpeg.org/legal.html; the LGPL 2.1 text is at https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+
+## FFmpeg.AutoGen
+
+C# bindings for FFmpeg's libraries, used by the preview player. Version 6.1.0.1, licensed under the GNU Lesser General Public License 3.0. Project: https://github.com/Ruslan-B/FFmpeg.AutoGen
+
+## Vortice.Direct3D9
+
+Direct3D 9Ex bindings (MIT), used to show the preview player's pictures in WPF. Project: https://github.com/amerkoleci/Vortice.Windows

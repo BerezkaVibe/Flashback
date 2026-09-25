@@ -26,7 +26,16 @@ public partial class TrimWindow
     {
         Cuts=Timeline.Cuts.ToArray(), Speed=Timeline.SlowRegions.ToArray(), Zoom=Timeline.ZoomRegions.ToArray(), Overlays=Timeline.Overlays.ToArray(), Volumes=Timeline.VolumeRegions.ToArray(), Sounds=Timeline.Sounds.ToArray(), Freezes=Timeline.Freezes.ToArray(),
         Crop=CropArea.Crop is { } c && CurrentCrop()!=null ? new[] { c.X,c.Y,c.Width,c.Height } : null,
+        TrackVolumes=CurrentTrackVolumes(),
     };
+    // Separate tracks' volumes that aren't 100% (desktop or Other apps, microphone, app layers), by track.
+    private Dictionary<int,double>? CurrentTrackVolumes()
+    {
+        if (!media.HasSeparateTracks) return null;
+        var all=new Dictionary<int,double>(trackVolumes) { [1]=DesktopMix.Value/100, [2]=MicrophoneMix.Value/100 };
+        var changed=all.Where(p => Math.Abs(p.Value-1)>.005).ToDictionary(p => p.Key,p => p.Value);
+        return changed.Count>0 ? changed : null;
+    }
     // Called after any edit. Half a second later the named project (if autosaving) and the
     // recovery copy are written, so a closed or crashed trimmer can pick up where it left off.
     private void ProjectChanged()
@@ -36,12 +45,69 @@ public partial class TrimWindow
         projectSaveTimer.Tick -= ProjectSave_Tick; projectSaveTimer.Tick += ProjectSave_Tick;
         projectSaveTimer.Stop(); projectSaveTimer.Start();
     }
-    private void ProjectSave_Tick(object? sender,EventArgs e) { FlushProject(); KeepRecovery(); }
+    private void ProjectSave_Tick(object? sender,EventArgs e) { FlushProject(); KeepRecovery(); ShowSaveState(); }
+    // Only while there are unsaved changes, and only for a crash: closing normally removes it.
     private void KeepRecovery()
     {
         if (source.Length==0 || restoringProject) return;
+        if (Unsaved) TrimRecovery.Keep(CurrentProject()); else TrimRecovery.Forget(source);
+    }
+
+    // ---- Saving ----
+    // Edits are kept only when saved (the Save button or Ctrl+S). Opening the clip again brings its last save
+    // back; closing the editor or opening another clip with changes since then asks to save or discard them.
+    private string? savedEdit;
+    // The edit as it's compared for changes (where the playhead is doesn't count).
+    private static string EditKey(TrimProject project) => (project with { Position=0 }).Serialize();
+    private bool Unsaved => source.Length>0 && savedEdit!=null && EditKey(CurrentProject())!=savedEdit;
+    private void MarkSaved() { savedEdit=source.Length>0 ? EditKey(CurrentProject()) : null; ShowSaveState(); }
+    private void ShowSaveState()
+    {
+        bool unsaved=Unsaved;
+        if (unsaved) SaveEditButton.SetResourceReference(ForegroundProperty,"Accent"); else SaveEditButton.ClearValue(ForegroundProperty);
+        SaveEditButton.ToolTip=(unsaved ? "Save your changes to this clip" : "Your edits to this clip are saved")+" · "+TrimShortcuts.Display(keys[TrimAction.SaveProject]);
+        SaveEditLabel.Text=unsaved ? "Save" : "Saved";
+    }
+    private bool SaveEdit()
+    {
+        if (source.Length==0 || exportCancellation!=null) return source.Length==0;
         var project=CurrentProject();
-        if (project.HasEdits(media.Duration)) TrimRecovery.Keep(project); else TrimRecovery.Forget(source);
+        try
+        {
+            // An edit with nothing in it leaves nothing saved.
+            if (project.HasEdits(media.Duration)) TrimSaves.Keep(project); else TrimSaves.Forget(source);
+            if (projectPath!=null) SaveProject(projectPath);
+        }
+        catch (Exception ex) { StatusLabel.Text="Your edits couldn't be saved. "+ex.Message; return false; }
+        MarkSaved(); TrimRecovery.Forget(source);
+        StatusLabel.Text="Saved. Your edits come back when you open this clip again.";
+        return true;
+    }
+    private void SaveEdit_Click(object sender,RoutedEventArgs e) => SaveEdit();
+    // Before leaving the clip (closing, or opening another): save or discard changes since the last save.
+    // False: stay.
+    // (Only in the app itself: the tests open and close editors without anyone to answer.)
+    internal static bool AskToSave;
+    private bool ConfirmLeave(string title)
+    {
+        if (source.Length==0) return true;
+        if (AskToSave && Unsaved)
+        {
+            var choice=ThemedDialog.Choose(this,title,"Save keeps them for when you open this clip again. Discard goes back to your last save.","Save","Discard");
+            if (choice==null || (choice==true && !SaveEdit())) return false;
+        }
+        TrimRecovery.Forget(source);
+        return true;
+    }
+    // Opening a clip: its last save comes back.
+    private void OpenSavedEdit()
+    {
+        if (TrimSaves.Find(source) is { } saved && saved.HasEdits(media.Duration))
+        {
+            try { ApplyProject(saved); StatusLabel.Text="Your saved edit is back."+(saved.Saved is { } at ? $" Saved {at:g}." : ""); }
+            catch { StatusLabel.Text="Your saved edit for this clip couldn't be opened."; }
+        }
+        MarkSaved();
     }
     // Puts a saved edit back: from a project file, or the recovery copy.
     internal void ApplyProject(TrimProject project)
@@ -53,6 +119,10 @@ public partial class TrimWindow
             Timeline.Cuts=project.Cuts ?? Array.Empty<CutRegion>(); Timeline.SlowRegions=project.Speed ?? Array.Empty<SpeedRegion>(); Timeline.Freezes=project.Freezes ?? Array.Empty<FreezeFrame>(); Timeline.ZoomRegions=project.Zoom ?? Array.Empty<ZoomRegion>();
             CloseOverlay(); CloseZoom(); SetOverlays(OverlayOrder.Compact(project.Overlays ?? Array.Empty<OverlayItem>()));
             Timeline.VolumeRegions=project.Volumes ?? Array.Empty<VolumeRegion>(); SetSounds(project.Sounds ?? Array.Empty<SoundItem>());
+            trackVolumes.Clear(); DesktopMix.Value=100; MicrophoneMix.Value=100;
+            foreach (var (track,volume) in project.TrackVolumes ?? new Dictionary<int,double>())
+                if (track==1) DesktopMix.Value=volume*100; else if (track==2) MicrophoneMix.Value=volume*100; else if (track>2) trackVolumes[track]=volume;
+            RefreshLaneStates();
             ResetCrop();
             if (project.Crop is { } c && media.Width>0) { CropArea.VideoWidth=media.Width; CropArea.VideoHeight=media.Height; CropArea.Crop=new Rect(c[0],c[1],c[2],c[3]); RefreshCropState(); }
             SetRange(project.Start,project.End); SeekTo(project.Position); Timeline.Fit(); Timeline.Reveal(project.Position);
@@ -60,14 +130,14 @@ public partial class TrimWindow
         }
         finally { restoringProject=false; }
     }
-    // Offered once when a clip with an unsaved edit is opened again.
+    // Offered once when Flashback closed (a crash, or Windows shutting down) before changes were saved or discarded.
     private void OfferRecovery()
     {
-        if (closed || source.Length==0 || TrimRecovery.Find(source) is not { } saved || !saved.HasEdits(media.Duration)) return;
+        if (closed || source.Length==0 || TrimRecovery.Find(source) is not { } saved || EditKey(saved)==savedEdit) { if (source.Length>0) TrimRecovery.Forget(source); return; }
         string when=saved.Saved is { } at ? (DateTime.Now-at).TotalMinutes<1 ? "a moment ago" : DateTime.Now-at<TimeSpan.FromHours(1) ? $"{(int)(DateTime.Now-at).TotalMinutes} min ago" : at.Date==DateTime.Today ? "earlier today at "+at.ToString("t") : "on "+at.ToString("g") : "earlier";
-        if (ThemedDialog.Confirm(this,"Pick up where you left off?",$"You were editing this clip {when}. Restore that edit, with its sections, cut-outs, speed, zoom, text and pictures?","Restore edit"))
-        { Snapshot(); ApplyProject(saved); StatusLabel.Text="Your last edit is back. Undo returns to a fresh start."; }
-        else TrimRecovery.Forget(source);
+        if (ThemedDialog.Confirm(this,"Bring back unsaved changes?",$"Flashback closed {when} before your changes to this clip were saved or discarded. Bring them back? (They stay unsaved until you save.)","Bring them back","Discard"))
+        { Snapshot(); ApplyProject(saved); ShowSaveState(); StatusLabel.Text="Your unsaved changes are back. Save to keep them."; }
+        TrimRecovery.Forget(source);
     }
     private bool FlushProject()
     {
@@ -97,7 +167,7 @@ public partial class TrimWindow
         ApplyProject(project); projectPath=path; savedProject=project;
         StatusLabel.Text="Opened project: "+Path.GetFileName(path); return true;
     }
-    private void SaveProject_Click(object sender,RoutedEventArgs e)
+    private void SaveProjectMenu_Click(object sender,RoutedEventArgs e)
     {
         if(source.Length==0 || exportCancellation!=null) return;
         if(projectPath==null) { SaveProjectAs_Click(sender,e); return; }
@@ -142,7 +212,7 @@ public partial class TrimWindow
     {
         if (!double.TryParse(SizeLimit.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out double mb)) throw new ArgumentException("Enter a file size in MB, or 0 for no limit.");
         var format=(ExportFormat)Math.Max(0,SharePreset.SelectedIndex);
-        var options=ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds, Freezes=Timeline.Freezes };
+        var options=WithLanes(ShareExportOptions.For(format,mb) with { Crop=CurrentCrop(), DesktopVolume=DesktopMix.Value/100, MicrophoneVolume=MicrophoneMix.Value/100, Cuts=Timeline.Cuts, Speed=ExportSpeedValue, SlowRegions=Timeline.SlowRegions, ZoomRegions=Timeline.ZoomRegions, Overlays=Timeline.Overlays, VolumeRegions=Timeline.VolumeRegions, Sounds=Timeline.Sounds, Freezes=Timeline.Freezes });
         options.Validate(); return options;
     }
     // What the export keeps, before validation: the sections, or the marked range.

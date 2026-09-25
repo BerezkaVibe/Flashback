@@ -30,6 +30,15 @@ public static class Diagnostics
         var s = new Settings { ReplaySeconds = 30, Height = hardware ? 1080 : 720, FrameRate = hardware ? 60 : 30, OutputFolder = Path.Combine(Storage.Root, "clips ' test"), DesktopAudio = true };
         Storage.Save(s);
         Check(Storage.Load(out _).ReplaySeconds == 30, "Persist and restore recording settings");
+        // A bad setting is fixed and saved: the notice shows once, not at every start, and the rest is kept.
+        File.WriteAllText(Storage.ConfigPath, File.ReadAllText(Storage.ConfigPath).Replace("\"FrameRate\": " + s.FrameRate, "\"FrameRate\": 45"));
+        var repaired = Storage.Load(out var firstNotice); Storage.Load(out var secondNotice);
+        Check(firstNotice?.Contains("frame rate") == true && secondNotice == null && repaired.FrameRate == 60 && repaired.ReplaySeconds == 30 && repaired.OutputFolder == s.OutputFolder,
+            $"A bad setting goes back to its default once, keeping the others ({firstNotice}; then {secondNotice ?? "nothing"})");
+        File.WriteAllText(Storage.ConfigPath, "{ not json");
+        Storage.Load(out var unreadable); Storage.Load(out var unreadableAgain);
+        Check(unreadable != null && unreadableAgain == null && File.Exists(Storage.ConfigPath + ".bad"), "Unreadable settings are kept aside and replaced, so the notice shows once");
+        Storage.Save(s);
         using (var hotkeyA = new Hotkeys(allowShared: false))
         using (var hotkeyB = new Hotkeys(allowShared: false))
         {

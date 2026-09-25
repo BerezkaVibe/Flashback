@@ -109,7 +109,8 @@ public partial class TrimWindow
                 Snapshot(); SetSounds(Timeline.Sounds.Append(sound with { Start = start, End = start + sound.Length, Hold = Timeline.Finished ? Timeline.HoldOffset : 0, Row = FreeSoundRow(Timeline.Sounds, start, start + sound.Length) }).ToArray());
                 UpdateExportHint(); ProjectChanged(); StatusLabel.Text = "Pasted the sound."; break;
             case OverlayItem item:
-                AddOverlay(item with { Start = start, End = end, Layer = 0 });
+                // (A copied video brings its own sound, linked, even if the original's was unlinked.)
+                AddOverlay(item with { Start = start, End = end, Layer = 0, SoundUnlinked = false });
                 if (Timeline.Overlays.Count > 0 && ReferenceEquals(SelectedOverlayItem, Timeline.Overlays[^1])) StatusLabel.Text = $"Pasted the {PartName(item)}.";
                 break;
         }
