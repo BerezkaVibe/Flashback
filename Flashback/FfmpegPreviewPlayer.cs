@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using FFmpeg.AutoGen;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -14,9 +16,12 @@ namespace Flashback;
 // The FFmpeg preview player: FFmpeg's libraries in the app, decoding on the graphics card (FfmpegPresenter)
 // and every audio track mixed in the app (FfmpegAudioMixer), played through WASAPI.
 // - A decoding thread keeps a few frames ready ahead of the playhead, and jumps to the exact frame on a seek
-//   (the latest seek wins, so scrubbing never queues up).
+//   (the latest seek wins, so scrubbing never queues up, and a newer one interrupts an older one).
 // - The sound is the clock while playing: what the speakers have actually played, so picture and sound
 //   stay together at any speed. Without sound it's a stopwatch.
+// - The sound output keeps running through seeks, speed changes and short pauses (silence while paused), so
+//   none of them wait for the audio device to start again.
+// - Speed parts play at their speed from exactly where they begin, the sound switching speed at the edge.
 // - Each screen refresh shows the frame for that moment.
 // It answers like the Windows player (Position, SpeedRatio, Volume, Opened and Ended) so the editor can use
 // either; see PreviewPlayer.
@@ -41,18 +46,28 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private volatile bool stop, playingFlag;
     private readonly AutoResetEvent wake = new(false);
     private double seekRequest = double.NaN;
+    private long lastShown;
     private readonly Queue<(double Time, IntPtr Frame)> ahead = new();
     private IntPtr still; // a paused seek's frame, waiting to be shown
     private int stillScheduled;
     private IntPtr shown;
     private const int Ahead = 4;
-    // The clock: where it started (media seconds), the sound frames played since then, and the speed.
-    private double anchor, speed = 1;
+    // How long the sound output idles on silence after a pause before it's let go.
+    private static readonly TimeSpan KeepOutput = TimeSpan.FromSeconds(3);
+    private DispatcherTimer? releaseOutput;
+
+    // ---- The clock ----
+    // While paused: anchor. Playing with sound: wherever the speakers have got to in the sound (see
+    // FfmpegSoundStream). Playing without sound: a stopwatch from anchor, through the speed parts.
+    private FfmpegSoundStream? sound;
+    private double anchor;
+    private SpeedMap speeds = new(1, Array.Empty<SpeedRegion>(), 0);
     private readonly Stopwatch clock = new();
-    private long audioStart;
     private bool playing, endedRaised;
+
     private double volume = .5; private bool muted;
     private IReadOnlyDictionary<int, double>? trackVolumes;
+    private IReadOnlyDictionary<int, IReadOnlyList<FfmpegAudioMixer.GainPart>>? trackGains;
 
     internal void Open(string path)
     {
@@ -68,7 +83,9 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
             View.Source = presenter.Source;
             mixer = new FfmpegAudioMixer(path);
             if (mixer.TrackCount == 0) { mixer.Dispose(); mixer = null; }
-            else { if (trackVolumes != null) mixer.SetVolumes(trackVolumes); tempo = new FfmpegTempo(mixer); }
+            else { if (trackVolumes != null) mixer.SetVolumes(trackVolumes); mixer.SetGains(trackGains); tempo = new FfmpegTempo(mixer); }
+            speeds = speeds with { Duration = Duration };
+            if (mixer != null) sound = new FfmpegSoundStream(mixer, tempo!, speeds);
             stop = false; anchor = 0; endedRaised = false;
             decoder = new Thread(DecodeLoop) { IsBackground = true, Name = "FFmpeg preview decoder", Priority = ThreadPriority.AboveNormal };
             decoder.Start();
@@ -84,12 +101,12 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     }
     internal void Close()
     {
-        Pause();
+        Pause(); ReleaseOutput();
         IsOpen = false; stop = true; wake.Set();
         decoder?.Join(2000); decoder = null;
         lock (frameLock) { while (ahead.Count > 0) Free(ahead.Dequeue().Frame); Free(Interlocked.Exchange(ref still, IntPtr.Zero)); }
         Free(shown); shown = IntPtr.Zero;
-        lock (audioLock) { tempo?.Dispose(); tempo = null; mixer?.Dispose(); mixer = null; }
+        lock (audioLock) { sound = null; tempo?.Dispose(); tempo = null; mixer?.Dispose(); mixer = null; }
         reader?.Dispose(); reader = null;
         View.Source = null; presenter?.Dispose(); presenter = null;
     }
@@ -102,40 +119,46 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         set
         {
             double at = Math.Clamp(value, 0, Math.Max(0, Duration));
-            bool was = playing;
-            if (was) StopClock();
             anchor = at; endedRaised = false;
             RequestSeek(at);
-            if (was) StartClock();
+            if (playing) Restart(at);
         }
     }
     private double Now()
     {
         if (!playing) return anchor;
-        if (output != null) return anchor + Math.Max(0, output.GetPosition() / 8 - audioStart) * speed / FfmpegAudioMixer.Rate;
-        return anchor + clock.Elapsed.TotalSeconds * speed;
+        if (output is { } o && sound != null)
+        {
+            // What the speakers have played, in the mix's sample frames (the device may run at another rate).
+            try { return sound.MediaAt(o.GetPosition() / (double)o.OutputWaveFormat.AverageBytesPerSecond * FfmpegAudioMixer.Rate) ?? anchor; }
+            catch { return anchor; }
+        }
+        return speeds.Advance(anchor, clock.Elapsed.TotalSeconds);
     }
+    // The preview's speed (1 is normal); speed parts play at this times their own speed.
     internal double SpeedRatio
     {
-        get => speed;
+        get => speeds.Rate;
         set
         {
             double next = Math.Clamp(value, .1, 4);
-            if (Math.Abs(next - speed) < 1e-9) return;
-            bool was = playing;
-            if (was) { anchor = Now(); StopClock(); }
-            speed = next;
-            if (was) StartClock();
+            if (Math.Abs(next - speeds.Rate) > 1e-9) Respeed(speeds with { Rate = next });
         }
+    }
+    // The clip's speed parts, played at their speed. The same list again changes nothing.
+    internal void SetSpeedParts(IReadOnlyList<SpeedRegion> parts)
+    {
+        if (!ReferenceEquals(parts, speeds.Parts)) Respeed(speeds with { Parts = parts });
     }
     internal double Volume { get => volume; set { volume = Math.Clamp(value, 0, 1); } }
     internal bool IsMuted { get => muted; set => muted = value; }
-    // Which audio tracks the preview plays and how loud (the editor's lanes); null plays the whole mix.
-    internal void SetTrackVolumes(IReadOnlyDictionary<int, double>? volumes)
+    // Which audio tracks the preview plays and how loud (the editor's lanes); null plays the whole mix. Gains:
+    // each track's cut-outs and volume parts.
+    internal void SetTrackVolumes(IReadOnlyDictionary<int, double>? volumes, IReadOnlyDictionary<int, IReadOnlyList<FfmpegAudioMixer.GainPart>>? gains = null)
     {
-        trackVolumes = volumes;
+        trackVolumes = volumes; trackGains = gains;
         if (mixer == null) return;
-        lock (audioLock) mixer.SetVolumes(volumes ?? new Dictionary<int, double> { [0] = 1 });
+        lock (audioLock) { mixer.SetVolumes(volumes ?? new Dictionary<int, double> { [0] = 1 }); mixer.SetGains(gains); }
     }
 
     internal void Play()
@@ -144,39 +167,60 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         if (anchor >= Duration - .01) anchor = 0;
         playing = true; endedRaised = false;
         RequestSeek(anchor, keepPlaying: true);
-        StartClock();
+        releaseOutput?.Stop();
+        bool fresh = false;
+        if (sound != null && output == null)
+            try
+            {
+                lock (audioLock) sound.NewOutput();
+                output = new WasapiOut(AudioClientShareMode.Shared, true, 60);
+                output.Init(new Feed(this));
+                fresh = true;
+            }
+            catch { output?.Dispose(); output = null; }
+        // The sound is ready before the output starts, so its first buffer is the clip's sound, not silence.
+        Restart(anchor);
+        if (fresh) try { output!.Play(); } catch { ReleaseOutput(); Restart(anchor); }
         CompositionTarget.Rendering += Render;
     }
     internal void Pause()
     {
         if (!playing) return;
         anchor = Now();
-        StopClock(); playing = false; playingFlag = false;
+        playing = false; playingFlag = false;
+        if (sound != null) lock (audioLock) sound.Stop();
+        clock.Reset();
         CompositionTarget.Rendering -= Render;
         RequestSeek(anchor);
-    }
-    private void StartClock()
-    {
-        playing = true; playingFlag = true;
-        if (mixer != null)
+        // The output idles on silence for a moment, so playing again straight away starts at once.
+        if (output != null)
         {
-            lock (audioLock) { mixer.Seek(anchor); tempo!.SetSpeed(speed); tempo.Reset(); }
-            try
-            {
-                output = new WasapiOut(AudioClientShareMode.Shared, true, 60);
-                output.Init(new Feed(this));
-                audioStart = output.GetPosition() / 8;
-                output.Play();
-                return;
-            }
-            catch { output?.Dispose(); output = null; }
+            releaseOutput ??= new DispatcherTimer(KeepOutput, DispatcherPriority.Background, (_, _) => { releaseOutput!.Stop(); if (!playing) ReleaseOutput(); }, View.Dispatcher);
+            releaseOutput.Stop(); releaseOutput.Start();
         }
-        clock.Restart();
     }
-    private void StopClock()
+    private void ReleaseOutput()
     {
-        if (output != null) { var o = output; output = null; try { o.Stop(); } catch { } o.Dispose(); }
-        clock.Reset();
+        releaseOutput?.Stop();
+        if (output == null) return;
+        var o = output; output = null;
+        try { o.Stop(); } catch { }
+        o.Dispose();
+    }
+    // Plays on from a moment.
+    private void Restart(double at)
+    {
+        playingFlag = true;
+        if (output != null) { lock (audioLock) sound!.Restart(at, speeds); return; }
+        anchor = at; clock.Restart();
+    }
+    // A new speed, from now on.
+    private void Respeed(SpeedMap next)
+    {
+        if (!playing) { speeds = next; return; }
+        double at = Now(); speeds = next;
+        if (output != null) { lock (audioLock) sound!.Respeed(speeds); return; }
+        anchor = at; clock.Restart();
     }
 
     // ---- Sound ----
@@ -188,10 +232,10 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(FfmpegAudioMixer.Rate, 2);
         public int Read(byte[] buffer, int offset, int count)
         {
-            int frames = count / 8;
+            int frames = count / 8, got = 0;
             if (mix.Length < frames * 2) mix = new float[frames * 2];
-            int got;
-            lock (player.audioLock) got = player.tempo?.Read(mix, frames) ?? 0;
+            try { lock (player.audioLock) got = player.sound?.Read(mix, frames) ?? 0; }
+            catch (Exception ex) { player.View.Dispatcher.BeginInvoke(() => player.Failed?.Invoke(ex)); }
             // 0.5 is as recorded (the Windows player's default), so the preview can go up to twice as loud.
             float gain = player.muted ? 0 : (float)(player.volume * 2);
             for (int i = 0; i < got * 2; i++) mix[i] *= gain;
@@ -204,7 +248,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     // ---- Pictures ----
     private void RequestSeek(double seconds, bool keepPlaying = false)
     {
-        lock (frameLock) { seekRequest = seconds; while (ahead.Count > 0) Free(ahead.Dequeue().Frame); }
+        lock (frameLock) { Volatile.Write(ref seekRequest, seconds); while (ahead.Count > 0) Free(ahead.Dequeue().Frame); }
         playingFlag = keepPlaying || playing;
         wake.Set();
     }
@@ -218,7 +262,14 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
                 lock (frameLock) { target = seekRequest; seekRequest = double.NaN; }
                 if (!double.IsNaN(target))
                 {
-                    if (reader!.Seek(target))
+                    // A newer seek to earlier on gives this one up, unless nothing has been shown for a while
+                    // (dragging back steadily still shows pictures as it goes). One further on lets it carry on.
+                    bool Newer()
+                    {
+                        double next = Volatile.Read(ref seekRequest);
+                        return !double.IsNaN(next) && next < target && Stopwatch.GetElapsedTime(Interlocked.Read(ref lastShown)).TotalMilliseconds < 150;
+                    }
+                    if (reader!.Seek(target, Newer))
                     {
                         var copy = (IntPtr)ffmpeg.av_frame_clone(reader.Frame);
                         if (playingFlag) lock (frameLock) ahead.Enqueue((reader.FrameTime, copy));
@@ -244,6 +295,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     // A paused seek's frame goes on screen; during a scrub only the latest one does.
     private void ShowStill(IntPtr frame)
     {
+        Interlocked.Exchange(ref lastShown, Stopwatch.GetTimestamp());
         Free(Interlocked.Exchange(ref still, frame));
         if (Interlocked.Exchange(ref stillScheduled, 1) == 1) return;
         View.Dispatcher.BeginInvoke(() =>
@@ -251,7 +303,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
             Interlocked.Exchange(ref stillScheduled, 0);
             var next = Interlocked.Exchange(ref still, IntPtr.Zero);
             if (next != IntPtr.Zero && presenter != null) Show(next);
-        }, System.Windows.Threading.DispatcherPriority.Render);
+        }, DispatcherPriority.Render);
     }
     private void Show(IntPtr frame)
     {
@@ -273,8 +325,8 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         if (due != IntPtr.Zero) { Show(due); wake.Set(); }
         if (now >= Duration - .005 && !endedRaised)
         {
-            endedRaised = true; anchor = Duration;
-            StopClock(); playing = false; playingFlag = false; CompositionTarget.Rendering -= Render;
+            endedRaised = true;
+            Pause(); anchor = Duration;
             Ended?.Invoke();
         }
     }

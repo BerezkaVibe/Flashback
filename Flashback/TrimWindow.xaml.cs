@@ -157,7 +157,7 @@ public partial class TrimWindow : Window
                 // a seek stalled the picture a moment, and a video that kept playing through the hold ran ahead.
                 freezing = null; freezeDone = held.Part.At;
                 SetPlayhead(held.Part.At);
-                Player.SpeedRatio = PreviewRate * RegionSpeedAt(held.Part.At);
+                Player.SpeedRatio = PlayerSpeedAt(held.Part.At);
                 Player.Play(); SyncSounds();
             }
             else SetPlayhead(held.Part.At);
@@ -181,7 +181,9 @@ public partial class TrimWindow : Window
         // skip a moment of picture and sound, so it restarts at the new speed from exactly where that
         // speed begins instead.
         // (Just after that restart the player can report a hair before the edge; that still counts as the edge.)
-        double speed = PreviewRate * RegionSpeedAt(speedEdge is double e && actual >= e - .1 && actual < e ? e : actual);
+        // The FFmpeg player switches speed at the edges itself.
+        Player.SpeedParts = Timeline.SlowRegions;
+        double speed = PlayerSpeedAt(speedEdge is double e && actual >= e - .1 && actual < e ? e : actual);
         if (Math.Abs(Player.SpeedRatio - speed) > 1e-6)
         {
             double edge = Timeline.SlowRegions.SelectMany(r => new[] { r.Start, r.End }).Where(t => t > playhead - 1e-6 && t <= actual + 1e-6).DefaultIfEmpty(actual).Min();
@@ -193,7 +195,7 @@ public partial class TrimWindow : Window
     {
         playhead = Math.Clamp(time, 0, media.Duration); Timeline.HoldOffset = HoldAt(playhead); Timeline.Position = playhead; if (!Timeline.IsDragging) Timeline.Reveal(playhead); Timeline.InvalidateVisual();
         PositionLabel.Text = PositionText();
-        if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts();
+        if (Timeline.Cuts.Count > 0 || CensorOverlay.Visibility == Visibility.Visible) ApplyPreviewCuts(); else SyncPreviewMix();
         if (Timeline.ZoomRegions.Count > 0 || Player.RenderTransform != System.Windows.Media.Transform.Identity) ApplyZoomPreview();
         // A freeze frame holds everything on the video, pictures and videos included.
         // Items can start or stop partway through a hold, and videos keep playing through one, so the
@@ -276,7 +278,7 @@ public partial class TrimWindow : Window
         // Seek while paused, then play, so audio and video restart from the same point (at the speed
         // of the part it starts in).
         Player.Pause();
-        Player.SpeedRatio=PreviewRate*RegionSpeedAt(start);
+        Player.SpeedParts=Timeline.SlowRegions; Player.SpeedRatio=PlayerSpeedAt(start);
         SetPlayhead(start); previewSection=section;
         pendingSeek=true; FlushSeek();
         Player.ScrubbingEnabled=false;

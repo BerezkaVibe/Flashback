@@ -181,14 +181,16 @@ public partial class TrimWindow
         Timeline.Cuts = Timeline.Cuts.Where(c => c != cut).ToArray();
         StatusLabel.Text = "Cut removed."; ApplyPreviewCuts(); UpdateExportHint();
     }
-    // The preview shows cuts as they will export: black picture, or silence (all audio).
+    // The preview shows cuts as they will export: black picture, or silence. The FFmpeg player silences just
+    // the lanes cut, as the export does; the Windows player can only silence all of it.
     private void ApplyPreviewCuts()
     {
         bool black = false, mute = false;
         foreach (var c in Timeline.Cuts)
             if (playhead >= c.Start && playhead < c.End) { if (c.Lane < 0) black = true; else mute = true; }
         CensorOverlay.Visibility = black ? Visibility.Visible : Visibility.Collapsed;
-        Player.IsMuted = userMuted || mute;
+        Player.IsMuted = userMuted || (mute && !Player.UsesFfmpeg);
+        SyncPreviewMix();
     }
     // A newly opened video starts clean: every part from the last one goes.
     private void ResetCuts() { Timeline.Cuts = Array.Empty<CutRegion>(); Timeline.SlowRegions = Array.Empty<SpeedRegion>(); Timeline.Freezes = Array.Empty<FreezeFrame>(); Timeline.VolumeRegions = Array.Empty<VolumeRegion>(); SetSounds(Array.Empty<SoundItem>()); Timeline.CutMode = false; Timeline.SlowMode = false; Timeline.VolumeMode = false; Timeline.SoundMode = false; FreezePopup.IsOpen = false; ResetZoom(); ResetOverlays(); ShowCutTool(); }
@@ -289,6 +291,8 @@ public partial class TrimWindow
     private void SlowPopup_Closed(object? sender, EventArgs e) => Timeline.SelectedSlow = -1;
     // The preview plays speed parts at their speed too.
     private double RegionSpeedAt(double time) => Timeline.SlowRegions.FirstOrDefault(r => time >= r.Start && time < r.End)?.Speed ?? 1;
+    // The speed the player is set to at a moment: the FFmpeg player applies the speed parts itself.
+    private double PlayerSpeedAt(double time) => Player.PlaysSpeedParts ? PreviewRate : PreviewRate * RegionSpeedAt(time);
     // Each separate track's volume in the export: desktop (or Other apps) and microphone from their sliders,
     // app layers from their pop-up. 0 mutes it.
     private readonly Dictionary<int, double> trackVolumes = new();
@@ -301,14 +305,33 @@ public partial class TrimWindow
         if (!media.HasSeparateTracks || Timeline.Lanes.Count != laneTracks.Length) return;
         Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i), Volume = LaneVolume(i) }).ToArray();
     }
-    // The FFmpeg preview plays the separate tracks at their lanes' volumes, as the export mixes them (a muted
-    // app layer isn't heard); with every lane at 100% it plays the whole mix. The Windows player can only
-    // play the whole mix.
+    // The FFmpeg preview plays the separate tracks at their lanes' volumes, with each lane's cut-outs and
+    // volume parts, as the export mixes them (a muted app layer isn't heard); with every lane at 100% and
+    // nothing cut it plays the whole mix. The Windows player can only play the whole mix.
     private void ApplyPreviewTracks()
     {
         if (Player?.Engine is not { } engine) return;
-        bool custom = media.HasSeparateTracks && laneTracks.Length > 0 && laneTracks.Any(t => Math.Abs(TrackVolume(t) - 1) > .005);
-        engine.SetTrackVolumes(custom ? laneTracks.Distinct().ToDictionary(t => t, TrackVolume) : null);
+        previewCuts = Timeline.Cuts; previewVolumes = Timeline.VolumeRegions;
+        var gains = new Dictionary<int, List<FfmpegAudioMixer.GainPart>>();
+        void Add(int lane, double start, double end, double gain)
+        {
+            if (lane < 0 || lane >= laneTracks.Length) return;
+            if (!gains.TryGetValue(laneTracks[lane], out var list)) gains[laneTracks[lane]] = list = new();
+            list.Add(new(start, end, gain));
+        }
+        foreach (var c in Timeline.Cuts) Add(c.Lane, c.Start, c.End, 0);
+        foreach (var v in Timeline.VolumeRegions) Add(v.Lane, v.Start, v.End, v.Gain);
+        bool custom = media.HasSeparateTracks && laneTracks.Length > 0 && (gains.Count > 0 || laneTracks.Any(t => Math.Abs(TrackVolume(t) - 1) > .005));
+        engine.SetTrackVolumes(custom ? laneTracks.Distinct().ToDictionary(t => t, TrackVolume) : null,
+            gains.Count == 0 ? null : gains.ToDictionary(g => g.Key, g => (IReadOnlyList<FfmpegAudioMixer.GainPart>)g.Value));
+    }
+    // Keeps the FFmpeg preview's mix in step with the cut-outs and volume parts; nothing to do when they
+    // haven't changed (each change makes new lists).
+    private object? previewCuts, previewVolumes;
+    private void SyncPreviewMix()
+    {
+        if (Player?.Engine == null || (ReferenceEquals(previewCuts, Timeline.Cuts) && ReferenceEquals(previewVolumes, Timeline.VolumeRegions))) return;
+        ApplyPreviewTracks();
     }
     private void SetTrackVolume(int track, double volume)
     {

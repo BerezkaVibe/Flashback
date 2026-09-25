@@ -5,6 +5,8 @@ namespace Flashback;
 
 // Plays the mix faster or slower with its pitch kept, through FFmpeg's atempo filter (what the export uses
 // for speed parts). At 1× it passes the mix straight through.
+// A stretch plays at one speed up to a moment (the next speed part's edge): reading stops there once
+// everything given to the filter has come out, so the next stretch starts exactly where this one ended.
 internal sealed unsafe class FfmpegTempo : IDisposable
 {
     private const int Chunk = 1024, Channels = FfmpegAudioMixer.Channels;
@@ -18,21 +20,28 @@ internal sealed unsafe class FfmpegTempo : IDisposable
     private bool drained;
     private long pts;
     internal double Speed { get; private set; } = 1;
+    // Sound already made at the speed before, still to be read.
+    internal int PendingFrames => spareCount / Channels;
 
     internal FfmpegTempo(FfmpegAudioMixer mixer) { this.mixer = mixer; input = ffmpeg.av_frame_alloc(); output = ffmpeg.av_frame_alloc(); }
 
-    // A new speed (0.25× to 4×) starts from what's mixed next; anything waiting in the filter is dropped.
-    internal void SetSpeed(double speed)
-    {
-        speed = Math.Clamp(speed, .25, 4);
-        if (Math.Abs(speed - Speed) < 1e-6 && (graph != null || Math.Abs(speed - 1) < 1e-6)) return;
-        Speed = speed; Reset();
-    }
+    // A new speed (0.1× to 4×) from what's mixed next, starting over: anything waiting is dropped.
+    internal void SetSpeed(double speed) { Speed = Math.Clamp(speed, .1, 4); Reset(); }
     // After a seek: nothing old comes out.
-    internal void Reset()
+    internal void Reset() { spareStart = spareCount = 0; Start(Speed); }
+    // A new stretch at a speed. Sound already made (Finish) still comes out first.
+    internal void Start(double speed)
     {
-        FreeGraph(); spareStart = spareCount = 0; drained = false; pts = 0;
+        FreeGraph(); drained = false; pts = 0;
+        Speed = Math.Clamp(speed, .1, 4);
         if (Math.Abs(Speed - 1) > 1e-6) Build();
+    }
+    // Everything given to the filter comes out now (at the speed it went in at); Start follows.
+    internal void Finish()
+    {
+        if (graph == null) return;
+        if (!drained) { ffmpeg.av_buffersrc_add_frame(source, null); drained = true; }
+        while (Pull()) { }
     }
     private void Build()
     {
@@ -61,26 +70,45 @@ internal sealed unsafe class FfmpegTempo : IDisposable
         if (Math.Abs(left - 1) > 1e-9 || stages.Count == 0) stages.Add("atempo=" + left.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture));
         return string.Join(",", stages);
     }
-    // The next `frames` of sound at the current speed; fewer only at the end of the clip.
-    internal int Read(float[] buffer, int frames)
+    internal int Read(float[] buffer, int frames) => Read(buffer, 0, frames, double.PositiveInfinity);
+    // The next sound at the current speed into buffer from frame `offset`, taking the mix no further than
+    // `until` (seconds). Fewer than asked only when the stretch or the clip has ended.
+    internal int Read(float[] buffer, int offset, int frames, double until)
     {
-        if (graph == null) return mixer.Read(buffer, frames);
         int written = 0;
         while (written < frames)
         {
             if (spareCount > 0)
             {
                 int take = Math.Min(spareCount, (frames - written) * Channels);
-                Array.Copy(spare, spareStart, buffer, written * Channels, take);
+                Array.Copy(spare, spareStart, buffer, (offset + written) * Channels, take);
                 spareStart += take; spareCount -= take; written += take / Channels;
+                if (spareCount == 0) spareStart = 0;
+                continue;
+            }
+            int allowed = Allowed(until);
+            if (graph == null)
+            {
+                int want = Math.Min(Math.Min(frames - written, allowed), Chunk);
+                if (want <= 0) break;
+                int got = mixer.Read(chunk, want);
+                Array.Copy(chunk, 0, buffer, (offset + written) * Channels, got * Channels); written += got;
+                if (got == 0) break;
                 continue;
             }
             if (Pull()) continue;
             if (drained) break;
-            int mixed = mixer.Read(chunk, Chunk);
+            int mixed = allowed > 0 ? mixer.Read(chunk, Math.Min(Chunk, allowed)) : 0;
             Push(mixed);
         }
         return written;
+    }
+    // How much more of the mix this stretch may take.
+    private int Allowed(double until)
+    {
+        if (double.IsPositiveInfinity(until)) return int.MaxValue;
+        double left = (until - mixer.Position) * FfmpegAudioMixer.Rate;
+        return left < .5 ? 0 : (int)Math.Min(int.MaxValue, Math.Round(left));
     }
     private void Push(int frames)
     {
@@ -93,14 +121,17 @@ internal sealed unsafe class FfmpegTempo : IDisposable
         FfmpegLibrary.Check(ffmpeg.av_buffersrc_add_frame(source, input), "Couldn't feed the speed filter");
         ffmpeg.av_frame_unref(input);
     }
+    // What the filter has ready joins the end of what's waiting.
     private bool Pull()
     {
+        if (graph == null) return false;
         int got = ffmpeg.av_buffersink_get_frame(sink, output);
         if (got < 0) return false;
         int floats = output->nb_samples * Channels;
-        if (spare.Length < floats) spare = new float[floats * 2];
-        fixed (float* to = spare) Buffer.MemoryCopy(output->data[0], to, spare.Length * 4, floats * 4);
-        spareStart = 0; spareCount = floats;
+        if (spareStart > 0) { Array.Copy(spare, spareStart, spare, 0, spareCount); spareStart = 0; }
+        if (spare.Length < spareCount + floats) Array.Resize(ref spare, (spareCount + floats) * 2);
+        fixed (float* to = &spare[spareCount]) Buffer.MemoryCopy(output->data[0], to, (spare.Length - spareCount) * 4L, floats * 4L);
+        spareCount += floats;
         ffmpeg.av_frame_unref(output);
         return true;
     }

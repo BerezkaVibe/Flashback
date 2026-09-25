@@ -9,7 +9,8 @@ namespace Flashback;
 
 // Decodes a clip's audio tracks and mixes the chosen ones, each at its own volume, into 48 kHz stereo float,
 // from any moment: the whole mix (track 0), or desktop and microphone, or Other apps and each app's layer,
-// as the export mixes them. Only tracks that are on are decoded. Times are seconds from the start of the file.
+// as the export mixes them, with each track's cut-outs and volume parts. Only tracks that are on are decoded.
+// Times are seconds from the start of the file.
 internal sealed unsafe class FfmpegAudioMixer : IDisposable
 {
     internal const int Rate = 48000, Channels = 2;
@@ -25,6 +26,8 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
     internal double Duration { get; }
     // The moment the next mixed sample belongs to.
     internal double Position => position;
+    // A stretch of a track at another volume: 0 for a cut-out. Overlapping parts multiply, as in the export.
+    internal readonly record struct GainPart(double Start, double End, double Gain);
 
     private sealed class Track
     {
@@ -34,6 +37,7 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
         internal AVRational TimeBase;
         internal float Volume;
         internal bool On, Synced;
+        internal GainPart[] Parts = Array.Empty<GainPart>();
         internal readonly SampleQueue Queue = new();
     }
 
@@ -80,6 +84,12 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
         }
         if (changed) Seek(position);
     }
+    // Each track's cut-outs and volume parts (tracks left out have none). Takes effect from the next sound mixed.
+    internal void SetGains(IReadOnlyDictionary<int, IReadOnlyList<GainPart>>? gains)
+    {
+        for (int t = 0; t < tracks.Length; t++)
+            tracks[t].Parts = gains != null && gains.TryGetValue(t, out var parts) ? parts.Where(p => p.End > p.Start).ToArray() : Array.Empty<GainPart>();
+    }
     internal void Seek(double seconds)
     {
         position = Math.Max(0, seconds);
@@ -98,7 +108,7 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
         var on = tracks.Where(t => t.On).ToArray();
         while (!ended && on.Any(t => t.Queue.Frames < frames)) ReadPacket();
         Array.Clear(buffer, 0, frames * Channels);
-        foreach (var t in on) t.Queue.MixInto(buffer, frames, t.Volume);
+        foreach (var t in on) t.Queue.MixInto(buffer, frames, t.Volume, t.Parts, position);
         position += frames / (double)Rate;
         return frames;
     }
@@ -177,13 +187,32 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
             Array.Copy(source, fromFrame * Channels, data, start + count, frames * Channels); count += frames * Channels;
         }
         internal void AppendSilence(int frames) { Room(frames * Channels); Array.Clear(data, start + count, frames * Channels); count += frames * Channels; }
-        // Adds up to `frames` of it to the buffer at a volume, and removes that much (short: silence for the rest).
-        internal void MixInto(float[] buffer, int frames, float volume)
+        // Adds up to `frames` of it to the buffer at a volume, with the track's parts (the first sample being at
+        // `from` seconds), and removes that much (short: silence for the rest).
+        internal void MixInto(float[] buffer, int frames, float volume, GainPart[] parts, double from)
         {
-            int floats = Math.Min(frames * Channels, count);
-            for (int i = 0; i < floats; i++) buffer[i] += data[start + i] * volume;
-            start += floats; count -= floats;
+            int available = Math.Min(frames, count / Channels);
+            for (int i = 0; i < available;)
+            {
+                var (gain, until) = GainAt(parts, from + i / (double)Rate);
+                int end = double.IsPositiveInfinity(until) ? available : Math.Clamp((int)Math.Ceiling((until - from) * Rate - 1e-6), i + 1, available);
+                float level = volume * gain;
+                if (level != 0) for (int k = i * Channels; k < end * Channels; k++) buffer[k] += data[start + k] * level;
+                i = end;
+            }
+            start += available * Channels; count -= available * Channels;
             if (count == 0) start = 0;
+        }
+        // The gain at a moment, and when it next changes.
+        private static (float Gain, double Until) GainAt(GainPart[] parts, double at)
+        {
+            float gain = 1; double until = double.PositiveInfinity;
+            foreach (var p in parts)
+            {
+                if (p.Start > at) until = Math.Min(until, p.Start);
+                else if (p.End > at) { gain *= (float)p.Gain; until = Math.Min(until, p.End); }
+            }
+            return (gain, until);
         }
     }
 }

@@ -16,7 +16,8 @@ namespace Flashback;
 // every frame shows its own number (three bands of brightness, each a digit counting in twenties, 10 levels
 // apart so color conversion can't blur them), so the frame actually on screen can be read back. For each: how long it takes to open, whether
 // seeks land on the exact frame and how fast, how smoothly it plays (frames shown per second, repeats, the
-// longest gap), how fast a scrub settles, and the app's CPU and memory paused and playing.
+// longest gap), how smoothly it plays across a speed part's edges, how fast a scrub settles, and the app's
+// CPU and memory paused and playing.
 // Writes player-compare.txt.
 internal static class PlayerCompareDiagnostics
 {
@@ -100,6 +101,21 @@ internal static class PlayerCompareDiagnostics
                 double span = seen.Count > 1 ? seen[^1].Frame - seen[0].Frame : 0;
                 Line(seen.Count == 0 ? "Playing smoothness: the picture can't be read back" :
                     $"Playing smoothness: {distinct / 3.0:0} different frames a second seen (sampling limits this), {span / 3.0:0} frames of clip a second, longest time on one picture {longest:0} ms, {backwards} steps back");
+                // Across a speed part (0.5× from 10 s to 11 s): the longest the picture stands still, and
+                // whether the clip moves at the part's speed inside it.
+                trim.Timeline.SlowRegions = new[] { new SpeedRegion(10, 11, .5) };
+                trim.SeekTo(9.5); await Task.Delay(400);
+                trim.HandleKey(Key.Space, ModifierKeys.None, true);
+                seen.Clear(); watch.Restart();
+                while (watch.Elapsed.TotalSeconds < 3.2) { if (Shown() is int f) seen.Add((watch.Elapsed.TotalSeconds, f)); await Task.Delay(1); }
+                trim.HandleKey(Key.Space, ModifierKeys.None, true);
+                trim.Timeline.SlowRegions = Array.Empty<SpeedRegion>();
+                changes = seen.Zip(seen.Skip(1)).Where(p => p.Second.Frame != p.First.Frame).ToList();
+                longest = changes.Count < 2 ? 0 : changes.Zip(changes.Skip(1)).Max(p => p.Second.Second.At - p.First.Second.At) * 1000;
+                var inside = seen.Where(s => s.Frame >= 610 && s.Frame <= 650).ToList();
+                double partRate = inside.Count > 1 ? (inside[^1].Frame - inside[0].Frame) / Math.Max(.001, inside[^1].At - inside[0].At) : 0;
+                Line(seen.Count == 0 ? "Across a speed part: the picture can't be read back" :
+                    $"Across a 0.5× speed part: longest time on one picture {longest:0} ms, {changes.Count(p => p.Second.Frame < p.First.Frame)} steps back, {partRate:0} frames of clip a second inside it (30 expected)");
             }
             catch (Exception ex) { Line($"{name}: FAILED {ex.Message}"); }
             finally { trim.Close(); TrimWindow.UseFfmpegPreview = null; }

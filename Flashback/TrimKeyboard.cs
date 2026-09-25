@@ -20,8 +20,9 @@ public partial class TrimWindow
         rate=Math.Clamp(Math.Round(rate,2),MinRate,MaxRate);
         bool changed=rate!=PreviewRate; PreviewRate=rate; Player.SpeedRatio=rate;
         // A live rate change can leave audio offset from video; once the speed settles,
-        // restart from the playhead to realign (a spun wheel or dragged slider restarts once).
-        if (changed && playing)
+        // restart from the playhead to realign (a spun wheel or dragged slider restarts once). The FFmpeg
+        // player changes speed without drifting, so it plays straight on.
+        if (changed && playing && !Player.PlaysSpeedParts)
         {
             realign??=new System.Windows.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(250),System.Windows.Threading.DispatcherPriority.Normal,(_,_)=> { realign!.Stop(); if (playing) StartPlayback(playhead, previewSection); },Dispatcher);
             realign.Stop(); realign.Start();

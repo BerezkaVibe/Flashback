@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -32,6 +33,10 @@ internal sealed class PreviewPlayer
     internal void Play() { if (engine == null) windows.Play(); else engine.Play(); }
     internal void Pause() { if (engine == null) windows.Pause(); else engine.Pause(); }
     internal void Close() { if (engine == null) windows.Close(); else engine.Close(); }
+    // The FFmpeg player plays speed parts itself, switching exactly at their edges; with the Windows player the
+    // editor changes SpeedRatio as it reaches each one.
+    internal bool PlaysSpeedParts => engine != null;
+    internal IReadOnlyList<SpeedRegion> SpeedParts { set => engine?.SetSpeedParts(value); }
     internal double SpeedRatio { get => engine == null ? windows.SpeedRatio : engine.SpeedRatio; set { if (engine == null) windows.SpeedRatio = value; else engine.SpeedRatio = value; } }
     internal double Volume { get => engine == null ? windows.Volume : engine.Volume; set { if (engine == null) windows.Volume = value; else engine.Volume = value; } }
     internal bool IsMuted { get => engine == null ? windows.IsMuted : engine.IsMuted; set { if (engine == null) windows.IsMuted = value; else engine.IsMuted = value; } }

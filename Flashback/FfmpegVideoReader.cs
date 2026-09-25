@@ -96,7 +96,9 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
     // The frame showing at a moment (the last one starting at or before it, give or take half a frame): back
     // to the keyframe before it, then decoded forward. Just ahead in the same stretch it decodes on instead,
     // which is what playback and small scrubs do. Recordings have a keyframe every 2 seconds.
-    internal bool Seek(double seconds)
+    // `cancel` is asked before each frame decoded on the way: true gives up (false back), leaving the reader
+    // where it got to, so a scrub's next seek carries on from there instead of waiting for this one.
+    internal bool Seek(double seconds, Func<bool>? cancel = null)
     {
         seconds = Math.Clamp(seconds, 0, Math.Max(0, Duration));
         double half = .5 / FrameRate;
@@ -110,6 +112,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         }
         while (true)
         {
+            if (cancel?.Invoke() == true) return false;
             if (!hasPending) { if (!Decode(pending)) return FrameTime >= 0; hasPending = true; }
             double time = TimeOf(pending);
             // The next frame starts after the moment: the current one is it (the next waits for Next()).
