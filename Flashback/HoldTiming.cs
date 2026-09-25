@@ -32,8 +32,10 @@ internal static class HoldTiming
         foreach (var f in freezes) if (Same(f.At, at)) return f.Seconds;
         return 0;
     }
-    // A part's own time at a moment (clamped to the part).
-    internal static double Clock(Moment start, Moment end, Moment now, IReadOnlyList<FreezeFrame> freezes, bool through)
+    // A part's own time at a moment (clamped to the part). endHolds: whether its clock runs in a hold it only
+    // ends in (text and pictures do, for their exit; a zoom or video that doesn't keep going through freezes
+    // holds still there, and only runs in a hold it starts in).
+    internal static double Clock(Moment start, Moment end, Moment now, IReadOnlyList<FreezeFrame> freezes, bool through, bool endHolds = true)
     {
         if (Compare(now, start) < 0) now = start;
         if (Compare(now, end) > 0) now = end;
@@ -45,21 +47,23 @@ internal static class HoldTiming
             if (to - from <= Tolerance) continue;
             // Covered completely: shown from before the hold began until after it ended.
             bool whole = Compare(start, new Moment(f.At)) <= 0 && end.At > f.At + Tolerance;
-            if (through || !whole) clock += to - from;
+            if (through || (!whole && (Same(f.At, start.At) || endHolds))) clock += to - from;
         }
         return clock;
     }
-    internal static double Duration(Moment start, Moment end, IReadOnlyList<FreezeFrame> freezes, bool through) => Clock(start, end, end, freezes, through);
+    internal static double Duration(Moment start, Moment end, IReadOnlyList<FreezeFrame> freezes, bool through, bool endHolds = true) => Clock(start, end, end, freezes, through, endHolds);
 
     // Text, pictures, shapes and videos. Only videos keep going through freezes.
     internal static Moment From(this OverlayItem o) => new(o.Start, o.StartHold);
     internal static Moment To(this OverlayItem o) => new(o.End, o.EndHold);
     internal static bool Through(this OverlayItem o) => o.Kind == OverlayKind.Video && o.ThroughFreezes;
+    // A video told to hold still in freezes doesn't run on into a hold it ends in; everything else does.
+    internal static bool EndHolds(this OverlayItem o) => o.Kind != OverlayKind.Video || o.ThroughFreezes;
     internal static bool InHolds(this OverlayItem o) => o.StartHold > 0 || o.EndHold > 0;
     internal static bool Covers(this OverlayItem o, Moment now) => Covers(o.From(), o.To(), now);
     internal static bool Overlaps(this OverlayItem a, OverlayItem b) => Overlaps(a.From(), a.To(), b.From(), b.To());
-    internal static double Clock(this OverlayItem o, Moment now, IReadOnlyList<FreezeFrame> freezes) => Clock(o.From(), o.To(), now, freezes, o.Through());
-    internal static double Duration(this OverlayItem o, IReadOnlyList<FreezeFrame> freezes) => Duration(o.From(), o.To(), freezes, o.Through());
+    internal static double Clock(this OverlayItem o, Moment now, IReadOnlyList<FreezeFrame> freezes) => Clock(o.From(), o.To(), now, freezes, o.Through(), o.EndHolds());
+    internal static double Duration(this OverlayItem o, IReadOnlyList<FreezeFrame> freezes) => Duration(o.From(), o.To(), freezes, o.Through(), o.EndHolds());
     // The part laid out on its own clock from Start (no hold parts), so everything that draws a part from
     // its Start and Length (fades, keyframes, GIF frames) draws it the same way inside holds too.
     internal static OverlayItem Timed(this OverlayItem o, IReadOnlyList<FreezeFrame> freezes)
@@ -75,8 +79,8 @@ internal static class HoldTiming
     internal static bool InHolds(this ZoomRegion z) => z.StartHold > 0 || z.EndHold > 0;
     internal static bool Covers(this ZoomRegion z, Moment now) => Covers(z.From(), z.To(), now);
     internal static bool Overlaps(this ZoomRegion a, ZoomRegion b) => Overlaps(a.From(), a.To(), b.From(), b.To());
-    internal static double Clock(this ZoomRegion z, Moment now, IReadOnlyList<FreezeFrame> freezes) => Clock(z.From(), z.To(), now, freezes, z.ThroughFreezes);
-    internal static double Duration(this ZoomRegion z, IReadOnlyList<FreezeFrame> freezes) => Duration(z.From(), z.To(), freezes, z.ThroughFreezes);
+    internal static double Clock(this ZoomRegion z, Moment now, IReadOnlyList<FreezeFrame> freezes) => Clock(z.From(), z.To(), now, freezes, z.ThroughFreezes, z.ThroughFreezes);
+    internal static double Duration(this ZoomRegion z, IReadOnlyList<FreezeFrame> freezes) => Duration(z.From(), z.To(), freezes, z.ThroughFreezes, z.ThroughFreezes);
     // How far a zoom is zoomed in at a moment of the finished video.
     internal static double ZoomAt(this ZoomRegion z, Moment now, IReadOnlyList<FreezeFrame> freezes)
     {

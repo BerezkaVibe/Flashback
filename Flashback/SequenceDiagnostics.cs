@@ -61,6 +61,17 @@ internal static class SequenceDiagnostics
             "A part's own clock runs through a hold it starts or stops in");
         Check(Near(HoldTiming.Clock(M(1), M(3), M(2, 2), holds, false), 1) && Near(HoldTiming.Clock(M(1), M(3), M(2, 2), holds, true), 3) && Near(HoldTiming.Duration(M(1), M(3), holds, true), 5),
             "A part spanning a hold stands still in it, unless it keeps going through freezes");
+        // A zoom from the footage that ends partway into a hold: told not to keep going, it holds still there;
+        // one that starts inside a hold still zooms in there either way.
+        // (A slow 3 s ramp, so how far it has zoomed shows how far its clock has run.)
+        var slowIn = new ZoomCurve(new[] { (0.0, 0.0), (3.0, 1.0) });
+        var endsInHold = new ZoomRegion(1.5, 2, .5, .5, 3, slowIn) { EndHold = 2.5, ThroughFreezes = false };
+        var keepsGoing = endsInHold with { ThroughFreezes = true };
+        var startsInHold = new ZoomRegion(2, 2, .5, .5, 2, ZoomCurve.Smooth) { StartHold = .5, EndHold = 2.5, ThroughFreezes = false };
+        Check(Near(endsInHold.ZoomAt(M(2, .2), holds), endsInHold.ZoomAt(M(2, 2.2), holds)) && keepsGoing.ZoomAt(M(2, 2.2), holds) > keepsGoing.ZoomAt(M(2, .2), holds) + .2
+            && startsInHold.ZoomAt(M(2, 2), holds) > startsInHold.ZoomAt(M(2, .6), holds) + .2,
+            $"A zoom that doesn't keep going holds still in a hold it ends in, but still zooms in one it starts in ({endsInHold.ZoomAt(M(2, .2), holds):0.00}/{endsInHold.ZoomAt(M(2, 2.2), holds):0.00}, keeps going {keepsGoing.ZoomAt(M(2, .2), holds):0.00}/{keepsGoing.ZoomAt(M(2, 2.2), holds):0.00})");
+        Check(endsInHold.ZoomAt(M(2, 2.6), holds) == 1 && keepsGoing.ZoomAt(M(2, 2.6), holds) == 1, "When a zoom ends partway through a hold, the picture goes back to normal for the rest of it");
         Check(HoldTiming.Overlaps(M(2, 1), M(2, 2), M(1), M(2, 1.5)) && !HoldTiming.Overlaps(M(2, 1), M(2, 2), M(1), M(2, 1)), "Parts overlap only where they share hold time");
         var oldZoom = JsonSerializer.Deserialize<ZoomRegion>("{\"Start\":1,\"End\":2,\"X\":0.5,\"Y\":0.5,\"MaxZoom\":2,\"In\":{\"Points\":[{\"Item1\":0,\"Item2\":0},{\"Item1\":0.5,\"Item2\":1}]}}", new JsonSerializerOptions { IncludeFields = true })!;
         Check(oldZoom.ThroughFreezes && oldZoom.StartHold == 0 && new OverlayItem().ThroughFreezes, "Zooms and videos saved before keep going through freezes; nothing else changes");

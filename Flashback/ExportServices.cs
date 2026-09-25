@@ -257,7 +257,7 @@ internal static class ExportServices
                 // Where a part with its own clock shows in this piece, on the piece's time axis (source time for
                 // footage, seconds into the hold for a freeze): Start is where its clock reads 0, From and To the
                 // stretch it shows, Still when its clock stands still here (a hold it spans completely).
-                (double Start, double From, double To, bool Still)? Where(Moment from, Moment to, bool through)
+                (double Start, double From, double To, bool Still)? Where(Moment from, Moment to, bool through, bool endHolds)
                 {
                     if (piece.Freeze)
                     {
@@ -265,15 +265,15 @@ internal static class ExportServices
                         double a = HoldTiming.Compare(from, new Moment(at)) <= 0 ? 0 : Math.Abs(from.At - at) < 1e-9 ? from.Hold : double.NaN;
                         double b = to.At > at + 1e-9 ? held : Math.Abs(to.At - at) < 1e-9 ? Math.Min(to.Hold, held) : double.NaN;
                         if (double.IsNaN(a) || double.IsNaN(b) || b - a <= 1e-6) return null;
-                        double c0 = HoldTiming.Clock(from, to, new Moment(at, a), freezes, through);
-                        bool still = HoldTiming.Clock(from, to, new Moment(at, Math.Min(b, a + .01)), freezes, through) <= c0 + 1e-9;
+                        double c0 = HoldTiming.Clock(from, to, new Moment(at, a), freezes, through, endHolds);
+                        bool still = HoldTiming.Clock(from, to, new Moment(at, Math.Min(b, a + .01)), freezes, through, endHolds) <= c0 + 1e-9;
                         return (a - c0, a, b, still);
                     }
                     double f0 = Math.Max(from.At, start), f1 = Math.Min(to.At, end);
                     if (f1 - f0 <= 1e-6) return null;
                     // Footage after a freeze's hold starts with the hold behind it.
                     var here = new Moment(start, HoldTiming.HoldAt(start, freezes));
-                    double zero = HoldTiming.Compare(from, here) < 0 ? start - HoldTiming.Clock(from, to, here, freezes, through) : from.At;
+                    double zero = HoldTiming.Compare(from, here) < 0 ? start - HoldTiming.Clock(from, to, here, freezes, through, endHolds) : from.At;
                     return (zero, f0, f1, false);
                 }
                 if (video && decode is { } hw) inputs.AddRange(new[] { "-hwaccel", hw });
@@ -289,7 +289,7 @@ internal static class ExportServices
                     var zooms = new List<ZoomRegion>();
                     foreach (var r in options.ZoomRegions)
                     {
-                        if (Where(r.From(), r.To(), r.ThroughFreezes) is not { } place) continue;
+                        if (Where(r.From(), r.To(), r.ThroughFreezes, r.ThroughFreezes) is not { } place) continue;
                         if (place.Still)
                         {
                             // A hold it spans without keeping going: held at the zoom it had.
@@ -319,7 +319,7 @@ internal static class ExportServices
                         {
                             // The clip placed on this piece's axis: its clock lined up, or held still at one picture.
                             var edits = Edited(laidOut);
-                            if (Where(edits.From(), edits.To(), edits.Through()) is not { } place) continue;
+                            if (Where(edits.From(), edits.To(), edits.Through(), edits.EndHolds()) is not { } place) continue;
                             var timedItem = laidOut.Item;
                             var clip = laidOut with { Item = timedItem with { Start = place.Start, End = place.Start + timedItem.Length } };
                             double pieceStart = axis, pieceEnd = place.To;
