@@ -97,6 +97,7 @@ public partial class MainWindow : Window
         if (!renderOnly) timer.Start();
         if (warning != null) Tell(warning, true);
         Closing += OnClosing;
+        StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) ClearError(); };
         Deactivated += (_, _) => { StopShortcutCapture(); try { hotkeys.Resume(); } catch { } };
         Activated += (_, _) =>
         {
@@ -409,6 +410,15 @@ public partial class MainWindow : Window
         MessageLabel.Foreground = new SolidColorBrush(error ? Color.FromRgb(244, 154, 154) : Color.FromRgb(157, 166, 177));
         if (error) try { tray.ShowBalloonTip(5000, "Flashback", message.Length > 220 ? message[..220] : message, Forms.ToolTipIcon.Warning); } catch { }
     }
+    // An error stays until the window is closed to the tray, minimized or the editor is opened; then the
+    // bottom line goes back to its usual text.
+    private void ClearError()
+    {
+        if (CopyErrorButton.Visibility != Visibility.Visible) return;
+        CopyErrorButton.Visibility = Visibility.Collapsed; errorDetails = "";
+        MessageLabel.Text = "Ready when you are."; MessageLabel.ToolTip = null;
+        MessageLabel.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+    }
     private void ReportError(Exception error)
     {
         Tell(error.Message, true);
@@ -436,7 +446,7 @@ public partial class MainWindow : Window
     private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenFolder();
     private void Play_Click(object sender, RoutedEventArgs e) { try { if (lastClip != null) Process.Start(new ProcessStartInfo(lastClip) { UseShellExecute = true }); } catch (Exception ex) { Tell(ex.Message, true); } }
     public void ShowWindow() { Show(); WindowState = WindowState.Normal; Activate(); if (LibraryTab.IsSelected) _ = ReloadLibraryAsync(); }
-    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); } }
+    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); ClearError(); } }
     private void SessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
     {
         if (e.Reason == Microsoft.Win32.SessionSwitchReason.SessionLock)
