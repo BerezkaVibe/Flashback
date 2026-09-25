@@ -45,7 +45,7 @@ public partial class TrimWindow : Window
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         Timeline.Duration = media.Duration; Timeline.End = media.Duration; Timeline.FrameRate = media.FrameRate;
         Timeline.ViewChanged+=RefreshTimelineZoom; RefreshTimelineZoom();
-        Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.SectionPicked += SectionPicked;
+        Timeline.RangeChanged += SetRange; Timeline.LaneToggled += LaneToggled; Timeline.AppLayerPicked += OpenAppLayerPopup; Timeline.SectionPicked += SectionPicked;
         Timeline.CutAdded += CutAdded; Timeline.CutRemoved += CutRemoved; Timeline.LanesToggleRequested += LanesToggleRequested;
         Timeline.SeekRequested += t => SeekTo(t, Timeline.IsDragging, Timeline.HoldOffset);
         Timeline.SpeedStepRequested += StepPreviewRate;
