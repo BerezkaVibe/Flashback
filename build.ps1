@@ -18,6 +18,13 @@ Copy-Item -LiteralPath (Join-Path $projectRoot '.packages/microsoft.netcore.app.
 Copy-Item -LiteralPath (Join-Path $projectRoot '.packages/microsoft.windowsdesktop.app.runtime.win-x64/8.0.31/LICENSE') -Destination (Join-Path $projectRoot 'licenses/WindowsDesktop-LICENSE.txt')
 New-Item -ItemType Directory -Force (Join-Path $destination 'tools') | Out-Null
 Copy-Item -LiteralPath $FfmpegPath -Destination (Join-Path $destination 'tools/ffmpeg.exe')
+# A "shared" FFmpeg build's ffmpeg.exe only runs with its DLLs beside it (a static build has none), so they
+# go into tools too; without them it fails on start with "avcodec-60.dll was not found".
+$ffmpegDlls = Get-ChildItem -LiteralPath (Split-Path -Parent $FfmpegPath) -Filter '*.dll' -ErrorAction SilentlyContinue
+if ($ffmpegDlls) {
+    Write-Warning 'The ffmpeg.exe given is a shared build; its DLLs are copied beside it. A static ffmpeg.exe keeps the app smaller.'
+    $ffmpegDlls | Copy-Item -Destination (Join-Path $destination 'tools')
+}
 if ($FfmpegLibs -ne '') {
     if (-not (Test-Path -LiteralPath (Join-Path $FfmpegLibs 'avcodec-60.dll'))) { throw 'FfmpegLibs must be the bin folder of an FFmpeg 6.1 LGPL shared build (avcodec-60.dll).' }
     New-Item -ItemType Directory -Force (Join-Path $destination 'ffmpeg') | Out-Null
