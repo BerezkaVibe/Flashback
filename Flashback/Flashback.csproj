@@ -6,6 +6,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- The FFmpeg preview player works with FFmpeg's frames and buffers through pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Version>0.9.3</Version>
     <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
     <AssemblyName>Flashback</AssemblyName>
