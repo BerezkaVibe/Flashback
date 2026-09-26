@@ -31,6 +31,8 @@ if ($FfmpegLibs -ne '') {
     Copy-Item -Path (Join-Path $FfmpegLibs '*.dll') -Destination (Join-Path $destination 'ffmpeg')
 } else { Write-Warning 'No -FfmpegLibs: the FFmpeg preview player is left out and the editor uses the Windows player.' }
 foreach ($file in @('README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'VALIDATION.md')) { Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $destination }
+# Double-click to run the FFmpeg preview player's tests and open the results (only with the player's libraries).
+if ($FfmpegLibs -ne '') { Copy-Item -LiteralPath (Join-Path $projectRoot 'Test-FFmpeg-Player.cmd') -Destination $destination }
 if (Test-Path (Join-Path $projectRoot 'licenses')) { Copy-Item -LiteralPath (Join-Path $projectRoot 'licenses') -Destination $destination -Recurse -Force }
 New-Item -ItemType Directory -Force (Join-Path $projectRoot 'dist') | Out-Null
 Compress-Archive -Path $destination -DestinationPath (Join-Path $projectRoot "dist/Flashback-$Version-win-x64.zip") -Force

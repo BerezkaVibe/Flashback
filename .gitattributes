@@ -6,3 +6,4 @@
 *.md text eol=lf
 *.ico binary
 *.png binary
+*.cmd text eol=crlf
