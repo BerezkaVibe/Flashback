@@ -8,6 +8,7 @@
 !/build.ps1
 !/build-installer.ps1
 !/Test-FFmpeg-Player.cmd
+!/.github/
 !/LICENSE
 !/README.md
 !/REPOSITORY.md

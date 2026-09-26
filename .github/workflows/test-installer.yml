@@ -1,0 +1,45 @@
+# Builds a TEST installer of this branch on Windows and puts it on the Releases page as the "test-build"
+# pre-release (replaced each time; the app's updater only looks at full releases, so it never offers it).
+# Runs on every push to the FFmpeg player branch, or by hand from the Actions tab.
+name: Test installer
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/ffmpeg-player]
+permissions:
+  contents: write
+concurrency:
+  group: test-installer
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Get FFmpeg 9.0 (a full ffmpeg.exe for tools, the LGPL shared libraries for the player)
+        shell: pwsh
+        run: |
+          $base = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest'
+          Invoke-WebRequest "$base/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" -OutFile gpl.zip
+          Invoke-WebRequest "$base/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip" -OutFile lgpl.zip
+          Expand-Archive gpl.zip ff-gpl
+          Expand-Archive lgpl.zip ff-lgpl
+      - name: Build the app and the TEST installer
+        shell: pwsh
+        run: |
+          $ffmpeg = (Get-ChildItem ff-gpl -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
+          $libs = (Get-ChildItem ff-lgpl -Recurse -Filter avcodec-63.dll | Select-Object -First 1).DirectoryName
+          ./build.ps1 -Version 0.9.4 -FfmpegPath $ffmpeg -FfmpegLibs $libs
+          ./build-installer.ps1 -Version 0.9.4 -Test
+      - name: Put it on the Releases page (pre-release "test-build")
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete test-build --yes --cleanup-tag 2>$null
+          $sha = (git rev-parse --short HEAD)
+          gh release create test-build (Get-ChildItem dist/*-TEST-Setup.exe).FullName --prerelease --target ${{ github.sha }} --title "Flashback TEST build (FFmpeg player) $sha" --notes "TEST build of branch ${{ github.ref_name }} at $sha. For testing only; it installs over Flashback (clips and settings are kept). After installing, run 'Flashback player tests' from the Start menu or desktop."
+          exit 0
