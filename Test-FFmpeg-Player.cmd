@@ -10,8 +10,8 @@ if not exist Flashback.exe (
   pause
   exit /b 1
 )
-if not exist ffmpeg\avcodec-63.dll (
-  echo This build has no FFmpeg player libraries. Build again with -FfmpegLibs pointing at the FFmpeg 9.0 LGPL shared bin folder.
+if not exist ffmpeg\avcodec-*.dll (
+  echo This build has no FFmpeg player libraries. Build again with -FfmpegLibs pointing at an FFmpeg LGPL shared build's bin folder.
   pause
   exit /b 1
 )
