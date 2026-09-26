@@ -8,6 +8,11 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $project = Join-Path $projectRoot 'Flashback/Flashback.csproj'
 $destination = Join-Path $projectRoot "artifacts/Flashback-$Version"
 if (-not (Test-Path -LiteralPath $FfmpegPath)) { throw 'Provide a compatible FFmpeg executable with -FfmpegPath.' }
+# The app's ffmpeg.exe must encode H.264 in software (libx264: recording without a graphics-card encoder,
+# joining clips, some exports, the tests). LGPL builds leave it out, so an LGPL ffmpeg.exe (such as the one
+# beside the -FfmpegLibs DLLs) can't be used here; use a full (GPL) build.
+$encoders = (& $FfmpegPath -hide_banner -encoders 2>$null) -join "`n"
+if ($encoders -notmatch 'libx264') { throw "The ffmpeg.exe given ($FfmpegPath) can't encode H.264 (no libx264), which Flashback needs. Pass a full build's ffmpeg.exe as -FfmpegPath (for example your usual D:\ffmpeg\ffmpeg.exe); keep the LGPL shared folder for -FfmpegLibs." }
 # Publish into a clean folder so files dropped from the build do not linger in the zip.
 if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
 dotnet publish $project -c Release -r win-x64 --self-contained true -p:NuGetAudit=false -o $destination
