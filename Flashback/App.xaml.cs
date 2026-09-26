@@ -17,6 +17,15 @@ public partial class App : Application
         base.OnStartup(e);
         var data = Array.IndexOf(e.Args, "--data-dir");
         if (data >= 0 && data + 1 < e.Args.Length) Storage.Root = Path.GetFullPath(e.Args[data + 1]);
+        // The Tester: pick a copy of Flashback and the built-in tests to run on it (TesterWindow); and the list
+        // of tests this copy has, for it (TestCatalog).
+        if (e.Args.Contains("--list-tests")) { TestCatalog.Write(Storage.Root); Shutdown(0); return; }
+        if (e.Args.Contains("--tester"))
+        {
+            System.Windows.Forms.Application.EnableVisualStyles();
+            using (var tester = new TesterWindow()) tester.ShowDialog();
+            Shutdown(0); return;
+        }
         // Just the editor (optionally with a video), alongside a running recorder: for trying a build.
         var editor = Array.IndexOf(e.Args, "--editor");
         if (editor >= 0)

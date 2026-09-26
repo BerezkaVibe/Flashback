@@ -41,5 +41,5 @@ jobs:
         run: |
           gh release delete test-build --yes --cleanup-tag 2>$null
           $sha = (git rev-parse --short HEAD)
-          gh release create test-build (Get-ChildItem dist/*-TEST-Setup.exe).FullName --prerelease --target ${{ github.sha }} --title "Flashback TEST build (FFmpeg player) $sha" --notes "TEST build of branch ${{ github.ref_name }} at $sha. For testing only; it installs over Flashback (clips and settings are kept). After installing, run 'Flashback player tests' from the Start menu or desktop."
+          gh release create test-build (Get-ChildItem dist/*-TEST-Setup.exe).FullName --prerelease --target ${{ github.sha }} --title "Flashback TEST build (FFmpeg player) $sha" --notes "TEST build of branch ${{ github.ref_name }} at $sha. For testing only; it installs over Flashback (clips and settings are kept). After installing, open 'Flashback Tester' from the Start menu or desktop to pick tests to run."
           exit 0
