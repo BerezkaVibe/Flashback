@@ -25,21 +25,19 @@ internal sealed class PreviewPlayer
         if (engine != null) windows.Visibility = Visibility.Collapsed;
     }
     internal Duration NaturalDuration => engine == null ? windows.NaturalDuration : engine.IsOpen && engine.Duration > 0 ? new Duration(TimeSpan.FromSeconds(engine.Duration)) : Duration.Automatic;
+    // The recording's moment playing. (The FFmpeg player's own time runs along the editor's timeline; the
+    // editor drives it through Engine.)
     internal TimeSpan Position
     {
-        get => engine == null ? windows.Position : TimeSpan.FromSeconds(engine.Position);
-        set { if (engine == null) windows.Position = value; else engine.Position = value.TotalSeconds; }
+        get => engine == null ? windows.Position : TimeSpan.FromSeconds(engine.Where.Source);
+        set { if (engine == null) windows.Position = value; else engine.Position = engine.TimeOf(value.TotalSeconds); }
     }
     internal void Play() { if (engine == null) windows.Play(); else engine.Play(); }
     internal void Pause() { if (engine == null) windows.Pause(); else engine.Pause(); }
     internal void Close() { if (engine == null) windows.Close(); else engine.Close(); }
-    // The FFmpeg player plays speed parts itself, switching exactly at their edges; with the Windows player the
-    // editor changes SpeedRatio as it reaches each one.
-    internal bool PlaysSpeedParts => engine != null;
-    internal IReadOnlyList<SpeedRegion> SpeedParts { set => engine?.SetSpeedParts(value); }
-    // The FFmpeg player stops by itself exactly at the next freeze frame (the editor, checking every 33 ms,
-    // would otherwise catch it a frame or two late and step back); the Windows player plays on until then.
-    internal double StopAt { set { if (engine != null) engine.StopAt = value; } }
+    // The FFmpeg player plays the editor's whole timeline itself (sections, speed parts, freezes, music and
+    // sound files); with the Windows player the editor steps it through them.
+    internal bool PlaysTimeline => engine != null;
     internal double SpeedRatio { get => engine == null ? windows.SpeedRatio : engine.SpeedRatio; set { if (engine == null) windows.SpeedRatio = value; else engine.SpeedRatio = value; } }
     internal double Volume { get => engine == null ? windows.Volume : engine.Volume; set { if (engine == null) windows.Volume = value; else engine.Volume = value; } }
     internal bool IsMuted { get => engine == null ? windows.IsMuted : engine.IsMuted; set { if (engine == null) windows.IsMuted = value; else engine.IsMuted = value; } }

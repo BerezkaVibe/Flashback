@@ -14,8 +14,9 @@ namespace Flashback;
 // land on the exact frame, picture included, decoding on the CPU and, where it works, on the graphics card
 // (frames copied back to check them). Sound: a clip with separate tracks of known tones; chosen tracks at
 // their volumes, the rest silent, lined up after a seek, and speed changes keeping the pitch; a lane's cut-outs
-// and volume parts; speed parts played through without a gap, the clock following them; a speed change and a
-// seek while playing. Scrubbing: a seek gives up when a newer one comes, and the next still lands exactly.
+// and volume parts; the editor's timeline (pieces at their speeds, a hold, a jump to another section) played
+// through without a gap, with music placed, faded and ducking as the export mixes it; the clock following
+// speed changes and seeks. Scrubbing: a seek gives up when a newer one comes, and the next still lands exactly.
 // Writes ffmpeg-engine-results.json and ffmpeg-engine-report.txt.
 internal static class FfmpegEngineDiagnostics
 {
@@ -31,16 +32,19 @@ internal static class FfmpegEngineDiagnostics
         void Note(string line) { report.Add(line); File.WriteAllLines(Path.Combine(Storage.Root, "ffmpeg-engine-report.txt"), report); }
         Check(FfmpegLibrary.Available, "FFmpeg's libraries load from the ffmpeg folder " + FfmpegLibrary.Error);
         string folder = Path.Combine(Storage.Root, "ffmpeg-engine"); Directory.CreateDirectory(folder);
-        string frames = Path.Combine(folder, "Frames.mp4"), tracks = Path.Combine(folder, "Tracks.mp4"), big = Path.Combine(folder, "Big 1080p60.mp4");
+        string frames = Path.Combine(folder, "Frames.mp4"), tracks = Path.Combine(folder, "Tracks.mp4"), big = Path.Combine(folder, "Big 1080p60.mp4"), music = Path.Combine(folder, "Music.m4a"), numbered = Path.Combine(folder, "Numbered.mp4");
         await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "color=black:s=320x180:r=60:d=10,format=gray,geq=lum='30+mod(N\\,200)'", "-c:v", "libx264", "-preset", "ultrafast", "-g", "120", "-pix_fmt", "yuv420p", frames);
         await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "color=black:s=160x90:r=30:d=6", "-f", "lavfi", "-i", "aevalsrc=0.3*sin(2*PI*if(lt(t\\,3)\\,300\\,600)*t):s=48000:d=6",
             "-f", "lavfi", "-i", "sine=frequency=900:sample_rate=48000:duration=6", "-f", "lavfi", "-i", "sine=frequency=1500:sample_rate=48000:duration=6",
             "-filter_complex", "[1:a][2:a][3:a]amix=inputs=3:normalize=0[all]", "-map", "0:v", "-map", "[all]", "-map", "1:a", "-map", "2:a", "-map", "3:a", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-ac", "2", "-ar", "48000", "-shortest", tracks);
         await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=60:duration=8", "-c:v", "libx264", "-preset", "ultrafast", "-g", "120", "-pix_fmt", "yuv420p", big);
-        Engine(frames, tracks, big, Check, Note);
+        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=3", "-c:a", "aac", music);
+        // Every frame shows its number in three bands of brightness (each a digit counting in twenties).
+        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "color=black:s=320x180:r=60:d=15,format=gray,geq=lum='if(lt(X\\,107)\\,30+10*mod(N\\,20)\\,if(lt(X\\,214)\\,30+10*mod(floor(N/20)\\,20)\\,30+10*floor(N/400)))'", "-c:v", "libx264", "-preset", "ultrafast", "-g", "120", "-pix_fmt", "yuv420p", numbered);
+        Engine(frames, tracks, big, music, numbered, Check, Note);
         Note("Passed: " + checks.Count + " checks");
     }
-    private static unsafe void Engine(string frames, string tracks, string big, Action<bool, string> Check, Action<string> Note)
+    private static unsafe void Engine(string frames, string tracks, string big, string music, string numbered, Action<bool, string> Check, Action<string> Note)
     {
         // ---- Frames ----
         using var presenter = new FfmpegPresenter(graphicsCard: true);
@@ -74,6 +78,31 @@ internal static class FfmpegEngineDiagnostics
             video.Seek(5); int asked = 0;
             bool gaveUp = !video.Seek(3.9, () => ++asked > 20);
             Check(gaveUp && video.Seek(2.95) && Math.Abs(video.FrameTime - 177 / 60.0) < 1e-3 && Math.Abs(Luma() - Expected(177)) <= 2, $"Decoding {how}, a seek gives up when a newer one comes, and the next lands exactly");
+            // Pictures along a timeline: 10-11 s, a 0.5 s hold, 11-11.5 s at 0.5×, then a jump back to 3-3.5 s at 2×.
+            using (var numberedVideo = new FfmpegVideoReader(numbered, graphicsCard ? presenter.HardwareDevice : null))
+            using (var kept = new FfmpegRecentFrames(12))
+            {
+                var numberCopy = ffmpeg.av_frame_alloc();
+                int NumberOf(IntPtr f)
+                {
+                    var fr = (AVFrame*)f;
+                    if (fr->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11) { ffmpeg.av_frame_unref(numberCopy); FfmpegLibrary.Check(ffmpeg.av_hwframe_transfer_data(numberCopy, fr, 0), "Couldn't copy a frame back"); fr = numberCopy; }
+                    int Digit(double fx) { int l = fr->data[0][fr->linesize[0] * 90 + (int)(320 * fx)]; return (int)Math.Round(((l - 16) * 255 / 219.0 - 30) / 10); }
+                    return Digit(5 / 6.0) * 400 + Digit(.5) * 20 + Digit(1 / 6.0);
+                }
+                void FreeFrame(IntPtr f) { var fr = (AVFrame*)f; ffmpeg.av_frame_free(&fr); }
+                var timeline = new PlaySequence(new[] { new PlayPiece(10, 11, 1, 0, 0, 0), new PlayPiece(11, 11, 1, .5, 1, 0), new PlayPiece(11, 11.5, .5, 0, 1.5, 0), new PlayPiece(3, 3.5, 2, 0, 2.5, 1) });
+                var along = new FfmpegSequenceFrames(numberedVideo, kept);
+                var got = new List<(double Due, int Number)>();
+                bool Take(double due, IntPtr f) { got.Add((due, NumberOf(f))); FreeFrame(f); return true; }
+                along.Seek(timeline, 0, true, null, Take);
+                for (int guard = 0; !along.Done && guard < 1000; guard++) along.Step(Take);
+                int off = got.Count(g => g.Number != (int)Math.Floor(timeline.Where(g.Due + 1e-9).Source * 60 + .5 + 1e-6));
+                var jump = got.Where(g => g.Due >= 2.5 - 1e-9).ToList();
+                Check(got.Count > 100 && off == 0 && got.Count(g => g.Due >= 1 - 1e-9 && g.Due < 1.5 - 1e-9) == 1 && jump.Count == 30 && jump[0].Number == 180,
+                    $"Decoding {how}, each frame along a timeline (a hold, 0.5×, a jump to another section at 2×) is the one showing at its moment ({got.Count} frames, {off} wrong)");
+                var done2 = numberCopy; ffmpeg.av_frame_free(&done2);
+            }
             if (graphicsCard)
             {
                 // Scrubbing on the graphics card: keyframe seeks keep using the clip's one pool of frames, and
@@ -124,29 +153,34 @@ internal static class FfmpegEngineDiagnostics
             double full = Tone(buf, F(.1), F(.3), 300), half = Tone(buf, F(1.6), F(.3), 300);
             Check(full > .15 && Rms(buf, F(.5) + 2, F(.49)) < 1e-6 && Rms(buf, F(.5) - 480, 470) > .1 && Math.Abs(half - full * .5) < .02, $"A lane's cut-out is silent from its first sample and its volume part at its level ({full:0.00}, {half:0.00})");
             mix.SetGains(null);
-            // Speed parts: 0.5-1 at 1×, 1-2 at 2×, 2-3 at 1×, 3-4 at 0.5×.
-            using var tempo = new FfmpegTempo(mix);
-            var map = new SpeedMap(1, new[] { new SpeedRegion(1, 2, 2), new SpeedRegion(3, 4, .5) }, mix.Duration);
-            var stream = new FfmpegSoundStream(mix, tempo, map);
-            stream.NewOutput(); stream.Restart(.5, map);
-            var output = new List<float>(); var chunk = new float[480 * 2];
-            while (output.Count / 2 < F(5.2)) { int n = stream.Read(chunk, 480); output.AddRange(chunk.Take(n * 2)); if (n < 480) break; }
-            var o = output.ToArray();
-            var expect = new (double Out, double Media)[] { (.25, .75), (.75, 1.5), (1.5, 2.5), (3.0, 3.5), (4.5, 4.5) };
-            var errors = expect.Select(e => (stream.MediaAt(F(e.Out)) ?? -1) - e.Media).ToArray();
-            Check(errors.All(e => Math.Abs(e) < .03), "The clock follows the speed parts (" + string.Join(", ", errors.Select(e => $"{e * 1000:+0;-0} ms")) + ")");
-            double quietest = 1; for (int at = F(.02); at + 240 < o.Length / 2 - F(.05); at += 120) quietest = Math.Min(quietest, Rms(o, at, 240));
-            Check(quietest > .05 && Tone(o, F(2.2), F(.6), 600) > .17 && Tone(o, F(2.2), F(.6), 1200) < .03, $"Speed parts play through without a gap, pitch kept (quietest 5 ms {quietest:0.00})");
-            // A speed change while playing, then a seek.
-            var flat = new SpeedMap(1, Array.Empty<SpeedRegion>(), mix.Duration);
-            stream.NewOutput(); stream.Restart(0, flat);
+            // The timeline: 0.5-1 at 1×, 1-2 at 2×, a 0.5 s hold at 2, 2-3 at 1×, then a jump to 4-5 at 0.5× (another
+            // section); music from 0.2 s for 1.6 s (through the hold), half volume, fading in, ducking the clip to 0.5.
+            var seq = new PlaySequence(new[] { new PlayPiece(.5, 1, 1, 0, 0, 0), new PlayPiece(1, 2, 2, 0, .5, 0), new PlayPiece(2, 2, 1, .5, 1, 0), new PlayPiece(2, 3, 1, 0, 1.5, 0), new PlayPiece(4, 5, .5, 0, 2.5, 1) });
+            var w = seq.Where(1.2);
+            Check(Math.Abs(seq.Total - 4.5) < 1e-9 && w.Source == 2 && Math.Abs(w.Hold - .2) < 1e-9 && w.Holding && Math.Abs(seq.TimeOf(4.5) - 3.5) < 1e-9 && Math.Abs(seq.TimeOf(2, .3) - 1.3) < 1e-9, "The timeline lays pieces end to end and tells what shows when");
+            using var audio = new SequenceAudio(mix, seq);
+            var o = new float[F(5) * 2]; var chunk = new float[480 * 2]; int total = 0, n;
+            while ((n = audio.Read(chunk, 480)) > 0) { Array.Copy(chunk, 0, o, total * 2, n * 2); total += n; }
+            double quietest = 1; foreach (var (from, to) in new[] { (.01, .99), (1.51, 4.49) }) for (int at = F(from); at + 240 < F(to); at += 120) quietest = Math.Min(quietest, Rms(o, at, 240));
+            Check(total == F(4.5) && Rms(o, F(1.02), F(.46)) < 1e-6 && quietest > .05 && Tone(o, F(.6), F(.3), 300) > .17 && Tone(o, F(2.6), F(1.8), 600) > .17 && Tone(o, F(2.6), F(1.8), 300) < .03,
+                $"Its sound: exactly its length, pieces at their speeds with the pitch kept, silent in the hold, no gaps where pieces meet (quietest 5 ms {quietest:0.00})");
+            audio.SetSounds(new[] { new SoundClip(music, .2, 1.6, Offset: .5, Volume: .5, FadeIn: .2, Duck: true, DuckLevel: .5) });
+            audio.Seek(0); total = 0;
+            while ((n = audio.Read(chunk, 480)) > 0) { Array.Copy(chunk, 0, o, total * 2, n * 2); total += n; }
+            double during = Tone(o, F(.5), F(.4), 1000), inHold = Tone(o, F(1.05), F(.4), 1000);
+            Check(Tone(o, 0, F(.18), 1000) < .005 && during > .03 && Math.Abs(inHold - during) < .01 && Tone(o, F(1.85), F(.4), 1000) < .005 && Tone(o, F(.2), 480, 1000) < Tone(o, F(.39), 480, 1000) * .3,
+                $"Music plays where it sits, through the hold, fading in, and stops ({during:0.000}, {inHold:0.000})");
+            Check(Math.Abs(Tone(o, F(.5), F(.4), 300) - Tone(o, F(1.85), F(.4), 300) * .5) < .02, "Music ducks the clip's sound while it plays");
+            // At the preview's speed: 2× then 1×, then a seek.
+            var stream = new FfmpegSoundStream(audio);
+            stream.NewOutput(); stream.Restart(0, 2);
             while (stream.Submitted < F(1)) stream.Read(chunk, 480);
-            stream.Respeed(flat with { Rate = 2 });
-            while (stream.Submitted < F(2.5)) stream.Read(chunk, 480);
-            double m1 = stream.MediaAt(F(.9)) ?? -1, m2 = stream.MediaAt(F(1.5)) ?? -1, m3 = stream.MediaAt(F(2)) ?? -1;
-            Check(Math.Abs(m1 - .9) < .02 && Math.Abs(m3 - m2 - 1) < .02 && m2 > 1.9 && m2 < 2.05, $"A speed change while playing carries on without a jump ({m1:0.00}, {m2:0.00}, {m3:0.00})");
-            long before = stream.Submitted; stream.Restart(4, flat);
-            Check(stream.MediaAt(before - 2400) == 4 && Math.Abs((stream.MediaAt(before + 4800) ?? -1) - 4.1) < 1e-6, "A seek while playing holds the picture until its sound is heard");
+            stream.Respeed(1);
+            while (stream.Submitted < F(3)) stream.Read(chunk, 480);
+            double m1 = stream.MediaAt(F(.5)) ?? -1, m2 = stream.MediaAt(F(2)) ?? -1, m3 = stream.MediaAt(F(2.5)) ?? -1;
+            Check(Math.Abs(m1 - 1) < .02 && Math.Abs(m3 - m2 - .5) < .02, $"The clock follows the timeline at 2× then 1× ({m1:0.00}, {m2:0.00}, {m3:0.00})");
+            long before = stream.Submitted; stream.Restart(3, 1);
+            Check(stream.MediaAt(before - 100) == 3 && Math.Abs((stream.MediaAt(before + 4800) ?? -1) - 3.1) < 1e-6, "A seek while playing holds the picture until its sound is heard");
         }
     }
 }

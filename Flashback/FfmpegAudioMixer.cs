@@ -11,7 +11,7 @@ namespace Flashback;
 // from any moment: the whole mix (track 0), or desktop and microphone, or Other apps and each app's layer,
 // as the export mixes them, with each track's cut-outs and volume parts. Only tracks that are on are decoded.
 // Times are seconds from the start of the file.
-internal sealed unsafe class FfmpegAudioMixer : IDisposable
+internal sealed unsafe class FfmpegAudioMixer : IFfmpegSound, IDisposable
 {
     internal const int Rate = 48000, Channels = 2;
     private AVFormatContext* format;
@@ -25,7 +25,7 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
     internal int TrackCount => tracks.Length;
     internal double Duration { get; }
     // The moment the next mixed sample belongs to.
-    internal double Position => position;
+    public double Position => position;
     // A stretch of a track at another volume: 0 for a cut-out. Overlapping parts multiply, as in the export.
     internal readonly record struct GainPart(double Start, double End, double Gain);
 
@@ -100,7 +100,7 @@ internal sealed unsafe class FfmpegAudioMixer : IDisposable
     }
     // Mixes the next `frames` sample frames (stereo) into `buffer`; returns how many there were (fewer only at
     // the end of the clip).
-    internal int Read(float[] buffer, int frames)
+    public int Read(float[] buffer, int frames)
     {
         int left = (int)Math.Max(0, Math.Round((Duration - position) * Rate));
         if (Duration > 0) frames = Math.Min(frames, left);

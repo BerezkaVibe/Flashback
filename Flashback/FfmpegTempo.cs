@@ -3,14 +3,25 @@ using FFmpeg.AutoGen;
 
 namespace Flashback;
 
-// Plays the mix faster or slower with its pitch kept, through FFmpeg's atempo filter (what the export uses
-// for speed parts). At 1× it passes the mix straight through.
+// Sound that can be read on from where it is: the clip's mix, a sound file, or the whole preview timeline.
+internal interface IFfmpegSound
+{
+    // The next `frames` (48 kHz stereo) into buffer; fewer only at the end.
+    int Read(float[] buffer, int frames);
+    // The moment (seconds) the next sample belongs to.
+    double Position { get; }
+}
+
+// Plays sound faster or slower with its pitch kept, through FFmpeg's atempo filter (what the export uses
+// for speed parts), or with the pitch following the speed (asetrate, as the export does for a sound that
+// doesn't keep its pitch). At 1× it passes the sound straight through.
 // A stretch plays at one speed up to a moment (the next speed part's edge): reading stops there once
 // everything given to the filter has come out, so the next stretch starts exactly where this one ended.
 internal sealed unsafe class FfmpegTempo : IDisposable
 {
     private const int Chunk = 1024, Channels = FfmpegAudioMixer.Channels;
-    private readonly FfmpegAudioMixer mixer;
+    private readonly IFfmpegSound mixer;
+    private readonly bool keepPitch;
     private AVFilterGraph* graph;
     private AVFilterContext* source, sink;
     private readonly AVFrame* input, output;
@@ -23,7 +34,7 @@ internal sealed unsafe class FfmpegTempo : IDisposable
     // Sound already made at the speed before, still to be read.
     internal int PendingFrames => spareCount / Channels;
 
-    internal FfmpegTempo(FfmpegAudioMixer mixer) { this.mixer = mixer; input = ffmpeg.av_frame_alloc(); output = ffmpeg.av_frame_alloc(); }
+    internal FfmpegTempo(IFfmpegSound mixer, bool keepPitch = true) { this.mixer = mixer; this.keepPitch = keepPitch; input = ffmpeg.av_frame_alloc(); output = ffmpeg.av_frame_alloc(); }
 
     // A new speed (0.1× to 4×) from what's mixed next, starting over: anything waiting is dropped.
     internal void SetSpeed(double speed) { Speed = Math.Clamp(speed, .1, 4); Reset(); }
@@ -52,7 +63,7 @@ internal sealed unsafe class FfmpegTempo : IDisposable
         FfmpegLibrary.Check(ffmpeg.avfilter_graph_create_filter(&dst, ffmpeg.avfilter_get_by_name("abuffersink"), "out", null, null, graph), "Couldn't set up the speed filter");
         source = src; sink = dst;
         // atempo takes 0.5 to 2 per stage (as the export chains it).
-        string stages = Stages(Speed) + ",aformat=sample_fmts=flt:channel_layouts=stereo";
+        string stages = (keepPitch ? Stages(Speed) : $"asetrate={(FfmpegAudioMixer.Rate * Speed).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},aresample={FfmpegAudioMixer.Rate}") + $",aformat=sample_fmts=flt:sample_rates={FfmpegAudioMixer.Rate}:channel_layouts=stereo";
         var outputs = ffmpeg.avfilter_inout_alloc(); var inputs = ffmpeg.avfilter_inout_alloc();
         outputs->name = ffmpeg.av_strdup("in"); outputs->filter_ctx = source; outputs->pad_idx = 0; outputs->next = null;
         inputs->name = ffmpeg.av_strdup("out"); inputs->filter_ctx = sink; inputs->pad_idx = 0; inputs->next = null;

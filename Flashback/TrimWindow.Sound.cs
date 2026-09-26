@@ -326,8 +326,9 @@ public partial class TrimWindow
     private readonly HashSet<string> soundsPlaying = new();
     private void SyncSounds()
     {
-        // (Not while the players are put away in the background; they come back with the editor.)
-        if (!previewEnabled || playersReleased) return;
+        // (Not while the players are put away in the background; they come back with the editor. The FFmpeg
+        // player mixes them into its own sound.)
+        if (!previewEnabled || playersReleased || Player.PlaysTimeline) return;
         var wanted = new HashSet<string>();
         // Sounds play along the finished video, as they're exported: from where they're anchored, for real
         // seconds, through holds and speed parts alike. Footage that isn't kept has no sound over it.

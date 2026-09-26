@@ -292,7 +292,7 @@ public partial class TrimWindow
     // The preview plays speed parts at their speed too.
     private double RegionSpeedAt(double time) => Timeline.SlowRegions.FirstOrDefault(r => time >= r.Start && time < r.End)?.Speed ?? 1;
     // The speed the player is set to at a moment: the FFmpeg player applies the speed parts itself.
-    private double PlayerSpeedAt(double time) => Player.PlaysSpeedParts ? PreviewRate : PreviewRate * RegionSpeedAt(time);
+    private double PlayerSpeedAt(double time) => Player.PlaysTimeline ? PreviewRate : PreviewRate * RegionSpeedAt(time);
     // Each separate track's volume in the export: desktop (or Other apps) and microphone from their sliders,
     // app layers from their pop-up. 0 mutes it.
     private readonly Dictionary<int, double> trackVolumes = new();

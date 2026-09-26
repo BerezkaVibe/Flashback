@@ -65,7 +65,7 @@ public partial class TrimWindow
         playersReleased = false;
         if (source.Length == 0 || closed) return;
         // Opening primes the player and seeks it to the playhead (Player_Opened).
-        Player.Source = new Uri(source); Player.Play(); Player.Pause(); clock.Start();
+        Player.Source = new Uri(source); if (!Player.PlaysTimeline) { Player.Play(); Player.Pause(); } clock.Start();
         OverlayView.Items = OverlayView.Items;
         SyncSounds();
     }

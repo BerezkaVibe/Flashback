@@ -17,6 +17,9 @@ internal sealed class SequenceMap
     internal double Total { get; }
     internal int Version { get; }
     internal IReadOnlyList<ExportPiece> Pieces => pieces;
+    // Where piece i begins in the finished video, and the kept range (section) it comes from.
+    internal double PieceStart(int i) => starts[i];
+    internal int PieceSection(int i) => sections[i];
     private static int versions;
 
     internal SequenceMap(IReadOnlyList<KeepSection> ranges, ShareExportOptions options)

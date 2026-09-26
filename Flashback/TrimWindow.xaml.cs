@@ -100,7 +100,7 @@ public partial class TrimWindow : Window
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
-        if (previewEnabled) { Player.Source=new Uri(source); Player.Play(); Player.Pause(); clock.Start(); }
+        if (previewEnabled) { Player.Source=new Uri(source); if (!Player.PlaysTimeline) { Player.Play(); Player.Pause(); } clock.Start(); }
         // Changes left unsaved by a crash are offered once the window is up.
         savedEdit=null;
         if (previewEnabled && offerRecovery) { if (IsLoaded) Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); else { void Once(object? s, RoutedEventArgs a) { Loaded -= Once; Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); } Loaded += Once; } }
@@ -147,6 +147,8 @@ public partial class TrimWindow : Window
         // A paused decoder may report an old position while a seek is pending.
         // Never let it overwrite the user's playhead or I/O marks.
         if (!playing || Timeline.IsDragging) return;
+        // The FFmpeg player plays the whole timeline itself; the playhead follows it.
+        if (Player.Engine is { } engine) { SyncTimeline(); FollowEngine(engine); return; }
         // A freeze frame holds the picture with the playhead parked on it, then plays on from there.
         if (freezing is { } held)
         {
@@ -173,18 +175,14 @@ public partial class TrimWindow : Window
             else { SetPlayhead(sections[previewSection].End); Pause(); }
             return;
         }
-        // Reaching a freeze frame: hold the picture there, then play on from the same moment. (The FFmpeg
-        // player stops on the next one by itself.)
+        // Reaching a freeze frame: hold the picture there, then play on from the same moment.
         if (freezeDone is double done && (actual > done + .15 || actual < done - .05)) freezeDone = null;
-        Player.StopAt = Timeline.Freezes.Where(f => f.At > Math.Max(playhead, actual) + 1e-6).Select(f => f.At).DefaultIfEmpty(double.NaN).Min();
         if (Timeline.Freezes.FirstOrDefault(f => f.At >= playhead - 1e-6 && f.At <= actual + .001 && (freezeDone is not double d || Math.Abs(d - f.At) > 1e-6)) is { } freeze)
         { Player.Pause(); Player.Position = TimeSpan.FromSeconds(freeze.At); freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp()); SetPlayhead(freeze.At); return; }
         // Speed parts play at their speed in the preview as well. Changing speed mid-play makes the player
         // skip a moment of picture and sound, so it restarts at the new speed from exactly where that
         // speed begins instead.
         // (Just after that restart the player can report a hair before the edge; that still counts as the edge.)
-        // The FFmpeg player switches speed at the edges itself.
-        Player.SpeedParts = Timeline.SlowRegions;
         double speed = PlayerSpeedAt(speedEdge is double e && actual >= e - .1 && actual < e ? e : actual);
         if (Math.Abs(Player.SpeedRatio - speed) > 1e-6)
         {
@@ -205,7 +203,7 @@ public partial class TrimWindow : Window
         if (!ReferenceEquals(OverlayView.Freezes, Timeline.Freezes)) OverlayView.Freezes = Timeline.Freezes;
         OverlayView.HoldRate = PreviewRate; OverlayView.HoldTime = Timeline.HoldOffset;
         OverlayView.Time = freezing is { } held ? held.Part.At : playhead;
-        OverlayView.PlaybackSpeed = freezing != null ? 0 : PreviewRate * RegionSpeedAt(playhead);
+        OverlayView.PlaybackSpeed = freezing != null || engineHolding ? 0 : PreviewRate * RegionSpeedAt(playhead);
         // Keyframed items look different at each moment; the panel shows them as they are at the playhead.
         if (!playing && OverlayPanel.Visibility == Visibility.Visible && SelectedOverlayItem is { Keys.Count: > 1 }) LoadOverlayUi();
         if (Timeline.Sounds.Count > 0 || soundsPlaying.Count > 0) SyncSounds();
@@ -224,7 +222,9 @@ public partial class TrimWindow : Window
         if (!pendingSeek) return;
         pendingSeek = false; seekAwaiting = true;
         seekIssued=System.Diagnostics.Stopwatch.GetTimestamp();
-        if (previewEnabled) Player.Position = TimeSpan.FromSeconds(playhead);
+        if (!previewEnabled) return;
+        if (Player.Engine is { } engine) { SyncTimeline(); engine.Position = EngineTime(engine, playhead, parkedHold); }
+        else Player.Position = TimeSpan.FromSeconds(playhead);
     }
     private void SetRange(double start, double end)
     {
@@ -246,11 +246,12 @@ public partial class TrimWindow : Window
     }
     // Scrubbing renders frames for paused seeks, but left on during playback it lets
     // Media Foundation's audio run ahead of video after a seek.
-    private void Pause() { if (freezing is { } held) parkedHold = HoldAt(held.Part.At); Player.Pause(); Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
+    private void Pause() { if (freezing is { } held) parkedHold = HoldAt(held.Part.At); bool was = playing; Player.Pause(); if (was && Player.Engine is { } engine) FollowEngine(engine); engineHolding = false; Player.ScrubbingEnabled = true; playing = false; previewSection = -1; freezing = null; PlayToggle.Content = "\uE768"; ApplyZoomPreview(); StopSounds(); OverlayView.Playing = false; }
     // The first Play after opening restarts from zero unless the player has already been run once
     // since MediaOpened, so prime it here before applying the pending position.
-    private void Player_Opened(object sender, RoutedEventArgs e) { ApplyPreviewTracks(); Player.SpeedRatio=PreviewRate; Player.Play(); Player.Pause(); pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
-    private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); SetPlayhead(media.Duration); }
+    // (The FFmpeg player needs no priming; it's handed the editor's timeline instead.)
+    private void Player_Opened(object sender, RoutedEventArgs e) { ApplyPreviewTracks(); Player.SpeedRatio=PreviewRate; if (Player.PlaysTimeline) SyncTimeline(force: true); else { Player.Play(); Player.Pause(); } pendingSeek=true; FlushSeek(); if (playing) Player.Play(); }
+    private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); if (!Player.PlaysTimeline) SetPlayhead(media.Duration); }
     private void WindowsPlayer_Failed(object sender, ExceptionRoutedEventArgs e) => PreviewFailed(e.ErrorException);
     private void PreviewFailed(Exception error)
     { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + error.Message; }
@@ -277,10 +278,23 @@ public partial class TrimWindow : Window
     // hold: start that far into the hold of a freeze at start (finished view).
     private void StartPlayback(double start, int section = -1, double hold = 0)
     {
+        if (Player.Engine is { } engine)
+        {
+            // The FFmpeg player plays on from there through the whole timeline (a moment parked just after a
+            // hold plays on without holding again).
+            Player.Pause(); SyncTimeline();
+            parkedHold = hold > 0 ? hold : HoldAt(start); freezeDone = null;
+            SetPlayhead(start); previewSection = section;
+            pendingSeek = false; engine.Position = EngineTime(engine, start, parkedHold, section);
+            Player.SpeedRatio = PreviewRate;
+            Player.Play(); playing = true; PlayToggle.Content = "\uE769"; ApplyZoomPreview();
+            OverlayView.Playing = true;
+            return;
+        }
         // Seek while paused, then play, so audio and video restart from the same point (at the speed
         // of the part it starts in).
         Player.Pause();
-        Player.SpeedParts=Timeline.SlowRegions; Player.SpeedRatio=PlayerSpeedAt(start);
+        Player.SpeedRatio=PlayerSpeedAt(start);
         SetPlayhead(start); previewSection=section;
         pendingSeek=true; FlushSeek();
         Player.ScrubbingEnabled=false;
