@@ -173,8 +173,10 @@ public partial class TrimWindow : Window
             else { SetPlayhead(sections[previewSection].End); Pause(); }
             return;
         }
-        // Reaching a freeze frame: hold the picture there, then play on from the same moment.
+        // Reaching a freeze frame: hold the picture there, then play on from the same moment. (The FFmpeg
+        // player stops on the next one by itself.)
         if (freezeDone is double done && (actual > done + .15 || actual < done - .05)) freezeDone = null;
+        Player.StopAt = Timeline.Freezes.Where(f => f.At > Math.Max(playhead, actual) + 1e-6).Select(f => f.At).DefaultIfEmpty(double.NaN).Min();
         if (Timeline.Freezes.FirstOrDefault(f => f.At >= playhead - 1e-6 && f.At <= actual + .001 && (freezeDone is not double d || Math.Abs(d - f.At) > 1e-6)) is { } freeze)
         { Player.Pause(); Player.Position = TimeSpan.FromSeconds(freeze.At); freezing = (freeze, System.Diagnostics.Stopwatch.GetTimestamp()); SetPlayhead(freeze.At); return; }
         // Speed parts play at their speed in the preview as well. Changing speed mid-play makes the player

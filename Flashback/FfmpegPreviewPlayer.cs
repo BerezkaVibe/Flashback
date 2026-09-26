@@ -52,8 +52,12 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private int stillScheduled;
     private IntPtr shown;
     private const int Ahead = 4;
+    // The decoding thread's last frames: enough to step back past what the editor's 33 ms tick overshoots a
+    // freeze frame by, at up to about 3× (FfmpegVideoReader's pool has room for them).
+    private readonly FfmpegRecentFrames recent = new(12);
     // How long the sound output idles on silence after a pause before it's let go.
-    private static readonly TimeSpan KeepOutput = TimeSpan.FromSeconds(3);
+    // (Longer than the longest freeze frame hold, when the editor pauses the player for the hold.)
+    private static readonly TimeSpan KeepOutput = TimeSpan.FromSeconds(12);
     private DispatcherTimer? releaseOutput;
 
     // ---- The clock ----
@@ -103,7 +107,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     {
         Pause(); ReleaseOutput();
         IsOpen = false; stop = true; wake.Set();
-        decoder?.Join(2000); decoder = null;
+        decoder?.Join(2000); decoder = null; recent.Clear();
         lock (frameLock) { while (ahead.Count > 0) Free(ahead.Dequeue().Frame); Free(Interlocked.Exchange(ref still, IntPtr.Zero)); }
         Free(shown); shown = IntPtr.Zero;
         lock (audioLock) { sound = null; tempo?.Dispose(); tempo = null; mixer?.Dispose(); mixer = null; }
@@ -119,7 +123,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         set
         {
             double at = Math.Clamp(value, 0, Math.Max(0, Duration));
-            anchor = at; endedRaised = false;
+            anchor = at; endedRaised = false; startedAt = at;
             RequestSeek(at);
             if (playing) Restart(at);
         }
@@ -145,6 +149,10 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
             if (Math.Abs(next - speeds.Rate) > 1e-9) Respeed(speeds with { Rate = next });
         }
     }
+    // Where playing stops by itself, exactly (the next freeze frame, which the editor then holds); NaN for
+    // nowhere. Playing from it or past it goes on.
+    internal double StopAt { get; set; } = double.NaN;
+    private double startedAt;
     // The clip's speed parts, played at their speed. The same list again changes nothing.
     internal void SetSpeedParts(IReadOnlyList<SpeedRegion> parts)
     {
@@ -165,7 +173,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     {
         if (!IsOpen || playing) return;
         if (anchor >= Duration - .01) anchor = 0;
-        playing = true; endedRaised = false;
+        playing = true; endedRaised = false; startedAt = anchor;
         RequestSeek(anchor, keepPlaying: true);
         releaseOutput?.Stop();
         bool fresh = false;
@@ -269,8 +277,17 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
                         double next = Volatile.Read(ref seekRequest);
                         return !double.IsNaN(next) && next < target && Stopwatch.GetElapsedTime(Interlocked.Read(ref lastShown)).TotalMilliseconds < 150;
                     }
-                    if (reader!.Seek(target, Newer))
+                    // Just behind (or on) what was last decoded: the frames are still here.
+                    if (recent.From(target, reader!.FrameRate) is { } kept)
                     {
+                        if (playingFlag) lock (frameLock) foreach (var f in kept) ahead.Enqueue(f);
+                        else { ShowStill(kept[0].Frame); foreach (var f in kept.Skip(1)) Free(f.Frame); }
+                        continue;
+                    }
+                    recent.Clear();
+                    if (reader.Seek(target, Newer))
+                    {
+                        recent.Add(reader.FrameTime, reader.Frame);
                         var copy = (IntPtr)ffmpeg.av_frame_clone(reader.Frame);
                         if (playingFlag) lock (frameLock) ahead.Enqueue((reader.FrameTime, copy));
                         else ShowStill(copy);
@@ -282,6 +299,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
                 {
                     if (reader!.Next())
                     {
+                        recent.Add(reader.FrameTime, reader.Frame);
                         var copy = (IntPtr)ffmpeg.av_frame_clone(reader.Frame); double time = reader.FrameTime;
                         lock (frameLock) { if (double.IsNaN(seekRequest)) ahead.Enqueue((time, copy)); else Free(copy); }
                         continue;
@@ -315,6 +333,12 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     {
         if (!playing || presenter == null) return;
         double now = Now();
+        // Reaching the stop: the picture and sound stop right there, on its frame.
+        if (StopAt > startedAt + 1e-6 && now >= StopAt - 1e-6)
+        {
+            Pause(); anchor = StopAt; RequestSeek(StopAt);
+            return;
+        }
         IntPtr due = IntPtr.Zero;
         lock (frameLock)
             while (ahead.Count > 0 && ahead.Peek().Time <= now + .004)

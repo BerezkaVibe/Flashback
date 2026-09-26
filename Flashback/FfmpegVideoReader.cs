@@ -54,7 +54,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         if (hardwareDevice != null)
         {
             codec->hw_device_ctx = ffmpeg.av_buffer_ref(hardwareDevice);
-            // Room for the frames the player holds on to (the one on screen and a few ahead).
+            // Room for the frames the player holds on to (see ExtraFrames).
             codec->extra_hw_frames = ExtraFrames;
             pickFormat = PickFormat;
             codec->get_format = pickFormat;
@@ -68,7 +68,9 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         FrameRate = rate.num > 0 && rate.den > 0 ? rate.num / (double)rate.den : 60;
         Duration = format->duration > 0 ? format->duration / (double)ffmpeg.AV_TIME_BASE : s->duration * ffmpeg.av_q2d(timeBase);
     }
-    private const int ExtraFrames = 10;
+    // The frames the player holds on to beyond the decoder's own: up to 12 recent ones (FfmpegRecentFrames,
+    // which the few queued ahead are among), the one on screen, a paused seek's and the reader's next.
+    private const int ExtraFrames = 16;
     // The decoder asks which picture format to decode to (at the start, and again after each keyframe seek):
     // graphics-card frames from the clip's one pool, made the first time and handed back every time after.
     private AVPixelFormat PickFormat(AVCodecContext* context, AVPixelFormat* offered)

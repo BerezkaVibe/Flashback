@@ -16,7 +16,7 @@ namespace Flashback;
 // every frame shows its own number (three bands of brightness, each a digit counting in twenties, 10 levels
 // apart so color conversion can't blur them), so the frame actually on screen can be read back. For each: how long it takes to open, whether
 // seeks land on the exact frame and how fast, how smoothly it plays (frames shown per second, repeats, the
-// longest gap), how smoothly it plays across a speed part's edges, how fast a scrub settles, and the app's
+// longest gap), how smoothly it plays across a speed part's edges and through a freeze frame, how fast a scrub settles, and the app's
 // CPU and memory paused and playing.
 // Writes player-compare.txt.
 internal static class PlayerCompareDiagnostics
@@ -128,6 +128,23 @@ internal static class PlayerCompareDiagnostics
                 double partRate = inside.Count > 1 ? (inside[^1].Frame - inside[0].Frame) / Math.Max(.001, inside[^1].At - inside[0].At) : 0;
                 Line(seen.Count == 0 ? "Across a speed part: the picture can't be read back" :
                     $"Across a 0.5× speed part: longest time on one picture {longest:0} ms, {changes.Count(p => p.Second.Frame < p.First.Frame)} steps back, {partRate:0} frames of clip a second inside it (30 expected)");
+                // Through a freeze frame (1 s hold at frame 900, with a 0.5× part just after it): how far past
+                // it the picture went before holding, and whether it plays on without a jump afterwards.
+                trim.Timeline.Freezes = new[] { new FreezeFrame(15, 1) };
+                trim.Timeline.SlowRegions = new[] { new SpeedRegion(15, 16, .5) };
+                trim.SeekTo(14.5); await Task.Delay(400);
+                trim.HandleKey(Key.Space, ModifierKeys.None, true);
+                seen.Clear(); watch.Restart();
+                while (watch.Elapsed.TotalSeconds < 3) { if (Shown() is int f) seen.Add((watch.Elapsed.TotalSeconds, f)); await Task.Delay(1); }
+                trim.HandleKey(Key.Space, ModifierKeys.None, true);
+                trim.Timeline.Freezes = Array.Empty<FreezeFrame>(); trim.Timeline.SlowRegions = Array.Empty<SpeedRegion>();
+                int overshoot = seen.Count == 0 ? 0 : seen.TakeWhile(s => s.At < .9).Select(s => s.Frame).DefaultIfEmpty(0).Max() - 900;
+                var after = seen.Where(s => s.At > 1.3).ToList();
+                int jump = after.Zip(after.Skip(1)).Select(p => p.Second.Frame - p.First.Frame).DefaultIfEmpty(0).Max();
+                changes = seen.Zip(seen.Skip(1)).Where(p => p.Second.Frame != p.First.Frame).ToList();
+                double stall = changes.Where(p => p.Second.At > 1.3).Zip(changes.Where(p => p.Second.At > 1.3).Skip(1)).Select(p => p.Second.Second.At - p.First.Second.At).DefaultIfEmpty(0).Max() * 1000;
+                Line(seen.Count == 0 ? "Through a freeze frame: the picture can't be read back" :
+                    $"Through a freeze frame: went {Math.Max(0, overshoot)} frames past it before holding, then the biggest jump {jump} frames, longest time on one picture {stall:0} ms (0.5× after it: one frame of clip every 33 ms)");
             }
             catch (Exception ex) { Line($"{name}: FAILED {ex.Message}"); }
             finally { trim.Close(); TrimWindow.UseFfmpegPreview = null; }
