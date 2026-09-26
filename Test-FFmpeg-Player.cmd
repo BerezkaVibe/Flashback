@@ -3,6 +3,18 @@ rem Runs the FFmpeg preview player's tests and opens the results. Double-click i
 rem The tests use their own data folder, so your settings and clips aren't touched.
 setlocal
 cd /d "%~dp0"
+rem Beside Flashback.exe, or in the repo folder: then the build in artifacts is used.
+if not exist Flashback.exe for /d %%D in ("artifacts\Flashback-*") do if exist "%%D\Flashback.exe" cd /d "%%D"
+if not exist Flashback.exe (
+  echo Flashback.exe wasn't found. Build first:  .\build.ps1 -FfmpegPath ... -FfmpegLibs ...
+  pause
+  exit /b 1
+)
+if not exist ffmpeg\avcodec-60.dll (
+  echo This build has no FFmpeg player libraries. Build again with -FfmpegLibs pointing at the FFmpeg 6.1 bin folder.
+  pause
+  exit /b 1
+)
 set "OUT=%LOCALAPPDATA%\Flashback-tests"
 if not exist "%OUT%" mkdir "%OUT%"
 del /q "%OUT%\ffmpeg-engine-report.txt" "%OUT%\ffmpeg-engine-results.json" "%OUT%\player-compare.txt" "%OUT%\test-failure.txt" "%OUT%\results.txt" 2>nul
