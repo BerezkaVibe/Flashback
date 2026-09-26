@@ -40,11 +40,11 @@ The trimming workflow was informed by LosslessCut (https://github.com/mifi/lossl
 
 ## FFmpeg libraries (preview player)
 
-The editor's FFmpeg preview player loads FFmpeg's shared libraries (avcodec, avformat, avutil, swresample, swscale, avfilter) from the `ffmpeg` folder when they're included in a build. Builds use an LGPL-only FFmpeg 6.1 shared build (no GPL or nonfree components), loaded dynamically and unmodified, so they can be replaced with another compatible build. Licensing: https://ffmpeg.org/legal.html; the LGPL 2.1 text is at https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+The editor's FFmpeg preview player loads FFmpeg's shared libraries (avcodec, avformat, avutil, swresample, swscale, avfilter) from the `ffmpeg` folder when they're included in a build. Builds use an LGPL-only FFmpeg 9.0 shared build (no GPL or nonfree components), loaded dynamically and unmodified, so they can be replaced with another compatible build. Licensing: https://ffmpeg.org/legal.html; the LGPL 2.1 text is at https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
 
 ## FFmpeg.AutoGen
 
-C# bindings for FFmpeg's libraries, used by the preview player. Version 6.1.0.1, licensed under the GNU Lesser General Public License 3.0. Project: https://github.com/Ruslan-B/FFmpeg.AutoGen
+C# bindings for FFmpeg's libraries, used by the preview player. Version 9.0.1.1, licensed under the GNU Lesser General Public License 3.0. Project: https://github.com/Ruslan-B/FFmpeg.AutoGen
 
 ## Vortice.Direct3D9
 

@@ -1,4 +1,5 @@
-param([string]$Version='0.9.3')
+# -Test: a test build, marked TEST in the installer's name and windows.
+param([string]$Version='0.9.3', [switch]$Test)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $published=Join-Path $root "artifacts/Flashback-$Version"
@@ -16,8 +17,9 @@ $payload=Join-Path $work 'payload.zip'
 Compress-Archive -Path (Join-Path $published '*') -DestinationPath $payload -Force
 $hash=Join-Path $work 'payload.sha256'
 Set-Content -LiteralPath $hash -Value (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash -Encoding ASCII
-$output=Join-Path $root "dist/Flashback-$Version-Setup.exe"
-& $compiler @compileArgs (('/resource:')+$payload+',payload.zip') (('/resource:')+$hash+',payload.sha256') (('/out:')+$output) $source
+$output=Join-Path $root ("dist/Flashback-$Version" + $(if ($Test) { '-TEST' } else { '' }) + "-Setup.exe")
+$setupArgs=@(); if ($Test) { $setupArgs+='/define:TEST' }
+& $compiler @compileArgs @setupArgs (('/resource:')+$payload+',payload.zip') (('/resource:')+$hash+',payload.sha256') (('/out:')+$output) $source
 if($LASTEXITCODE -ne 0) {throw 'Installer compilation failed'}
 Get-Item -LiteralPath $output | Select-Object FullName,Length
 

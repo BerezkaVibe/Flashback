@@ -156,7 +156,7 @@ internal sealed unsafe class FfmpegPresenter : IDisposable
         }
         // CPU path, or a frame that came back from the CPU decoder.
         if (bitmap == null) { bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null); image = null; SourceChanged?.Invoke(); }
-        scale = ffmpeg.sws_getCachedContext(scale, frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AVPixelFormat.AV_PIX_FMT_BGRA, ffmpeg.SWS_BILINEAR, null, null, null);
+        scale = ffmpeg.sws_getCachedContext(scale, frame->width, frame->height, (AVPixelFormat)frame->format, width, height, AVPixelFormat.AV_PIX_FMT_BGRA, (int)SwsFlags.SWS_BILINEAR, null, null, null);
         bitmap.Lock();
         var destination = new byte_ptrArray4(); destination[0] = (byte*)bitmap.BackBuffer;
         var stride = new int_array4(); stride[0] = bitmap.BackBufferStride;

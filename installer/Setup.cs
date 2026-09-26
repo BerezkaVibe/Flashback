@@ -19,13 +19,22 @@ using Microsoft.Win32;
 
 internal static class Setup
 {
+#if TEST
+    // A test build, marked as one wherever setup shows its version.
+    const string Version="0.9.4-TEST";
+#else
     const string Version="0.9.3";
+#endif
     const string Marker="Flashback-install-4a0fe501-ea28-4327-802f-21a68ab327e9";
     const string Manifest="installed-files.txt";
     const string RegistryPath=@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Flashback";
     static string InstallPath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Flashback"); } }
     static string StartLink { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),"Flashback.lnk"); } }
     static string DesktopLink { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Flashback.lnk"); } }
+    // Builds with the FFmpeg preview player's test runner get a shortcut to it too.
+    const string TestRunner="Test-FFmpeg-Player.cmd";
+    static string TestsStartLink { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),"Flashback player tests.lnk"); } }
+    static string TestsDesktopLink { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Flashback player tests.lnk"); } }
     [STAThread]
     static int Main(string[] args)
     {
@@ -186,17 +195,19 @@ internal static class Setup
             CleanupWork(root,stage);if(!preserveBackup)CleanupWork(root,backup);
         }
     }
-    static void Shortcut(string link,string target)
+    static void Shortcut(string link,string target,string icon=null,string description="Flashback replay recorder")
     {
         Directory.CreateDirectory(Path.GetDirectoryName(link));
         dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
         dynamic shortcut=shell.CreateShortcut(link);
-        try { shortcut.TargetPath=target;shortcut.WorkingDirectory=Path.GetDirectoryName(target);shortcut.IconLocation=target+",0";shortcut.Description="Flashback replay recorder";shortcut.Save(); }
+        try { shortcut.TargetPath=target;shortcut.WorkingDirectory=Path.GetDirectoryName(target);shortcut.IconLocation=(icon??target)+",0";shortcut.Description=description;shortcut.Save(); }
         finally { Marshal.FinalReleaseComObject(shortcut);Marshal.FinalReleaseComObject(shell); }
     }
     static void Register(bool desktop)
     {
         string exe=Path.Combine(InstallPath,"Flashback.exe");Shortcut(StartLink,exe);if(desktop)Shortcut(DesktopLink,exe);
+        string tests=Path.Combine(InstallPath,TestRunner);
+        if(File.Exists(tests)) { Shortcut(TestsStartLink,tests,exe,"Runs the FFmpeg preview player's tests and opens the results");if(desktop)Shortcut(TestsDesktopLink,tests,exe,"Runs the FFmpeg preview player's tests and opens the results"); }
         using(var key=Registry.CurrentUser.CreateSubKey(RegistryPath))
         {
             key.SetValue("DisplayName","Flashback");key.SetValue("DisplayVersion",Version);key.SetValue("Publisher","Flashback");key.SetValue("DisplayIcon",exe);
@@ -208,16 +219,16 @@ internal static class Setup
         using(var run=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",true))
             if(run!=null && run.GetValue("Flashback")!=null)run.SetValue("Flashback","\""+exe+"\" --tray");
     }
-    static void RemoveShortcut(string link)
+    static void RemoveShortcut(string link,string target="Flashback.exe")
     {
         if(!File.Exists(link))return;
         dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));dynamic shortcut=shell.CreateShortcut(link);
-        try { if(String.Equals((string)shortcut.TargetPath,Path.Combine(InstallPath,"Flashback.exe"),StringComparison.OrdinalIgnoreCase))File.Delete(link); }
+        try { if(String.Equals((string)shortcut.TargetPath,Path.Combine(InstallPath,target),StringComparison.OrdinalIgnoreCase))File.Delete(link); }
         finally { Marshal.FinalReleaseComObject(shortcut);Marshal.FinalReleaseComObject(shell); }
     }
     static void RemoveIntegration()
     {
-        RemoveShortcut(StartLink);RemoveShortcut(DesktopLink);Registry.CurrentUser.DeleteSubKeyTree(RegistryPath,false);
+        RemoveShortcut(StartLink);RemoveShortcut(DesktopLink);RemoveShortcut(TestsStartLink,TestRunner);RemoveShortcut(TestsDesktopLink,TestRunner);Registry.CurrentUser.DeleteSubKeyTree(RegistryPath,false);
         using(var run=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run",true))
             if(run!=null && Convert.ToString(run.GetValue("Flashback")).StartsWith("\""+Path.Combine(InstallPath,"Flashback.exe")+"\"",StringComparison.OrdinalIgnoreCase))run.DeleteValue("Flashback",false);
     }
@@ -311,7 +322,12 @@ internal static class Setup
 #else
             bool uninstall=false;
 #endif
-            Text=uninstall ? "Uninstall Flashback" : "Flashback Setup";ClientSize=new Size(570,315);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;StartPosition=FormStartPosition.CenterScreen;
+#if TEST
+            Text=uninstall ? "Uninstall Flashback" : "Flashback TEST Setup (FFmpeg player test build)";
+#else
+            Text=uninstall ? "Uninstall Flashback" : "Flashback Setup";
+#endif
+            ClientSize=new Size(570,315);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;StartPosition=FormStartPosition.CenterScreen;
             BackColor=Color.FromArgb(10,12,15);ForeColor=Color.WhiteSmoke;Font=new Font("Segoe UI",10);Icon=Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
             var title=new Label {Text=(uninstall ? "Uninstall Flashback" : "Install Flashback "+Version),Location=new Point(28,25),Size=new Size(500,40),Font=new Font("Segoe UI",20,FontStyle.Bold)};Controls.Add(title);
             status.Text=uninstall ? "Saved clips and preferences will be kept." : "A lightweight replay recorder, available from your Start menu.\r\n\r\nInstall for your account:\r\n"+InstallPath;
