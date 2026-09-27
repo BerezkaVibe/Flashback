@@ -61,7 +61,7 @@ public partial class TrimWindow
     // It plays the timeline itself: the finished video in the finished view, the whole recording otherwise,
     // with speed parts, freezes, music and sound files; the playhead follows it.
     private bool engineHolding;
-    private (int, bool, object, string, double)? timelineKey;
+    private (int, bool, object, object, string, double)? timelineKey;
     private (double, double) timelineRange = (double.NaN, double.NaN);
     // Hands it the timeline when anything on it changed (cheap when nothing did); if the pieces changed while
     // playing, it carries on from the playhead's place on the new ones.
@@ -71,7 +71,7 @@ public partial class TrimWindow
         // (The range marks are plain fields the timeline only notices while drawing the finished view.)
         if ((Timeline.Start, Timeline.End) != timelineRange) { timelineRange = (Timeline.Start, Timeline.End); Timeline.Remap(); }
         var map = Timeline.Map;
-        var key = (map.Version, Timeline.Finished, (object)Timeline.Sounds, source, media.Duration);
+        var key = (map.Version, Timeline.Finished, (object)Timeline.Sounds, (object)Timeline.Overlays, source, media.Duration);
         if (!force && timelineKey is { } known && known.Equals(key)) return;
         timelineKey = key;
         bool moved = engine.SetSequence(TimelinePieces(map), TimelineSounds(map));
@@ -138,10 +138,16 @@ public partial class TrimWindow
         }
         return list;
     }
-    // Music and sound files where the export puts them.
-    private SoundClip[] TimelineSounds(SequenceMap map) => Timeline.Sounds.Where(s => s.End > s.Start)
-        .Select(s => new SoundClip(s.Path, map.ToOutput(s.Start) + Math.Max(0, s.Hold), s.Length, s.Offset, Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed), s.KeepPitch, s.Volume, s.FadeIn, s.FadeOut, s.Duck, s.DuckLevel))
-        .ToArray();
+    // Music and sound files where the export puts them, and the sound of each video over the clip (where it
+    // shows, from its place in its file, at the speed of the footage under it, as loud as it's set).
+    private SoundClip[] TimelineSounds(SequenceMap map)
+    {
+        var videos = Timeline.Overlays.Where(o => o.Kind == OverlayKind.Video && !o.SoundUnlinked && o.VideoVolume > .001 && !string.IsNullOrWhiteSpace(o.VideoPath))
+            .Select(o => SoundItem.FromVideo(o, map, 0)).Where(s => s != null).Select(s => s!);
+        return Timeline.Sounds.Concat(videos).Where(s => s.End > s.Start)
+            .Select(s => new SoundClip(s.Path, map.ToOutput(s.Start) + Math.Max(0, s.Hold), s.Length, s.Offset, Math.Clamp(s.Speed, SoundItem.MinSpeed, SoundItem.MaxSpeed), s.KeepPitch, s.Volume, s.FadeIn, s.FadeOut, s.Duck, s.DuckLevel))
+            .ToArray();
+    }
     private string PositionText() => Timeline.Finished
         ? $"{KeepSection.TimeText(Timeline.PositionView)} / {KeepSection.TimeText(Timeline.Map.Total)}"
         : $"{KeepSection.TimeText(playhead)} / {KeepSection.TimeText(media.Duration)}";

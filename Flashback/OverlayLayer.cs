@@ -142,7 +142,7 @@ internal sealed class OverlayLayer : FrameworkElement
                 else
                 {
                     var content = ContentFor(original, state);
-                    if (item.Kind == OverlayKind.Video) content = WithVideo(item, content, PlayerFor(original));
+                    if (item.Kind == OverlayKind.Video) content = WithVideo(item, content, original);
                     var drawing = OverlayRenderer.Visual(item, local, VideoWidth, VideoHeight, content);
                     drawing.Transform = new MatrixTransform(toElement);
                     visual = drawing;
@@ -220,6 +220,18 @@ internal sealed class OverlayLayer : FrameworkElement
     // ---- Picture-in-picture ----
     // Each video part plays in its own player, kept in step with the preview. A part's player is found by
     // its file and how many earlier parts use the same file, so editing a part keeps its player.
+    // With the FFmpeg preview player (UseFfmpeg) each part's picture is decoded by FFmpeg instead
+    // (FfmpegInsetVideo), and its sound plays in the FFmpeg player's mix.
+    internal bool UseFfmpeg { get; set; }
+    private readonly Dictionary<(string Path, int Nth), FfmpegInsetVideo?> insets = new();
+    private FfmpegInsetVideo? InsetFor(OverlayItem item)
+    {
+        if (VideoKey(item) is not { } key) return null;
+        if (insets.TryGetValue(key, out var inset)) return inset;
+        try { inset = new FfmpegInsetVideo(item.VideoPath, Dispatcher); } catch { inset = null; }
+        insets[key] = inset;
+        return inset;
+    }
     private readonly Dictionary<(string Path, int Nth), MediaPlayer> players = new();
     private readonly HashSet<MediaPlayer> running = new();
     private bool playing; private double speed = 1;
@@ -242,7 +254,7 @@ internal sealed class OverlayLayer : FrameworkElement
     internal double Loudness { get; set; } = .5;
     private MediaPlayer? PlayerFor(OverlayItem item)
     {
-        if (VideoKey(item) is not { } key) return null;
+        if (UseFfmpeg || VideoKey(item) is not { } key) return null;
         if (players.TryGetValue(key, out var player)) return player;
         player = new MediaPlayer { ScrubbingEnabled = true, Volume = 0 };
         try { player.Open(new Uri(item.VideoPath)); } catch { return null; }
@@ -253,7 +265,18 @@ internal sealed class OverlayLayer : FrameworkElement
     }
     private void SyncVideos(bool force = false)
     {
-        if (players.Count == 0 && !items.Any(o => o.Kind == OverlayKind.Video)) return;
+        if (players.Count == 0 && insets.Count == 0 && !items.Any(o => o.Kind == OverlayKind.Video)) return;
+        if (UseFfmpeg)
+        {
+            foreach (var item in items)
+            {
+                if (item.Kind != OverlayKind.Video || !Visible(item) || InsetFor(item) is not { } inset) continue;
+                double local = At(item).Local;
+                double rate = speed > 0 ? speed : HoldTiming.HoldAt(time, freezes) > 0 && item.Clock(Now with { Hold = Now.Hold + .02 }, freezes) > local + 1e-4 ? HoldRate : 0;
+                inset.Show(Math.Max(0, local + item.VideoOffset), playing, rate);
+            }
+            return;
+        }
         var used = new HashSet<MediaPlayer>();
         foreach (var item in items)
         {
@@ -281,19 +304,22 @@ internal sealed class OverlayLayer : FrameworkElement
     }
     private void ForgetPlayers()
     {
-        if (players.Count == 0) return;
+        if (players.Count == 0 && insets.Count == 0) return;
         var wanted = items.Select(VideoKey).Where(k => k != null).Select(k => k!.Value).ToHashSet();
+        foreach (var key in insets.Keys.Where(k => !wanted.Contains(k)).ToList()) { insets[key]?.Dispose(); insets.Remove(key); }
         foreach (var key in players.Keys.Where(k => !wanted.Contains(k)).ToList()) { running.Remove(players[key]); players[key].Close(); players.Remove(key); }
     }
-    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); }
-    private static Drawing WithVideo(OverlayItem item, Drawing frame, MediaPlayer? player)
+    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); foreach (var inset in insets.Values) inset?.Dispose(); insets.Clear(); }
+    private Drawing WithVideo(OverlayItem item, Drawing frame, OverlayItem original)
     {
-        if (player == null) return frame;
+        var player = PlayerFor(original); var inset = UseFfmpeg ? InsetFor(original) : null;
+        if (player == null && inset == null) return frame;
         var group = new DrawingGroup();
         using (var dc = group.Open())
         {
             dc.PushClip(OverlayRenderer.MaskGeometry(item, OverlayRenderer.VideoRect(item)));
-            dc.DrawVideo(player, OverlayRenderer.VideoFullRect(item));
+            if (inset != null) dc.DrawImage(inset.Picture, OverlayRenderer.VideoFullRect(item));
+            else dc.DrawVideo(player!, OverlayRenderer.VideoFullRect(item));
             dc.Pop();
             dc.DrawDrawing(frame);
         }
@@ -525,7 +551,7 @@ internal sealed class OverlayLayer : FrameworkElement
         var away = new GeometryGroup { FillRule = FillRule.EvenOdd };
         away.Children.Add(new RectangleGeometry(full)); away.Children.Add(new RectangleGeometry(kept));
         dc.PushClip(away); dc.PushOpacity(.35);
-        if (item.Kind == OverlayKind.Video) { if (PlayerFor(item) is { } player) dc.DrawVideo(player, full); else dc.DrawRectangle(Ghost, null, full); }
+        if (item.Kind == OverlayKind.Video) { if (UseFfmpeg && InsetFor(item) is { } inset) dc.DrawImage(inset.Picture, full); else if (PlayerFor(item) is { } player) dc.DrawVideo(player, full); else dc.DrawRectangle(Ghost, null, full); }
         else if (OverlayRenderer.Uncropped(item, At(item).Local).Picture is { } picture) dc.DrawImage(picture, full);
         dc.Pop(); dc.Pop();
         dc.Pop();

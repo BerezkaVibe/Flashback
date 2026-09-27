@@ -273,6 +273,8 @@ public partial class TrimWindow : Window
         engine.Ended += () => Player_Ended(this, new RoutedEventArgs());
         engine.Failed += PreviewFailed;
         PlayerHost.Children.Add(engine.View);
+        // Videos over the clip are decoded by FFmpeg too, their sound mixed into the player's timeline.
+        OverlayView.UseFfmpeg = true;
         return new PreviewPlayer(WindowsPlayer, engine);
     }
     // hold: start that far into the hold of a freeze at start (finished view).
