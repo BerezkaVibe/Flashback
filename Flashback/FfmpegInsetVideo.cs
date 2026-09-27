@@ -12,16 +12,18 @@ namespace Flashback;
 // A video shown over the clip in the preview (picture-in-picture), decoded by FFmpeg, so it plays whatever
 // the export can (AV1, VP9, HEVC and the rest, which the Windows player often can't without extensions).
 // Just the picture: its sound is mixed into the FFmpeg player's timeline like music. A decoding thread
-// keeps the frame for the moment asked for (Show) in a bitmap the overlay draws; while playing it moves on
-// at the rate given between the editor's updates. Pictures are kept to at most 1280 wide, plenty for an inset.
+// opens the file (so a large one doesn't hold up the editor) and keeps the frame for the moment asked for
+// (Show) in a bitmap the overlay draws; while playing it moves on at the rate given between the editor's
+// updates. Pictures are kept to at most 1280 wide, plenty for an inset.
 internal sealed unsafe class FfmpegInsetVideo : IDisposable
 {
     private const int MaxWidth = 1280;
-    private readonly FfmpegVideoReader reader;
+    private readonly string path;
+    private FfmpegVideoReader? reader;
     private readonly Dispatcher dispatcher;
-    private readonly WriteableBitmap bitmap;
-    private readonly int width, height;
-    private readonly byte[] pixels;
+    private WriteableBitmap? bitmap;
+    private int width, height;
+    private byte[] pixels = Array.Empty<byte>();
     private readonly object pixelLock = new();
     private SwsContext* scale;
     private readonly Thread thread;
@@ -31,16 +33,16 @@ internal sealed unsafe class FfmpegInsetVideo : IDisposable
     // What to show: the video's own time, whether it's playing and how fast, and when that was set.
     private double wantAt; private bool wantPlaying; private double wantRate = 1; private long wantSince;
     private readonly object wantLock = new();
-    internal ImageSource Picture => bitmap;
+    // The picture, once the first frame has been decoded (null until then).
+    internal ImageSource? Picture => bitmap;
+    internal bool HasPicture => bitmap != null;
+    // Raised on the UI thread when the first picture arrives, so the overlay can swap it in.
+    internal event Action? PictureReady;
 
     internal FfmpegInsetVideo(string path, Dispatcher dispatcher)
     {
-        this.dispatcher = dispatcher;
-        reader = new FfmpegVideoReader(path);
-        double shrink = Math.Min(1, MaxWidth / (double)Math.Max(1, reader.Width));
-        width = Math.Max(2, (int)Math.Round(reader.Width * shrink)); height = Math.Max(2, (int)Math.Round(reader.Height * shrink));
-        bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
-        pixels = new byte[width * height * 4];
+        if (!FfmpegLibrary.Available) throw new InvalidOperationException("FFmpeg's libraries aren't available. " + FfmpegLibrary.Error);
+        this.path = path; this.dispatcher = dispatcher;
         thread = new Thread(Loop) { IsBackground = true, Name = "FFmpeg inset video" };
         thread.Start();
     }
@@ -60,9 +62,16 @@ internal sealed unsafe class FfmpegInsetVideo : IDisposable
     }
     private void Loop()
     {
+        ThreadNames.Name("FFmpeg inset video");
         double shown = double.NaN;
         try
         {
+            var opened = new FfmpegVideoReader(path);
+            if (stop) { opened.Dispose(); return; }
+            double shrink = Math.Min(1, MaxWidth / (double)Math.Max(1, opened.Width));
+            width = Math.Max(2, (int)Math.Round(opened.Width * shrink)); height = Math.Max(2, (int)Math.Round(opened.Height * shrink));
+            pixels = new byte[width * height * 4];
+            reader = opened;
             while (!stop)
             {
                 double want = Math.Min(Wanted(out bool playing), Math.Max(0, reader.Duration - .001));
@@ -77,7 +86,7 @@ internal sealed unsafe class FfmpegInsetVideo : IDisposable
                         while (reader.FrameTime + 1 / reader.FrameRate <= want + half && reader.Next()) any = true;
                         if (any) Publish();
                     }
-                    else if (reader.Seek(want)) Publish();
+                    else if (reader.Seek(want, () => stop)) Publish();
                     shown = reader.FrameTime >= 0 ? reader.FrameTime : want;
                     // (At the end it stays on the last frame.)
                     if (want >= reader.Duration - 1 / reader.FrameRate) shown = want;
@@ -90,7 +99,7 @@ internal sealed unsafe class FfmpegInsetVideo : IDisposable
     // The reader's frame into the bitmap (on the UI thread, the latest only).
     private void Publish()
     {
-        var frame = reader.Frame;
+        var frame = reader!.Frame;
         if (frame == null || frame->width <= 0) return;
         lock (pixelLock)
         {
@@ -106,14 +115,18 @@ internal sealed unsafe class FfmpegInsetVideo : IDisposable
         dispatcher.BeginInvoke(() =>
         {
             Interlocked.Exchange(ref copyScheduled, 0);
+            if (stop) return;
+            bool first = bitmap == null;
+            bitmap ??= new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
             lock (pixelLock) bitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+            if (first) PictureReady?.Invoke();
         }, DispatcherPriority.Render);
     }
     public void Dispose()
     {
         stop = true; wake.Set();
         thread.Join(1000);
-        reader.Dispose();
+        reader?.Dispose();
         lock (pixelLock) if (scale != null) { ffmpeg.sws_freeContext(scale); scale = null; }
         wake.Dispose();
     }

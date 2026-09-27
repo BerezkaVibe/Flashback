@@ -349,6 +349,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(FfmpegAudioMixer.Rate, 2);
         public int Read(byte[] buffer, int offset, int count)
         {
+            ThreadNames.Name("Sound output");
             int frames = count / 8, got = 0;
             if (mix.Length < frames * 2) mix = new float[frames * 2];
             long started = Stopwatch.GetTimestamp();
@@ -377,6 +378,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private FfmpegSequenceFrames? frames;
     private void DecodeLoop()
     {
+        ThreadNames.Name("FFmpeg preview decoder");
         try
         {
             while (!stop)

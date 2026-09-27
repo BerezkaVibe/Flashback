@@ -228,10 +228,15 @@ internal sealed class OverlayLayer : FrameworkElement
     {
         if (VideoKey(item) is not { } key) return null;
         if (insets.TryGetValue(key, out var inset)) return inset;
-        try { inset = new FfmpegInsetVideo(item.VideoPath, Dispatcher); } catch { inset = null; }
+        try { inset = new FfmpegInsetVideo(item.VideoPath, Dispatcher); inset.PictureReady += () => { kept.Remove(key); Refresh(); }; } catch { inset = null; }
         insets[key] = inset;
         return inset;
     }
+    // The last picture of each video, kept when the players are put away (the editor in the background), so
+    // coming back shows it straight away while the video opens again, instead of an empty box.
+    private readonly Dictionary<(string Path, int Nth), ImageSource> kept = new();
+    private ImageSource? InsetPicture(OverlayItem item, FfmpegInsetVideo inset) =>
+        inset.Picture ?? (VideoKey(item) is { } key && kept.TryGetValue(key, out var last) ? last : null);
     private readonly Dictionary<(string Path, int Nth), MediaPlayer> players = new();
     private readonly HashSet<MediaPlayer> running = new();
     private bool playing; private double speed = 1;
@@ -307,9 +312,16 @@ internal sealed class OverlayLayer : FrameworkElement
         if (players.Count == 0 && insets.Count == 0) return;
         var wanted = items.Select(VideoKey).Where(k => k != null).Select(k => k!.Value).ToHashSet();
         foreach (var key in insets.Keys.Where(k => !wanted.Contains(k)).ToList()) { insets[key]?.Dispose(); insets.Remove(key); }
+        foreach (var key in kept.Keys.Where(k => !wanted.Contains(k)).ToList()) kept.Remove(key);
         foreach (var key in players.Keys.Where(k => !wanted.Contains(k)).ToList()) { running.Remove(players[key]); players[key].Close(); players.Remove(key); }
     }
-    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); foreach (var inset in insets.Values) inset?.Dispose(); insets.Clear(); }
+    // Every video part showing now has its picture (for the tests).
+    internal bool VideosShowing => items.Where(o => o.Kind == OverlayKind.Video && Visible(o)).All(o => UseFfmpeg
+        ? VideoKey(o) is { } key && insets.TryGetValue(key, out var inset) && inset?.HasPicture == true
+        : VideoKey(o) is { } k && players.TryGetValue(k, out var player) && player.NaturalVideoWidth > 0);
+    // Every video part showing now draws a picture, its own or the one kept while the players were away.
+    internal bool VideosDrawn => !UseFfmpeg || items.Where(o => o.Kind == OverlayKind.Video && Visible(o)).All(o => InsetFor(o) is { } inset && InsetPicture(o, inset) != null);
+    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); foreach (var (key, inset) in insets) { if (inset?.Picture is { } last) kept[key] = last; inset?.Dispose(); } insets.Clear(); }
     private Drawing WithVideo(OverlayItem item, Drawing frame, OverlayItem original)
     {
         var player = PlayerFor(original); var inset = UseFfmpeg ? InsetFor(original) : null;
@@ -318,7 +330,7 @@ internal sealed class OverlayLayer : FrameworkElement
         using (var dc = group.Open())
         {
             dc.PushClip(OverlayRenderer.MaskGeometry(item, OverlayRenderer.VideoRect(item)));
-            if (inset != null) dc.DrawImage(inset.Picture, OverlayRenderer.VideoFullRect(item));
+            if (inset != null) { if (InsetPicture(original, inset) is { } picture) dc.DrawImage(picture, OverlayRenderer.VideoFullRect(item)); }
             else dc.DrawVideo(player!, OverlayRenderer.VideoFullRect(item));
             dc.Pop();
             dc.DrawDrawing(frame);
@@ -551,7 +563,7 @@ internal sealed class OverlayLayer : FrameworkElement
         var away = new GeometryGroup { FillRule = FillRule.EvenOdd };
         away.Children.Add(new RectangleGeometry(full)); away.Children.Add(new RectangleGeometry(kept));
         dc.PushClip(away); dc.PushOpacity(.35);
-        if (item.Kind == OverlayKind.Video) { if (UseFfmpeg && InsetFor(item) is { } inset) dc.DrawImage(inset.Picture, full); else if (PlayerFor(item) is { } player) dc.DrawVideo(player, full); else dc.DrawRectangle(Ghost, null, full); }
+        if (item.Kind == OverlayKind.Video) { if (UseFfmpeg && InsetFor(item) is { } inset) { if (InsetPicture(item, inset) is { } picture) dc.DrawImage(picture, full); } else if (PlayerFor(item) is { } player) dc.DrawVideo(player, full); else dc.DrawRectangle(Ghost, null, full); }
         else if (OverlayRenderer.Uncropped(item, At(item).Local).Picture is { } picture) dc.DrawImage(picture, full);
         dc.Pop(); dc.Pop();
         dc.Pop();
