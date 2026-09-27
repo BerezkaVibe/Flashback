@@ -30,8 +30,12 @@ internal static class EditorWorkspaceDiagnostics
             string project=Path.Combine(Storage.Root,"example.flashtrim"); trim.SaveProject(project);
             trim.SeekTo(10); trim.HandleKey(Key.I,ModifierKeys.None,true); trim.SeekTo(12); trim.HandleKey(Key.O,ModifierKeys.None,true);
             Check(trim.OpenProject(project,false) && trim.Timeline.Start==48 && trim.Timeline.End==51 && trim.SectionsList.Items.Count==1,"Project restores source, range, playhead and kept sections");
+            // Named projects are only written when saved, unless autosaving them is turned on (then closing
+            // writes a change still waiting on the timer).
+            Check(trim.AutoSaveProject.IsChecked!=true,"Named projects aren't autosaved unless that's turned on");
+            trim.AutoSaveProject.IsChecked=true;
             trim.SeekTo(49); trim.HandleKey(Key.I,ModifierKeys.None,true); trim.Close();
-            Check(TrimProject.Read(project).Start==49,"Closing immediately flushes a pending project autosave");
+            Check(TrimProject.Read(project).Start==49,"With autosave on, closing immediately flushes a pending project autosave");
             var changed=TrimProject.Read(project) with {SourceBytes=1}; string invalid=Path.Combine(Storage.Root,"invalid.flashtrim"); File.WriteAllText(invalid,JsonSerializer.Serialize(changed));
             bool rejected=false; try { TrimProject.Read(invalid); } catch(IOException) { rejected=true; }
             Check(rejected,"Projects reject a changed original instead of silently applying stale cut times");

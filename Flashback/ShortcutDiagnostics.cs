@@ -25,7 +25,8 @@ internal static class ShortcutDiagnostics
         var window = new MainWindow(renderOnly: true, syntheticCapture: true);
         try
         {
-            window.Show(); window.MainTabs.SelectedIndex = 1;
+            // Settings opens on Video; the shortcut fields are in its Hotkeys section.
+            window.Show(); window.MainTabs.SelectedIndex = 1; window.HotkeySettings.IsSelected = true; window.UpdateLayout();
             var handle = new WindowInteropHelper(window).Handle;
             SystemTestNative.ShowWindow(handle, 3); SystemTestNative.SetForegroundWindow(handle); window.Activate();
             await Task.Delay(300);

@@ -40,6 +40,9 @@ public partial class TrimWindow
     // recovery copy are written, so a closed or crashed trimmer can pick up where it left off.
     private void ProjectChanged()
     {
+        // The Save button shows the change straight away; the save half a second later checks it exactly
+        // (an edit undone back to the last save shows "Saved" again).
+        if (!restoringProject && source.Length>0 && savedEdit!=null) ShowSaveState(unsaved: true);
         if (restoringProject || source.Length==0 || !previewEnabled && projectPath==null) return;
         projectSaveTimer ??= new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(500) };
         projectSaveTimer.Tick -= ProjectSave_Tick; projectSaveTimer.Tick += ProjectSave_Tick;
@@ -61,12 +64,12 @@ public partial class TrimWindow
     private static string EditKey(TrimProject project) => (project with { Position=0 }).Serialize();
     private bool Unsaved => source.Length>0 && savedEdit!=null && EditKey(CurrentProject())!=savedEdit;
     private void MarkSaved() { savedEdit=source.Length>0 ? EditKey(CurrentProject()) : null; ShowSaveState(); }
-    private void ShowSaveState()
+    private void ShowSaveState(bool? unsaved=null)
     {
-        bool unsaved=Unsaved;
-        if (unsaved) SaveEditButton.SetResourceReference(ForegroundProperty,"Accent"); else SaveEditButton.ClearValue(ForegroundProperty);
-        SaveEditButton.ToolTip=(unsaved ? "Save your changes to this clip" : "Your edits to this clip are saved")+" · "+TrimShortcuts.Display(keys[TrimAction.SaveProject]);
-        SaveEditLabel.Text=unsaved ? "Save" : "Saved";
+        bool changed=unsaved ?? Unsaved;
+        if (changed) SaveEditButton.SetResourceReference(ForegroundProperty,"Accent"); else SaveEditButton.ClearValue(ForegroundProperty);
+        SaveEditButton.ToolTip=(changed ? "Save your changes to this clip" : "Your edits to this clip are saved")+" · "+TrimShortcuts.Display(keys[TrimAction.SaveProject]);
+        SaveEditLabel.Text=changed ? "Save" : "Saved";
     }
     private bool SaveEdit()
     {
