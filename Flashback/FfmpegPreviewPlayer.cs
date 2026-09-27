@@ -177,10 +177,12 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         pieces = nextPieces.ToArray(); soundClips = nextSounds;
         if (newPieces) sequence = pieces.Count > 0 ? new PlaySequence(pieces) : PlaySequence.Whole(Duration);
         if (audio == null) return newPieces;
+        // New music is opened first, outside the lock, so the sound playing doesn't wait for it.
+        var prepared = audio.Prepare(soundClips);
         lock (audioLock)
         {
             if (newPieces) audio.SetSequence(sequence);
-            audio.SetSounds(soundClips);
+            audio.SetSounds(soundClips, prepared);
         }
         return newPieces;
     }
@@ -202,20 +204,75 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         playing = true; endedRaised = false;
         RequestSeek(anchor, keepPlaying: true);
         releaseOutput?.Stop();
+        // The default sound device changed while paused: the idle output is on the old one.
+        if (deviceWatch?.Changed == true) ReleaseOutput();
+        StartFrom(anchor);
+        CompositionTarget.Rendering += Render;
+    }
+    // Plays on from a moment through a sound output (a new one on the default device when there's none), or
+    // the stopwatch when no sound device will open.
+    private void StartFrom(double at)
+    {
         bool fresh = false;
         if (sound != null && output == null)
             try
             {
                 lock (audioLock) sound.NewOutput();
+                WatchDevices();
                 output = new WasapiOut(AudioClientShareMode.Shared, true, 60);
+                output.PlaybackStopped += OutputStopped;
                 output.Init(new Feed(this));
                 fresh = true;
             }
             catch { output?.Dispose(); output = null; }
         // The sound is ready before the output starts, so its first buffer is the timeline's sound, not silence.
-        Restart(anchor);
-        if (fresh) try { output!.Play(); } catch { ReleaseOutput(); Restart(anchor); }
-        CompositionTarget.Rendering += Render;
+        Restart(at);
+        if (fresh) try { output!.Play(); } catch { ReleaseOutput(); Restart(at); }
+    }
+
+    // ---- Sound devices ----
+    // Unplugged headphones stop the output with an error, and switching the default device in Windows leaves
+    // it on the old one; either way playing carries on from the same moment on the stopwatch at once, and on
+    // the (new) default device as soon as it opens.
+    private MMDeviceEnumerator? devices;
+    private AudioDeviceWatch? deviceWatch;
+    private DispatcherTimer? reopen;
+    private int reopenTries;
+    private void WatchDevices()
+    {
+        try
+        {
+            devices ??= new MMDeviceEnumerator();
+            if (deviceWatch != null) devices.UnregisterEndpointNotificationCallback(deviceWatch);
+            string id = devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console).ID;
+            deviceWatch = new AudioDeviceWatch(id, followDefault: true, DataFlow.Render, Role.Console);
+            devices.RegisterEndpointNotificationCallback(deviceWatch);
+        }
+        catch { deviceWatch = null; }
+    }
+    private void OutputStopped(object? sender, StoppedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, output) || e.Exception == null) return;
+        View.Dispatcher.BeginInvoke(() => { if (ReferenceEquals(sender, output)) SwitchOutput(); });
+    }
+    private void SwitchOutput()
+    {
+        double at = Now();
+        ReleaseOutput();
+        if (!playing) return;
+        // The stopwatch straight away, so the picture doesn't stop.
+        anchor = at; clock.Restart();
+        reopenTries = 0;
+        reopen ??= new DispatcherTimer(TimeSpan.FromMilliseconds(300), DispatcherPriority.Background, (_, _) => TryReopen(), View.Dispatcher);
+        reopen.Stop(); reopen.Start();
+    }
+    private void TryReopen()
+    {
+        if (!playing || output != null) { reopen!.Stop(); return; }
+        double at = Now();
+        StartFrom(at);
+        // Opened: on the sound clock from here. Not yet: again shortly (for a few seconds), then the stopwatch.
+        if (output != null || ++reopenTries >= 10) reopen!.Stop();
     }
     internal void Pause()
     {
@@ -238,6 +295,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         releaseOutput?.Stop();
         if (output == null) return;
         var o = output; output = null;
+        o.PlaybackStopped -= OutputStopped;
         try { o.Stop(); } catch { }
         o.Dispose();
     }
@@ -341,6 +399,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private void Render(object? sender, EventArgs e)
     {
         if (!playing || presenter == null) return;
+        if (output != null && deviceWatch?.Changed == true) SwitchOutput();
         double now = Now();
         IntPtr due = IntPtr.Zero;
         lock (frameLock)
@@ -357,5 +416,10 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
             Ended?.Invoke();
         }
     }
-    public void Dispose() { Close(); wake.Dispose(); }
+    public void Dispose()
+    {
+        Close(); reopen?.Stop();
+        try { if (devices != null && deviceWatch != null) devices.UnregisterEndpointNotificationCallback(deviceWatch); } catch { }
+        devices?.Dispose(); wake.Dispose();
+    }
 }

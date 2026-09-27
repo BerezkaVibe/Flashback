@@ -12,7 +12,7 @@ namespace Flashback;
 internal sealed class PreviewPlayer
 {
     private readonly MediaElement windows;
-    private readonly FfmpegPreviewPlayer? engine;
+    private FfmpegPreviewPlayer? engine;
     internal FfmpegPreviewPlayer? Engine => engine;
     internal bool UsesFfmpeg => engine != null;
     internal FrameworkElement Visual => engine != null ? engine.View : windows;
@@ -23,6 +23,15 @@ internal sealed class PreviewPlayer
     {
         this.windows = windows; this.engine = engine;
         if (engine != null) windows.Visibility = Visibility.Collapsed;
+    }
+    // The FFmpeg player failed: it's let go and the Windows player takes over (the editor reopens the clip).
+    internal void DropEngine()
+    {
+        if (engine == null) return;
+        var dropped = engine; engine = null;
+        try { dropped.Close(); } catch { }
+        (dropped.View.Parent as Panel)?.Children.Remove(dropped.View);
+        windows.Visibility = Visibility.Visible;
     }
     internal Duration NaturalDuration => engine == null ? windows.NaturalDuration : engine.IsOpen && engine.Duration > 0 ? new Duration(TimeSpan.FromSeconds(engine.Duration)) : Duration.Automatic;
     // The recording's moment playing. (The FFmpeg player's own time runs along the editor's timeline; the

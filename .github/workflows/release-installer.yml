@@ -1,0 +1,50 @@
+# Builds the normal (not TEST) installer on Windows, with FFmpeg 9.0 (a full ffmpeg.exe for recording and
+# exports, the LGPL shared libraries for the editor's preview player), and makes a DRAFT release with it
+# attached, to check and publish by hand. The in-app updater only sees published releases.
+# Run it from the Actions tab: "Release installer" > Run workflow, pick the branch, enter the version.
+name: Release installer
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match <Version> in Flashback/Flashback.csproj, e.g. 0.9.4)'
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Check the version matches the app and the installer
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.version }}'
+          $app = ([xml](Get-Content Flashback/Flashback.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $setup = (Select-String -Path installer/Setup.cs -Pattern 'const string Version="([^"]+)";' | Select-Object -Last 1).Matches[0].Groups[1].Value
+          if ($app -ne $version -or $setup -ne $version) { throw "Version $version doesn't match the app ($app) or the installer ($setup). Bump both first." }
+      - name: Get FFmpeg 9.0
+        shell: pwsh
+        run: |
+          $base = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest'
+          Invoke-WebRequest "$base/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" -OutFile gpl.zip
+          Invoke-WebRequest "$base/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip" -OutFile lgpl.zip
+          Expand-Archive gpl.zip ff-gpl
+          Expand-Archive lgpl.zip ff-lgpl
+      - name: Build the app and the installer
+        shell: pwsh
+        run: |
+          $ffmpeg = (Get-ChildItem ff-gpl -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
+          $libs = (Get-ChildItem ff-lgpl -Recurse -Filter avcodec-63.dll | Select-Object -First 1).DirectoryName
+          ./build.ps1 -Version '${{ inputs.version }}' -FfmpegPath $ffmpeg -FfmpegLibs $libs
+          ./build-installer.ps1 -Version '${{ inputs.version }}'
+      - name: Draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ inputs.version }}'
+          gh release create "v$version" "dist/Flashback-$version-Setup.exe" "dist/Flashback-$version-win-x64.zip" --draft --target ${{ github.sha }} --title "Flashback $version" --notes "Flashback $version. See README.md for what's new."

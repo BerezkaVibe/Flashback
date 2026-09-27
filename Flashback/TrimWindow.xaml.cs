@@ -254,14 +254,26 @@ public partial class TrimWindow : Window
     private void Player_Ended(object sender, RoutedEventArgs e) { Pause(); if (!Player.PlaysTimeline) SetPlayhead(media.Duration); }
     private void WindowsPlayer_Failed(object sender, ExceptionRoutedEventArgs e) => PreviewFailed(e.ErrorException);
     private void PreviewFailed(Exception error)
-    { Pause(); StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + error.Message; }
-    // The preview player: the Windows one, or the FFmpeg one when it's chosen in Settings > Performance and its
-    // libraries are there (the Windows one otherwise, with a note why).
+    {
+        Pause();
+        // The FFmpeg player failing hands over to the Windows player for the rest of this editor's life.
+        if (Player.UsesFfmpeg)
+        {
+            Player.DropEngine(); OverlayView.UseFfmpeg = false; OverlayView.CloseVideos(); OverlayView.Items = OverlayView.Items;
+            timelineKey = null;
+            if (source.Length > 0 && previewEnabled) { Player.Source = new Uri(source); Player.Play(); Player.Pause(); pendingSeek = true; SyncSounds(); }
+            StatusLabel.Text = "The FFmpeg preview player stopped (" + error.Message + "), so the Windows player is previewing this clip.";
+            return;
+        }
+        StatusLabel.Text = "Preview unavailable. You can still mark times and export. " + error.Message;
+    }
+    // The preview player: the FFmpeg one, unless the Windows one is chosen in Settings > Performance or the
+    // FFmpeg libraries aren't there (then with a note why); it also hands over to the Windows one if it fails.
     internal PreviewPlayer Player { get; private set; }
     internal static bool? UseFfmpegPreview;
     private PreviewPlayer CreatePlayer()
     {
-        bool wanted = previewEnabled && (UseFfmpegPreview ?? Storage.Load(out _).FfmpegPreview);
+        bool wanted = previewEnabled && (UseFfmpegPreview ?? !Storage.Load(out _).WindowsPreview);
         if (!wanted) return new PreviewPlayer(WindowsPlayer, null);
         if (!FfmpegLibrary.Available)
         {
@@ -269,9 +281,10 @@ public partial class TrimWindow : Window
             return new PreviewPlayer(WindowsPlayer, null);
         }
         var engine = new FfmpegPreviewPlayer();
-        engine.Opened += () => Player_Opened(this, new RoutedEventArgs());
-        engine.Ended += () => Player_Ended(this, new RoutedEventArgs());
-        engine.Failed += PreviewFailed;
+        // (Only while it's still the player: after a failure the Windows one has taken over.)
+        engine.Opened += () => { if (Player.Engine == engine) Player_Opened(this, new RoutedEventArgs()); };
+        engine.Ended += () => { if (Player.Engine == engine) Player_Ended(this, new RoutedEventArgs()); };
+        engine.Failed += error => { if (Player.Engine == engine) PreviewFailed(error); };
         PlayerHost.Children.Add(engine.View);
         // Videos over the clip are decoded by FFmpeg too, their sound mixed into the player's timeline.
         OverlayView.UseFfmpeg = true;

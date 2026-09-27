@@ -1,6 +1,7 @@
 # -FfmpegLibs: the bin folder of an FFmpeg 9.0 LGPL shared build (avcodec-63.dll and friends) for the FFmpeg
-# preview player. Without it the editor keeps using the Windows player.
-param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.3', [string]$FfmpegLibs = '')
+# preview player, the editor's default. Required, unless -NoFfmpegPlayer is given for a build whose editor
+# uses the Windows player.
+param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.3', [string]$FfmpegLibs = '', [switch]$NoFfmpegPlayer)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $env:DOTNET_CLI_HOME = Join-Path $projectRoot '.dotnet-home'
@@ -8,6 +9,7 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $project = Join-Path $projectRoot 'Flashback/Flashback.csproj'
 $destination = Join-Path $projectRoot "artifacts/Flashback-$Version"
 if (-not (Test-Path -LiteralPath $FfmpegPath)) { throw 'Provide a compatible FFmpeg executable with -FfmpegPath.' }
+if ($FfmpegLibs -eq '' -and -not $NoFfmpegPlayer) { throw "Pass -FfmpegLibs with the bin folder of an FFmpeg 9.0 LGPL shared build (ffmpeg-n9.0-latest-win64-lgpl-shared-9.0 from github.com/BtbN/FFmpeg-Builds) for the editor's FFmpeg preview player, or -NoFfmpegPlayer to build without it." }
 # The app's ffmpeg.exe must encode H.264 in software (libx264: recording without a graphics-card encoder,
 # joining clips, some exports, the tests). LGPL builds leave it out, so an LGPL ffmpeg.exe (such as the one
 # beside the -FfmpegLibs DLLs) can't be used here; use a full (GPL) build.

@@ -17,6 +17,9 @@ public partial class App : Application
         base.OnStartup(e);
         var data = Array.IndexOf(e.Args, "--data-dir");
         if (data >= 0 && data + 1 < e.Args.Length) Storage.Root = Path.GetFullPath(e.Args[data + 1]);
+        // Which preview player the editor uses in a test run (--preview-player ffmpeg|windows), whatever the setting.
+        var previewPlayer = Array.IndexOf(e.Args, "--preview-player");
+        if (previewPlayer >= 0 && previewPlayer + 1 < e.Args.Length) TrimWindow.UseFfmpegPreview = !string.Equals(e.Args[previewPlayer + 1], "windows", StringComparison.OrdinalIgnoreCase);
         // The Tester: pick a copy of Flashback and the built-in tests to run on it (TesterWindow); and the list
         // of tests this copy has, for it (TestCatalog).
         if (e.Args.Contains("--list-tests")) { TestCatalog.Write(Storage.Root); Shutdown(0); return; }

@@ -122,27 +122,47 @@ internal sealed class SequenceAudio : IFfmpegSound, IDisposable
 
     // A new timeline (the sound carries on from the same sequence moment; the caller seeks if it moved).
     internal void SetSequence(PlaySequence next) { sequence = next; Seek(Math.Min(Position, next.Total)); }
+    // Sounds are the same layer when they play the same stretch of the same file the same way.
+    private static bool Same(SoundClip a, SoundClip b) => a.Path == b.Path && Math.Abs(a.At - b.At) < 1e-6 && Math.Abs(a.Offset - b.Offset) < 1e-6 && Math.Abs(a.Speed - b.Speed) < 1e-6 && a.KeepPitch == b.KeepPitch;
+    // Opens the files of sounds that aren't playing yet, ready for SetSounds. Opening can take a moment, so the
+    // player does it outside its sound lock (it only reads which layers there are).
+    internal IReadOnlyList<object> Prepare(IReadOnlyList<SoundClip> sounds)
+    {
+        var ready = new List<object>();
+        foreach (var s in sounds)
+        {
+            if (s.Length <= .01 || layers.Any(l => Same(l.Clip, s)) || ready.Cast<Layer>().Any(l => Same(l.Clip, s))) continue;
+            if (Open(s) is { } layer) ready.Add(layer);
+        }
+        return ready;
+    }
+    private Layer? Open(SoundClip s)
+    {
+        var layer = new Layer { Clip = s };
+        try
+        {
+            layer.Mixer = open(s.Path);
+            if (layer.Mixer.TrackCount == 0) { layer.Dispose(); return null; }
+            layer.Tempo = new FfmpegTempo(layer.Mixer, s.KeepPitch);
+            return layer;
+        }
+        catch { layer.Dispose(); return null; }
+    }
     // The music and sound files. Ones already playing carry on where they are (a volume or fade change doesn't
-    // interrupt them); a file that can't be opened is left out.
-    internal void SetSounds(IReadOnlyList<SoundClip> sounds)
+    // interrupt them); new ones come from `prepared` (Prepare), or are opened here; a file that can't be
+    // opened is left out.
+    internal void SetSounds(IReadOnlyList<SoundClip> sounds, IReadOnlyList<object>? prepared = null)
     {
         var old = layers.ToList(); layers.Clear();
+        var ready = prepared?.Cast<Layer>().ToList() ?? new List<Layer>();
         foreach (var s in sounds)
         {
             if (s.Length <= .01) continue;
-            var same = old.FirstOrDefault(l => l.Clip.Path == s.Path && Math.Abs(l.Clip.At - s.At) < 1e-6 && Math.Abs(l.Clip.Offset - s.Offset) < 1e-6 && Math.Abs(l.Clip.Speed - s.Speed) < 1e-6 && l.Clip.KeepPitch == s.KeepPitch);
-            if (same != null) { old.Remove(same); same.Clip = s; layers.Add(same); continue; }
-            var layer = new Layer { Clip = s };
-            try
-            {
-                layer.Mixer = open(s.Path);
-                if (layer.Mixer.TrackCount == 0) { layer.Dispose(); continue; }
-                layer.Tempo = new FfmpegTempo(layer.Mixer, s.KeepPitch);
-                layers.Add(layer);
-            }
-            catch { layer.Dispose(); }
+            var same = old.FirstOrDefault(l => Same(l.Clip, s)) ?? ready.FirstOrDefault(l => Same(l.Clip, s));
+            if (same != null) { old.Remove(same); ready.Remove(same); same.Clip = s; layers.Add(same); continue; }
+            if (Open(s) is { } layer) layers.Add(layer);
         }
-        foreach (var l in old) l.Dispose();
+        foreach (var l in old.Concat(ready)) l.Dispose();
     }
     internal void Seek(double seconds)
     {

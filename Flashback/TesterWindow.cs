@@ -20,6 +20,7 @@ internal sealed class TesterWindow : WF.Form
 {
     private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flashback-tests");
     private readonly WF.ComboBox target = new() { DropDownStyle = WF.ComboBoxStyle.DropDownList, Dock = WF.DockStyle.Fill };
+    private readonly WF.ComboBox playerBox = new() { DropDownStyle = WF.ComboBoxStyle.DropDownList, Dock = WF.DockStyle.Fill };
     private readonly WF.CheckedListBox list = new() { Dock = WF.DockStyle.Fill, CheckOnClick = true, IntegralHeight = false };
     private readonly WF.Label about = new() { Dock = WF.DockStyle.Fill, AutoEllipsis = true };
     private readonly WF.TextBox clip = new() { Dock = WF.DockStyle.Fill, PlaceholderText = "Clip for tests that use one (optional)" };
@@ -42,6 +43,7 @@ internal sealed class TesterWindow : WF.Form
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { }
         var layout = new WF.TableLayoutPanel { Dock = WF.DockStyle.Fill, ColumnCount = 1, Padding = new WF.Padding(10) };
         layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+        layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
         layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 45));
         layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Absolute, 44));
         layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
@@ -58,6 +60,12 @@ internal sealed class TesterWindow : WF.Form
         var browse = new WF.Button { Text = "Browse…", Dock = WF.DockStyle.Fill }; browse.Click += (_, _) => BrowseTarget();
         top.Controls.Add(refresh, 2, 0); top.Controls.Add(browse, 3, 0);
         layout.Controls.Add(top);
+        var playerRow = Row(new[] { 150f, 320f, -1f });
+        playerRow.Controls.Add(new WF.Label { Text = "Preview player:", Dock = WF.DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        playerBox.Items.AddRange(new object[] { "FFmpeg (the default)", "Windows (the fallback)" }); playerBox.SelectedIndex = 0;
+        playerRow.Controls.Add(playerBox, 1, 0);
+        playerRow.Controls.Add(new WF.Label { Text = "for tests that open the editor", Dock = WF.DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray }, 2, 0);
+        layout.Controls.Add(playerRow);
 
         // Tests
         list.SelectedIndexChanged += (_, _) => { if (list.SelectedIndex >= 0 && list.SelectedIndex < tests.Count) about.Text = Describe(tests[list.SelectedIndex]); };
@@ -109,6 +117,7 @@ internal sealed class TesterWindow : WF.Form
         foreach (var w in widths) row.ColumnStyles.Add(w < 0 ? new WF.ColumnStyle(WF.SizeType.Percent, 100) : new WF.ColumnStyle(WF.SizeType.Absolute, w));
         return row;
     }
+    private string PlayerChoice => playerBox.SelectedIndex == 1 ? "windows" : "ffmpeg";
     private static string Describe(TestInfo t) => t.About + (t.Long ? "  [long]" : "") + (t.UsesScreen ? "  [opens windows or records: leave the mouse alone]" : "") + (t.NeedsClip ? "  [needs a clip below]" : t.ClipOptional ? "  [uses the clip below if there is one]" : "");
     private void Check(Func<TestInfo, bool> which) { for (int i = 0; i < tests.Count; i++) list.SetItemChecked(i, which(tests[i])); }
 
@@ -182,7 +191,7 @@ internal sealed class TesterWindow : WF.Form
         if (chosen.Count == 0) { status.Text = "Tick at least one test."; return; }
         string note = chosen.Any(x => x.Group == "Recording") ? "\n\nRecording tests work best with Flashback's own recorder closed (tray icon > Exit), so the two don't record at once." : "";
         if (chosen.Any(x => x.UsesScreen) && WF.MessageBox.Show(this, "Some of these open windows or record the screen and sound. Leave the mouse and keyboard alone until they finish." + note + "\n\nStart?", "Flashback Tester", WF.MessageBoxButtons.OKCancel, WF.MessageBoxIcon.Information) != WF.DialogResult.OK) return;
-        run.Enabled = false; stop.Enabled = true; target.Enabled = false;
+        run.Enabled = false; stop.Enabled = true; target.Enabled = false; playerBox.Enabled = false;
         cancel = new CancellationTokenSource();
         done.Clear(); results.Items.Clear(); details.Clear();
         for (int n = 0; n < chosen.Count && !cancel.IsCancellationRequested; n++)
@@ -198,7 +207,7 @@ internal sealed class TesterWindow : WF.Form
         }
         int passed = done.Count(r => r.Outcome == "PASSED"), failed = done.Count(r => r.Outcome == "FAILED");
         status.Text = $"Done: {passed} passed, {failed} failed" + (done.Count < chosen.Count ? $", {chosen.Count - done.Count} not run (stopped)" : "") + ". Click a test for details, or copy all results.";
-        run.Enabled = true; stop.Enabled = false; target.Enabled = true; current = null;
+        run.Enabled = true; stop.Enabled = false; target.Enabled = true; playerBox.Enabled = true; current = null;
         if (results.Items.Count > 0) results.Items[0].Selected = true;
     }
     private async Task<Result> RunOne(string exe, TestInfo test, CancellationToken token)
@@ -207,7 +216,8 @@ internal sealed class TesterWindow : WF.Form
         TryClear(folder);
         var started = DateTime.Now; var watch = Stopwatch.StartNew();
         if (test.NeedsClip && !File.Exists(clip.Text)) return new Result(test, "SKIPPED", TimeSpan.Zero, "This test needs a clip: choose one with Clip… and run it again.", new(), folder);
-        var args = new List<string> { test.Switch };
+        // (A clip goes straight after the test's switch, where tests that take one look for it.)
+        var args = new List<string> { "--preview-player", PlayerChoice, test.Switch };
         if ((test.NeedsClip || test.ClipOptional) && File.Exists(clip.Text)) args.Add(clip.Text);
         string outcome;
         try
@@ -245,7 +255,7 @@ internal sealed class TesterWindow : WF.Form
     private string AllText()
     {
         var b = new StringBuilder();
-        b.Append($"Flashback Tester results, {DateTime.Now:yyyy-MM-dd HH:mm}, testing {(target.SelectedItem as Target)?.Label}\n");
+        b.Append($"Flashback Tester results, {DateTime.Now:yyyy-MM-dd HH:mm}, testing {(target.SelectedItem as Target)?.Label}, {PlayerChoice} preview player\n");
         b.Append($"Windows {Environment.OSVersion.Version}, {Environment.ProcessorCount} logical processors\n");
         b.Append(string.Join("", done.Select(r => $"{r.Outcome,-12} {r.Test.Name} ({r.Time.TotalSeconds:0} s)\n"))).Append('\n');
         foreach (var r in done) b.Append(ReportText(r)).Append('\n');
