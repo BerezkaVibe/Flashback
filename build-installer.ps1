@@ -1,5 +1,5 @@
 # -Test: a test build, marked TEST in the installer's name and windows.
-param([string]$Version='0.9.3', [switch]$Test)
+param([string]$Version='0.9.4', [switch]$Test)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $published=Join-Path $root "artifacts/Flashback-$Version"
