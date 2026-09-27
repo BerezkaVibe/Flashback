@@ -259,6 +259,7 @@ public partial class TrimWindow : Window
         // The FFmpeg player failing hands over to the Windows player for the rest of this editor's life.
         if (Player.UsesFfmpeg)
         {
+            Player.Engine?.Note("editor: switching to the Windows player after: " + error.Message);
             Player.DropEngine(); OverlayView.UseFfmpeg = false; OverlayView.CloseVideos(); OverlayView.Items = OverlayView.Items;
             timelineKey = null;
             if (source.Length > 0 && previewEnabled) { Player.Source = new Uri(source); Player.Play(); Player.Pause(); pendingSeek = true; SyncSounds(); }
@@ -299,6 +300,7 @@ public partial class TrimWindow : Window
             // hold plays on without holding again).
             Player.Pause(); SyncTimeline();
             parkedHold = hold > 0 ? hold : HoldAt(start); freezeDone = null;
+            engine.Note($"editor: play from source {start:0.000} (hold {parkedHold:0.00}, section {section}, {(Timeline.Finished ? "finished view" : "whole recording")}, preview {PreviewRate:0.##}x, {Timeline.SlowRegions.Count} speed parts, {Timeline.Freezes.Count} freezes)");
             SetPlayhead(start); previewSection = section;
             pendingSeek = false; engine.Position = EngineTime(engine, start, parkedHold, section);
             Player.SpeedRatio = PreviewRate;

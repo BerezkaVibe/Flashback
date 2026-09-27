@@ -20,6 +20,8 @@ internal sealed unsafe class FfmpegSequenceFrames
     internal bool Done => piece >= decoding.Pieces.Count;
 
     internal FfmpegSequenceFrames(FfmpegVideoReader reader, FfmpegRecentFrames recent) { this.reader = reader; this.recent = recent; }
+    // For the player's log: seeks that went back to a keyframe, and how long they took.
+    internal Action<string>? Note;
 
     // A seek. Paused: returns the frame showing there (the caller's to free), or zero. Playing: queues it and
     // carries on from there with Step. `queue(due, frame)` takes a frame (false: a newer seek came, so it's
@@ -69,7 +71,9 @@ internal sealed unsafe class FfmpegSequenceFrames
     {
         if (recent.From(source, reader.FrameRate) is { } kept) return kept;
         recent.Clear();
+        var took = System.Diagnostics.Stopwatch.StartNew();
         if (!reader.Seek(source, cancel)) return null;
+        if (took.ElapsedMilliseconds > 20) Note?.Invoke($"pictures: seek to {source:0.000} took {took.ElapsedMilliseconds} ms (piece {piece})");
         recent.Add(reader.FrameTime, reader.Frame);
         return new List<(double, IntPtr)> { (reader.FrameTime, (IntPtr)ffmpeg.av_frame_clone(reader.Frame)) };
     }

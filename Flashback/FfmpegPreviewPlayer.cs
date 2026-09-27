@@ -72,6 +72,31 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private readonly Stopwatch clock = new();
     private bool playing, endedRaised;
 
+    // ---- A playback log ----
+    // What playing did, to find stutters with: every 100 ms while playing (the clock, the sound and the
+    // pictures) and every event (plays, pauses, seeks, speed and timeline changes, sound device changes,
+    // failures). The last minute goes to player-trace.txt in the data folder whenever playing stops.
+    private readonly Queue<string> trace = new();
+    private long traceAt; private int shownSince, feedCalls, feedShort; private double feedWorst;
+    internal void Note(string what) { lock (trace) { trace.Enqueue($"{DateTime.Now:HH:mm:ss.fff} {what}"); while (trace.Count > 700) trace.Dequeue(); } }
+    private void WriteTrace()
+    {
+        try { string[] lines; lock (trace) lines = trace.ToArray(); System.IO.Directory.CreateDirectory(Storage.Root); System.IO.File.WriteAllLines(System.IO.Path.Combine(Storage.Root, "player-trace.txt"), lines); } catch { }
+    }
+    private void TraceTick(double now)
+    {
+        if (Stopwatch.GetElapsedTime(traceAt).TotalMilliseconds < 100) return;
+        traceAt = Stopwatch.GetTimestamp();
+        var (src, hold, section, holding) = sequence.Where(now);
+        int queued; double lastDue; lock (frameLock) { queued = ahead.Count; lastDue = ahead.Count > 0 ? ahead.Last().Time : double.NaN; }
+        double played = double.NaN; long submitted = 0;
+        try { if (output is { } o) played = o.GetPosition() / (double)o.OutputWaveFormat.AverageBytesPerSecond; } catch { }
+        if (sound != null) submitted = sound.Submitted;
+        int piece = sequence.PieceAt(now);
+        Note($"tick t={now:0.000} piece={piece} speed={(piece >= 0 ? sequence.Pieces[piece].Speed : 1):0.##} src={src:0.000}{(holding ? $" hold={hold:0.00}" : "")} sec={section} | sound {(output == null ? "none(stopwatch)" : $"played={played:0.000}s queued={(submitted / (double)FfmpegAudioMixer.Rate - played) * 1000:0}ms")} feeds={feedCalls} short={feedShort} worst={feedWorst:0.0}ms | pictures queued={queued} lastDue={lastDue:0.000} shown={shownSince}");
+        shownSince = 0; feedCalls = 0; feedShort = 0; feedWorst = 0;
+    }
+
     private double volume = .5; private bool muted;
     private IReadOnlyDictionary<int, double>? trackVolumes;
     private IReadOnlyDictionary<int, IReadOnlyList<FfmpegAudioMixer.GainPart>>? trackGains;
@@ -98,7 +123,8 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
             audio.SetSounds(soundClips);
             sound = new FfmpegSoundStream(audio);
             stop = false; anchor = 0; endedRaised = false;
-            frames = new FfmpegSequenceFrames(reader, recent);
+            frames = new FfmpegSequenceFrames(reader, recent) { Note = Note };
+            Note($"opened {System.IO.Path.GetFileName(path)}: {Report}");
             decoder = new Thread(DecodeLoop) { IsBackground = true, Name = "FFmpeg preview decoder", Priority = ThreadPriority.AboveNormal };
             decoder.Start();
             RequestSeek(0);
@@ -113,7 +139,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     }
     internal void Close()
     {
-        Pause(); ReleaseOutput();
+        Pause(); ReleaseOutput(); if (IsOpen) { Note("closed"); WriteTrace(); }
         IsOpen = false; stop = true; wake.Set();
         decoder?.Join(2000); decoder = null; recent.Clear();
         lock (frameLock) { while (ahead.Count > 0) Free(ahead.Dequeue().Frame); Free(Interlocked.Exchange(ref still, IntPtr.Zero)); }
@@ -132,6 +158,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         set
         {
             double at = Math.Clamp(value, 0, sequence.Total);
+            if (playing) Note($"seek while playing: {Now():0.000} -> {at:0.000}");
             anchor = at; endedRaised = false;
             RequestSeek(at);
             if (playing) Restart(at);
@@ -162,6 +189,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         {
             double next = Math.Clamp(value, .1, 4);
             if (Math.Abs(next - rate) < 1e-9) return;
+            Note($"preview speed {rate:0.##} -> {next:0.##}{(playing ? " while playing" : "")}");
             if (!playing) { rate = next; return; }
             double at = Now(); rate = next;
             if (output != null) { lock (audioLock) sound!.Respeed(rate); return; }
@@ -174,6 +202,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     internal bool SetSequence(IReadOnlyList<PlayPiece> nextPieces, IReadOnlyList<SoundClip> nextSounds)
     {
         bool newPieces = !nextPieces.SequenceEqual(pieces);
+        Note($"timeline handed over: {nextPieces.Count} pieces{(newPieces ? " (changed)" : "")}, {nextSounds.Count} sounds{(playing ? ", while playing" : "")}");
         pieces = nextPieces.ToArray(); soundClips = nextSounds;
         if (newPieces) sequence = pieces.Count > 0 ? new PlaySequence(pieces) : PlaySequence.Whole(Duration);
         if (audio == null) return newPieces;
@@ -201,6 +230,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     {
         if (!IsOpen || playing) return;
         if (anchor >= sequence.Total - .01) anchor = 0;
+        Note($"play from {anchor:0.000} (source {sequence.Where(anchor).Source:0.000}) at {rate:0.##}x, {sequence.Pieces.Count} pieces, sound output {(output != null ? "open" : "to open")}");
         playing = true; endedRaised = false;
         RequestSeek(anchor, keepPlaying: true);
         releaseOutput?.Stop();
@@ -258,6 +288,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     private void SwitchOutput()
     {
         double at = Now();
+        Note($"sound device changed or lost at {at:0.000}; carrying on, reopening");
         ReleaseOutput();
         if (!playing) return;
         // The stopwatch straight away, so the picture doesn't stop.
@@ -278,11 +309,13 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     {
         if (!playing) return;
         anchor = Now();
+        Note($"pause at {anchor:0.000}");
         playing = false; playingFlag = false;
         if (sound != null) lock (audioLock) sound.Stop();
         clock.Reset();
         CompositionTarget.Rendering -= Render;
         RequestSeek(anchor);
+        WriteTrace();
         // The output idles on silence for a moment, so playing again straight away starts at once.
         if (output != null)
         {
@@ -318,8 +351,12 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         {
             int frames = count / 8, got = 0;
             if (mix.Length < frames * 2) mix = new float[frames * 2];
+            long started = Stopwatch.GetTimestamp();
             try { lock (player.audioLock) got = player.sound?.Read(mix, frames) ?? 0; }
-            catch (Exception ex) { player.View.Dispatcher.BeginInvoke(() => player.Failed?.Invoke(ex)); }
+            catch (Exception ex) { player.Note("sound failed: " + ex.Message); player.View.Dispatcher.BeginInvoke(() => player.Failed?.Invoke(ex)); }
+            double ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            player.feedCalls++; if (ms > player.feedWorst) player.feedWorst = ms;
+            if (got < frames && player.playing) player.feedShort++;
             // 0.5 is as recorded (the Windows player's default), so the preview can go up to twice as loud.
             float gain = player.muted ? 0 : (float)(player.volume * 2);
             for (int i = 0; i < got * 2; i++) mix[i] *= gain;
@@ -364,7 +401,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
                 wake.WaitOne(playingFlag ? 5 : 200);
             }
         }
-        catch (Exception ex) { View.Dispatcher.BeginInvoke(() => Failed?.Invoke(ex)); }
+        catch (Exception ex) { Note("pictures failed: " + ex.Message); View.Dispatcher.BeginInvoke(() => Failed?.Invoke(ex)); }
     }
     // A frame due at a moment of the timeline joins the queue, unless a newer seek has come.
     private bool QueueFrame(double due, IntPtr frame)
@@ -392,6 +429,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
     }
     private void Show(IntPtr frame)
     {
+        shownSince++;
         presenter!.Present((AVFrame*)frame);
         Free(shown); shown = frame;
     }
@@ -401,6 +439,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         if (!playing || presenter == null) return;
         if (output != null && deviceWatch?.Changed == true) SwitchOutput();
         double now = Now();
+        TraceTick(now);
         IntPtr due = IntPtr.Zero;
         lock (frameLock)
             while (ahead.Count > 0 && ahead.Peek().Time <= now + .004)
@@ -413,6 +452,7 @@ internal sealed unsafe class FfmpegPreviewPlayer : IDisposable
         {
             endedRaised = true;
             Pause(); anchor = sequence.Total;
+            Note("reached the end"); WriteTrace();
             Ended?.Invoke();
         }
     }
