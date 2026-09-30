@@ -63,10 +63,13 @@ internal static class FfmpegEngineDiagnostics
             }
             static int Expected(int n) => (int)Math.Round(16 + (30 + n % 200) * 219 / 255.0);
             var rng = new Random(3); int wrong = 0; var times = new List<double>();
-            foreach (double t in new[] { 0, 1.999, 2.0, 2.01, 5.5, 9.98 }.Concat(Enumerable.Range(0, 60).Select(_ => rng.NextDouble() * 9.9)))
+            // The frame showing at each moment: the last one starting at or before it (a moment a quarter of a frame
+            // or less before a frame counts as that frame), as playing shows it. Some land just past the middle of a
+            // frame, where the nearest frame would be the next one.
+            foreach (double t in new[] { 0, 1.999, 2.0, 2.01, 5.5, 9.98, (120 + .6) / 60, (300 + .9) / 60 }.Concat(Enumerable.Range(0, 58).Select(_ => rng.NextDouble() * 9.9)))
             {
                 var sw = Stopwatch.StartNew(); bool got = video.Seek(t); times.Add(sw.Elapsed.TotalMilliseconds);
-                int n = (int)Math.Floor(t * 60 + .5 + 1e-9);
+                int n = (int)Math.Floor(t * 60 + .25 + 1e-9);
                 if (!got || Math.Abs(video.FrameTime - n / 60.0) > 1e-3 || Math.Abs(Luma() - Expected(n)) > 2) wrong++;
             }
             times.Sort();
@@ -97,7 +100,7 @@ internal static class FfmpegEngineDiagnostics
                 bool Take(double due, IntPtr f) { got.Add((due, NumberOf(f))); FreeFrame(f); return true; }
                 along.Seek(timeline, 0, true, null, Take);
                 for (int guard = 0; !along.Done && guard < 1000; guard++) along.Step(Take);
-                int off = got.Count(g => g.Number != (int)Math.Floor(timeline.Where(g.Due + 1e-9).Source * 60 + .5 + 1e-6));
+                int off = got.Count(g => g.Number != (int)Math.Floor(timeline.Where(g.Due + 1e-9).Source * 60 + .25 + 1e-6));
                 var jump = got.Where(g => g.Due >= 2.5 - 1e-9).ToList();
                 Check(got.Count > 100 && off == 0 && got.Count(g => g.Due >= 1 - 1e-9 && g.Due < 1.5 - 1e-9) == 1 && jump.Count == 30 && jump[0].Number == 180,
                     $"Decoding {how}, each frame along a timeline (a hold, 0.5×, a jump to another section at 2×) is the one showing at its moment ({got.Count} frames, {off} wrong)");

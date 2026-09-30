@@ -256,6 +256,19 @@ internal static class ExportServices
             // Files made for this export are named relative to its folder (ffmpeg runs there), which keeps
             // the command short however many parts a big edit has.
             string Local(string arg) => arg.StartsWith(overlayFolder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? arg[(overlayFolder.Length + 1)..] : arg;
+            // Pictures made for this export (each piece's list of a layer's frames, masks, borders) open inside
+            // the filter graph, which is read from a file, rather than as inputs: a big edit has over a thousand
+            // of them, and as inputs they made the command longer than Windows allows. Returns the stream's label.
+            int opened = 0;
+            string Picture(string file, bool list = false)
+            {
+                string name = Local(file);
+                if (name.IndexOfAny(new[] { ':', '\\', '/', '\'', '[', ']', ',', ';', '=', ' ' }) >= 0)
+                    return AddInput(list ? new[] { "-f", "concat", "-safe", "0", "-i", file } : new[] { "-i", file }) + ":v";
+                string label = $"in{opened++}";
+                filters.Add($"movie=filename={name}{(list ? @":f=concat:format_opts=safe\\=0" : "")}[{label}]");
+                return label;
+            }
             Directory.CreateDirectory(overlayFolder);
             // Text, pictures and shapes are drawn to see-through pictures first; each piece reads the ones it shows.
             // Each is drawn on its own clock, which is longer than its recording time when it's shown in freeze
@@ -391,16 +404,16 @@ internal static class ExportServices
                                 // The mask and frame are single pictures that the filters repeat for every frame. Read as
                                 // looping inputs they flooded ffmpeg with frames long before the pieces they belong to
                                 // were reached, which sometimes left an export stuck for good.
-                                int mask = AddInput("-i", pip.Mask);
+                                string mask = Picture(pip.Mask);
                                 string holdStill = place.Still ? $",trim=end_frame=1,tpad=stop_mode=clone:stop_duration={Number(to - from)}" : "";
                                 var chain = new List<string> { $"[{input}:v:0]setpts=PTS-STARTPTS{holdStill},crop={pip.CropW}:{pip.CropH}:{pip.CropX}:{pip.CropY},scale={pip.Width}:{pip.Height},format=rgba[{next}v]",
-                                    $"[{mask}:v]format=rgba,alphaextract[{next}k]", $"[{next}v][{next}k]alphamerge[{next}m]" };
+                                    $"[{mask}]format=rgba,alphaextract[{next}k]", $"[{next}v][{next}k]alphamerge[{next}m]" };
                                 string framed = $"{next}m";
                                 if (pip.Border is { } border)
                                 {
-                                    int borderInput = AddInput("-i", border);
+                                    string borderInput = Picture(border);
                                     chain.Add($"[{framed}]pad={pip.Width + pip.Pad * 2}:{pip.Height + pip.Pad * 2}:{pip.Pad}:{pip.Pad}:color=0x00000000[{next}q]");
-                                    chain.Add($"[{borderInput}:v]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=repeat[{next}b]");
+                                    chain.Add($"[{borderInput}]format=rgba[{next}f]"); chain.Add($"[{next}q][{next}f]overlay=eof_action=repeat[{next}b]");
                                     framed = $"{next}b";
                                 }
                                 double angle = item.Rotation * Math.PI / 180;
@@ -423,7 +436,7 @@ internal static class ExportServices
                                 label = next; continue;
                             }
                             if (OverlayExport.PieceList(clip, pieceStart, pieceEnd, overlayFolder, $"piece{i}-{step}") is not { } list) { step--; continue; }
-                            int frames = AddInput("-f", "concat", "-safe", "0", "-i", list.List);
+                            string frames = Picture(list.List, list: true);
                             string when = $"enable='gte(t,{Number(list.From)})*lt(t,{Number(list.To)})'";
                             if (clip.Region)
                             {
@@ -432,13 +445,13 @@ internal static class ExportServices
                                 string effect = clip.Item.Region == OverlayRegion.Blur
                                     ? $"gblur=sigma={Number(Math.Clamp(strength / 2, .5, Math.Min(box.Width, box.Height) / 2.0))}"
                                     : $"scale={Math.Max(1, (int)Math.Round(box.Width / Math.Max(2, strength)))}:{Math.Max(1, (int)Math.Round(box.Height / Math.Max(2, strength)))}:flags=area,scale={box.Width}:{box.Height}:flags=neighbor";
-                                filters.Add($"[{label}]split[{next}a][{next}c];[{next}c]crop={box.Width}:{box.Height}:{box.X}:{box.Y},{effect}[{next}e];[{frames}:v]format=rgba,alphaextract[{next}k];[{next}e][{next}k]alphamerge[{next}r];[{next}a][{next}r]overlay=x={box.X}:y={box.Y}:eof_action=pass:{when}[{next}]");
+                                filters.Add($"[{label}]split[{next}a][{next}c];[{next}c]crop={box.Width}:{box.Height}:{box.X}:{box.Y},{effect}[{next}e];[{frames}]format=rgba,alphaextract[{next}k];[{next}e][{next}k]alphamerge[{next}r];[{next}a][{next}r]overlay=x={box.X}:y={box.Y}:eof_action=pass:{when}[{next}]");
                             }
                             else
                             {
                                 // A picture that only moves follows its keyframes; the rest sit at their box.
                                 var (px, py) = clip.Move != null ? OverlayExport.MoveExpressions(clip, pieceStart, frameW, frameH) : (clip.Box.X.ToString(CultureInfo.InvariantCulture), clip.Box.Y.ToString(CultureInfo.InvariantCulture));
-                                filters.Add($"[{frames}:v]format=rgba[{next}p];[{label}][{next}p]overlay=x='{px}':y='{py}':eof_action=pass:{when}[{next}]");
+                                filters.Add($"[{frames}]format=rgba[{next}p];[{label}][{next}p]overlay=x='{px}':y='{py}':eof_action=pass:{when}[{next}]");
                             }
                             label = next;
                         }

@@ -150,6 +150,13 @@ internal sealed class OverlayLayer : FrameworkElement
                 built[original] = cached = (key, visual);
             }
             (item.StickToVideo ? stuck : screen).Children.Add(cached.Visual);
+            // How wide a video is drawn, in screen pixels, so its picture is made at about that size.
+            if (UseFfmpeg && item.Kind == OverlayKind.Video && InsetFor(original) is { } inset)
+            {
+                var posed = item.Posed(local);
+                double frame = OverlayRenderer.VideoFullRect(item).Width * VideoHeight / OverlayItem.Reference * posed.Scale * Math.Max(.01, state.Scale);
+                inset.DrawnWidth = frame * toElement.M11 * (item.StickToVideo ? Math.Abs(zoom.M11) : 1) * VisualTreeHelper.GetDpi(this).DpiScaleX;
+            }
         }
         DrawHandles();
     }
@@ -228,7 +235,19 @@ internal sealed class OverlayLayer : FrameworkElement
     {
         if (VideoKey(item) is not { } key) return null;
         if (insets.TryGetValue(key, out var inset)) return inset;
-        try { inset = new FfmpegInsetVideo(item.VideoPath, Dispatcher); inset.PictureReady += () => { kept.Remove(key); Refresh(); }; } catch { inset = null; }
+        try
+        {
+            inset = new FfmpegInsetVideo(item.VideoPath, Dispatcher);
+            // A new picture (the first, or at a new size): the parts showing this video draw it, not the kept
+            // picture or the old one (their drawings are cached, so they're dropped).
+            inset.PictureChanged += () =>
+            {
+                kept.Remove(key);
+                foreach (var o in items) if (VideoKey(o) is { } k && k == key) built.Remove(o);
+                Refresh();
+            };
+        }
+        catch { inset = null; }
         insets[key] = inset;
         return inset;
     }
@@ -319,9 +338,13 @@ internal sealed class OverlayLayer : FrameworkElement
     internal bool VideosShowing => items.Where(o => o.Kind == OverlayKind.Video && Visible(o)).All(o => UseFfmpeg
         ? VideoKey(o) is { } key && insets.TryGetValue(key, out var inset) && inset?.HasPicture == true
         : VideoKey(o) is { } k && players.TryGetValue(k, out var player) && player.NaturalVideoWidth > 0);
+    // Kept pictures still standing in for a video (none once each has its own again), and whether every video
+    // is decoded on the graphics card (for the tests).
+    internal int KeptPictures => kept.Count;
+    internal bool VideosOnGraphicsCard => insets.Values.All(i => i?.OnGraphicsCard == true);
     // Every video part showing now draws a picture, its own or the one kept while the players were away.
     internal bool VideosDrawn => !UseFfmpeg || items.Where(o => o.Kind == OverlayKind.Video && Visible(o)).All(o => InsetFor(o) is { } inset && InsetPicture(o, inset) != null);
-    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); foreach (var (key, inset) in insets) { if (inset?.Picture is { } last) kept[key] = last; inset?.Dispose(); } insets.Clear(); }
+    internal void CloseVideos() { foreach (var player in players.Values) player.Close(); players.Clear(); running.Clear(); foreach (var (key, inset) in insets) { if (inset?.Picture is { } last) kept[key] = (ImageSource)last.CloneCurrentValue(); inset?.Dispose(); } insets.Clear(); }
     private Drawing WithVideo(OverlayItem item, Drawing frame, OverlayItem original)
     {
         var player = PlayerFor(original); var inset = UseFfmpeg ? InsetFor(original) : null;

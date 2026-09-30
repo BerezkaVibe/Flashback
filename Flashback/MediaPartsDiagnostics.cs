@@ -227,15 +227,29 @@ internal static class MediaPartsDiagnostics
             live.SeekTo(3); await Task.Delay(900);
             var textAt3 = view.ScreenBounds(3);
             Check(textAt3.X > textAt1.X + 40, $"Keyframed text moves across the preview ({textAt1.X:0} → {textAt3.X:0})");
-            var players = (System.Collections.IDictionary)typeof(OverlayLayer).GetField("players", flags)!.GetValue(view)!;
-            Check(players.Count == 1, "The picture-in-picture video gets its own player");
-            var player = players.Values.Cast<MediaPlayer>().Single();
-            until.Restart(); while (!player.NaturalDuration.HasTimeSpan && until.Elapsed.TotalSeconds < 8) await Task.Delay(100);
+            // The inset video plays in a player of its own: an FFmpeg decoder with the FFmpeg preview player,
+            // a Windows MediaPlayer with the Windows one.
+            Func<double> insetAt; Func<bool> insetReady;
+            if (view.UseFfmpeg)
+            {
+                var insets = (System.Collections.IDictionary)typeof(OverlayLayer).GetField("insets", flags)!.GetValue(view)!;
+                Check(insets.Count == 1 && insets.Values.Cast<FfmpegInsetVideo?>().Single() != null, "The picture-in-picture video gets its own decoder");
+                var decoder = insets.Values.Cast<FfmpegInsetVideo>().Single();
+                insetAt = () => decoder.ShownTime; insetReady = () => decoder.HasPicture;
+            }
+            else
+            {
+                var players = (System.Collections.IDictionary)typeof(OverlayLayer).GetField("players", flags)!.GetValue(view)!;
+                Check(players.Count == 1, "The picture-in-picture video gets its own player");
+                var player = players.Values.Cast<MediaPlayer>().Single();
+                insetAt = () => player.Position.TotalSeconds; insetReady = () => player.NaturalDuration.HasTimeSpan;
+            }
+            until.Restart(); while (!insetReady() && until.Elapsed.TotalSeconds < 8) await Task.Delay(100);
             await Task.Delay(400);
-            Check(Math.Abs(player.Position.TotalSeconds - 3) < .2, $"The inset video is paused at the playhead's moment ({player.Position.TotalSeconds:0.00} s)");
+            Check(Math.Abs(insetAt() - 3) < .2, $"The inset video is paused at the playhead's moment ({insetAt():0.00} s)");
             await Shot(live, "parts-preview-paused.png");
             live.HandleKey(Key.Space, ModifierKeys.None, true); await Task.Delay(1500);
-            double drift = Math.Abs(player.Position.TotalSeconds - live.Playhead);
+            double drift = Math.Abs(insetAt() - live.Playhead);
             await Shot(live, "parts-preview-playing.png");
             live.HandleKey(Key.Space, ModifierKeys.None, true);
             Check(live.Playhead > 3.8 && drift < .4, $"The inset video plays along with the clip (drift {drift:0.00} s)");

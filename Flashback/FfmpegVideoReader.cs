@@ -34,7 +34,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
     internal AVFrame* Frame => current;
     internal double FrameTime { get; private set; } = -1;
 
-    internal FfmpegVideoReader(string path, AVBufferRef* hardwareDevice = null)
+    internal FfmpegVideoReader(string path, AVBufferRef* hardwareDevice = null, int extraFrames = DefaultExtraFrames)
     {
         if (!FfmpegLibrary.Available) throw new InvalidOperationException("FFmpeg's libraries aren't available. " + FfmpegLibrary.Error);
         AVFormatContext* opened = null;
@@ -54,8 +54,8 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         if (hardwareDevice != null)
         {
             codec->hw_device_ctx = ffmpeg.av_buffer_ref(hardwareDevice);
-            // Room for the frames the player holds on to (see ExtraFrames).
-            codec->extra_hw_frames = ExtraFrames;
+            // Room for the frames the player holds on to (see DefaultExtraFrames).
+            this.extraFrames = extraFrames; codec->extra_hw_frames = extraFrames;
             pickFormat = PickFormat;
             codec->get_format = pickFormat;
             Hardware = true;
@@ -70,7 +70,9 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
     }
     // The frames the player holds on to beyond the decoder's own: up to 12 recent ones (FfmpegRecentFrames,
     // which the few queued ahead are among), the one on screen, a paused seek's and the reader's next.
-    private const int ExtraFrames = 16;
+    // (A video over the clip holds far fewer and asks for fewer.)
+    internal const int DefaultExtraFrames = 16;
+    private readonly int extraFrames;
     // The decoder asks which picture format to decode to (at the start, and again after each keyframe seek):
     // graphics-card frames from the clip's one pool, made the first time and handed back every time after.
     private AVPixelFormat PickFormat(AVCodecContext* context, AVPixelFormat* offered)
@@ -86,7 +88,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
                     AVBufferRef* made = null;
                     if (ffmpeg.avcodec_get_hw_frames_parameters(context, context->hw_device_ctx, AVPixelFormat.AV_PIX_FMT_D3D11, &made) < 0) return *f;
                     var frames = (AVHWFramesContext*)made->data;
-                    if (frames->initial_pool_size > 0) frames->initial_pool_size += ExtraFrames;
+                    if (frames->initial_pool_size > 0) frames->initial_pool_size += extraFrames;
                     if (ffmpeg.av_hwframe_ctx_init(made) < 0) { ffmpeg.av_buffer_unref(&made); return *f; }
                     if (pool != null) { var old = pool; ffmpeg.av_buffer_unref(&old); }
                     pool = made; poolShape = shape; PoolsMade++;
@@ -138,16 +140,20 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
         FrameTime = TimeOf(current);
         return true;
     }
-    // The frame showing at a moment (the last one starting at or before it, give or take half a frame): back
-    // to the keyframe before it, then decoded forward. Just ahead in the same stretch it decodes on instead,
+    // How far a frame's time may sit after a moment and still count as showing there: a quarter of a frame, for
+    // timestamps a little off the frame grid. (It was half a frame, which picked the nearest frame instead of
+    // the one showing: seeking to the second half of a frame showed the next one.)
+    internal double Slack => .25 / FrameRate;
+    // The frame showing at a moment (the last one starting at or before it, give or take Slack): back to the
+    // keyframe before it, then decoded forward. Just ahead in the same stretch it decodes on instead,
     // which is what playback and small scrubs do. Recordings have a keyframe every 2 seconds.
     // `cancel` is asked before each frame decoded on the way: true gives up (false back), leaving the reader
     // where it got to, so a scrub's next seek carries on from there instead of waiting for this one.
     internal bool Seek(double seconds, Func<bool>? cancel = null)
     {
         seconds = Math.Clamp(seconds, 0, Math.Max(0, Duration));
-        double half = .5 / FrameRate;
-        bool onward = FrameTime >= 0 && seconds >= FrameTime - half && seconds - FrameTime < 1;
+        double slack = Slack;
+        bool onward = FrameTime >= 0 && seconds >= FrameTime - slack && seconds - FrameTime < 1;
         if (!onward)
         {
             long target = (long)Math.Floor((seconds + origin / (double)ffmpeg.AV_TIME_BASE) / ffmpeg.av_q2d(timeBase));
@@ -161,7 +167,7 @@ internal sealed unsafe class FfmpegVideoReader : IDisposable
             if (!hasPending) { if (!Decode(pending)) return FrameTime >= 0; hasPending = true; }
             double time = TimeOf(pending);
             // The next frame starts after the moment: the current one is it (the next waits for Next()).
-            if (time > seconds + half && FrameTime >= 0) return true;
+            if (time > seconds + slack && FrameTime >= 0) return true;
             ffmpeg.av_frame_unref(current); ffmpeg.av_frame_move_ref(current, pending); hasPending = false; FrameTime = time;
         }
     }

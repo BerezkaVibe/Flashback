@@ -374,6 +374,9 @@ internal static class TrimInteractionDiagnostics
     {
         Directory.CreateDirectory(Storage.Root);
         string path=Path.Combine(Storage.Root,"timeline-test.mp4");
+        // The clip --trim-interaction-test makes, made here too when this runs on its own (the Tester gives
+        // each test a folder of its own).
+        if (!File.Exists(path)) await EditorDiagnostics.Ffmpeg("-y","-f","lavfi","-i","testsrc2=size=640x360:rate=30:duration=12","-c:v","libx264","-threads","2","-preset","ultrafast","-pix_fmt","yuv420p",path);
         var live=new TrimWindow(path);
         try
         {

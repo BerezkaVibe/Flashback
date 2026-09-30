@@ -22,14 +22,14 @@ internal sealed unsafe class FfmpegRecentFrames : IDisposable
         if (frames.Count > capacity) { Free(frames[0].Frame); frames.RemoveAt(0); }
     }
     internal void Clear() { foreach (var f in frames) Free(f.Frame); frames.Clear(); }
-    // The frame showing at a moment (the last one starting at or before it, give or take half a frame, as
-    // FfmpegVideoReader.Seek picks) and those after it, as new references for the caller to free; null when
-    // it isn't here.
+    // The frame showing at a moment (the last one starting at or before it, give or take a quarter of a frame,
+    // as FfmpegVideoReader.Seek picks) and those after it, as new references for the caller to free; null when
+    // it isn't here (before the first kept, or past the last one's time on screen).
     internal List<(double Time, IntPtr Frame)>? From(double seconds, double frameRate)
     {
-        double half = .5 / frameRate;
-        if (frames.Count == 0 || seconds < frames[0].Time - half || seconds >= frames[^1].Time + half) return null;
-        int at = frames.FindLastIndex(f => f.Time <= seconds + half);
+        double slack = .25 / frameRate;
+        if (frames.Count == 0 || seconds < frames[0].Time - slack || seconds >= frames[^1].Time + 1 / frameRate - slack) return null;
+        int at = frames.FindLastIndex(f => f.Time <= seconds + slack);
         if (at < 0) return null;
         var list = new List<(double, IntPtr)>(frames.Count - at);
         for (int i = at; i < frames.Count; i++) list.Add((frames[i].Time, (IntPtr)ffmpeg.av_frame_clone((AVFrame*)frames[i].Frame)));

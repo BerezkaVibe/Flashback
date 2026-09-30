@@ -89,16 +89,17 @@ internal sealed unsafe class FfmpegPresenter : IDisposable
         device.AddRef(); hw->Device = device.NativePointer;
         FfmpegLibrary.Check(ffmpeg.av_hwdevice_ctx_init(hardware), "Couldn't start graphics-card decoding");
     }
-    // Sets the picture's size (the video's), once per clip.
-    internal void Prepare(int videoWidth, int videoHeight, double frameRate)
+    // Sets the picture's size, once per clip: the video's, or smaller (a video over the clip is scaled on the
+    // graphics card to about the size it's drawn at).
+    internal void Prepare(int videoWidth, int videoHeight, double frameRate, int pictureWidth = 0, int pictureHeight = 0)
     {
-        width = videoWidth; height = videoHeight;
+        width = pictureWidth > 0 ? pictureWidth : videoWidth; height = pictureHeight > 0 ? pictureHeight : videoHeight;
         ReleasePictures();
         if (hardware != null)
         {
             var content = new VideoProcessorContentDescription
             {
-                InputFrameFormat = VideoFrameFormat.Progressive, InputFrameRate = new Rational((uint)Math.Round(frameRate), 1), InputWidth = (uint)width, InputHeight = (uint)height,
+                InputFrameFormat = VideoFrameFormat.Progressive, InputFrameRate = new Rational((uint)Math.Round(frameRate), 1), InputWidth = (uint)videoWidth, InputHeight = (uint)videoHeight,
                 OutputFrameRate = new Rational((uint)Math.Round(frameRate), 1), OutputWidth = (uint)width, OutputHeight = (uint)height, Usage = VideoUsage.PlaybackNormal,
             };
             enumerator = videoDevice!.CreateVideoProcessorEnumerator(content);

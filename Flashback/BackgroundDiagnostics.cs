@@ -112,6 +112,8 @@ internal static class BackgroundDiagnostics
             await Opened(); double reopenMs = reopen.Elapsed.TotalMilliseconds;
             async Task<double> VideoBack(Stopwatch since) { while (!trim.OverlayView.VideosShowing && since.Elapsed.TotalSeconds < 15) await Task.Delay(10); return since.Elapsed.TotalMilliseconds; }
             double insetMs = await VideoBack(reopen); await Task.Delay(500);
+            Check(trim.OverlayView.KeptPictures == 0, "Once the video over the clip has opened again, its own picture replaces the kept one");
+            Line($"The video over the clip decodes on {(trim.OverlayView.VideosOnGraphicsCard ? "the graphics card" : "the CPU")}");
             Check(!trim.PlayersReleased && trim.Player.NaturalDuration.HasTimeSpan && Math.Abs(trim.Playhead - at) < .05 && Math.Abs(trim.Player.Position.TotalSeconds - at) < .2,
                 $"Coming back reopens the preview at the same spot ({trim.Player.Position.TotalSeconds:0.00} s, playhead {trim.Playhead:0.00} s, was {at:0.00} s)");
             Line($"Minimizing freed {(before - minimized) / 1048576.0:0} MiB of working set; reopening the preview took {reopenMs:0} ms, the video over it {insetMs:0} ms");

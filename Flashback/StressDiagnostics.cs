@@ -208,12 +208,17 @@ internal static class StressDiagnostics
         string folder = Path.Combine(Storage.Root, "stress-big"); Directory.CreateDirectory(folder);
         string clip = Path.Combine(folder, "Two minutes 1440p60.mp4"), inset = Path.Combine(folder, "Inset.mp4"), music = Path.Combine(folder, "Music.m4a");
         var made = Stopwatch.StartNew();
-        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=2560x1440:rate=60:duration=120", "-f", "lavfi", "-i", "sine=frequency=300:sample_rate=48000:duration=120",
-            "-c:v", "libx264", "-preset", "ultrafast", "-threads", "8", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip);
-        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "mandelbrot=size=640x360:rate=30", "-t", "30", "-f", "lavfi", "-i", "sine=frequency=900:sample_rate=48000:duration=30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", inset);
-        await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=48000:duration=40", "-c:a", "aac", music);
-        Line($"Made the test clip ({made.Elapsed.TotalSeconds:0} s)");
+        // (Clips from an earlier run are used again; making them takes a minute.)
+        bool again = File.Exists(clip) && File.Exists(inset) && File.Exists(music) && ClipMedia.Read(clip).Duration > 119;
+        if (!again)
+        {
+            await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "testsrc2=size=2560x1440:rate=60:duration=120", "-f", "lavfi", "-i", "sine=frequency=300:sample_rate=48000:duration=120",
+                "-c:v", "libx264", "-preset", "ultrafast", "-threads", "8", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip);
+            await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "mandelbrot=size=640x360:rate=30", "-t", "30", "-f", "lavfi", "-i", "sine=frequency=900:sample_rate=48000:duration=30",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", inset);
+            await EditorDiagnostics.Ffmpeg("-y", "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=48000:duration=40", "-c:a", "aac", music);
+        }
+        Line(again ? "Test clip from an earlier run" : $"Made the test clip ({made.Elapsed.TotalSeconds:0} s)");
         Storage.Save(new Settings { OutputFolder = Path.Combine(Storage.Root, "clips") });
         var rng = new Random(11);
         double R(double a, double b) => a + rng.NextDouble() * (b - a);
