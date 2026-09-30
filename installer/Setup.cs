@@ -14,16 +14,16 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Flashback Setup")]
-[assembly: AssemblyVersion("0.9.4.0")]
-[assembly: AssemblyFileVersion("0.9.4.0")]
+[assembly: AssemblyVersion("0.9.5.0")]
+[assembly: AssemblyFileVersion("0.9.5.0")]
 
 internal static class Setup
 {
 #if TEST
     // A test build, marked as one wherever setup shows its version.
-    const string Version="0.9.4-TEST";
+    const string Version="0.9.5-TEST";
 #else
-    const string Version="0.9.4";
+    const string Version="0.9.5";
 #endif
     const string Marker="Flashback-install-4a0fe501-ea28-4327-802f-21a68ab327e9";
     const string Manifest="installed-files.txt";
