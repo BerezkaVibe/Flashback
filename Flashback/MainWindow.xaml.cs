@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         FpsBox.SelectionChanged += (_, _) => RefreshQualityLabels(); ResolutionBox.SelectionChanged += (_, _) => RefreshQualityLabels();
         EncoderBox.ItemsSource = VideoEncoder.Preferences;
         OverlayCornerBox.ItemsSource = new[] { "Top right", "Top left", "Bottom right", "Bottom left" };
+        SavedSoundBox.ItemsSource = SaveSound.Choices;
         OverlayDurationBox.ItemsSource = Enumerable.Range(2, 7).Select(s => new Choice(s, s + " seconds")).ToList();
         OverlayDurationBox.DisplayMemberPath = "Label"; OverlayDurationBox.SelectedValuePath = "Value";
         DisplayBox.ItemsSource = DisplayChoices();
@@ -132,6 +133,7 @@ public partial class MainWindow : Window
         PauseHotkeyBox.Text = settings.PauseHotkey; LoadTrimShortcuts(settings);
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
+        SavedSoundBox.SelectedItem = settings.SavedSound; SavedSoundVolumeSlider.Value = settings.SavedSoundVolume;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
         UpdateCheck.IsChecked = settings.CheckForUpdates; AutoUpdateCheck.IsChecked = settings.InstallUpdatesAutomatically; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; WindowsPreviewCheck.IsChecked = settings.WindowsPreview;
         if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = "Needs Windows 11 (or Windows 10 build 20348 or later)."; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
@@ -159,6 +161,7 @@ public partial class MainWindow : Window
         StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, InstallUpdatesAutomatically = AutoUpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, WindowsPreview = WindowsPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
+        SavedSound = SavedSoundBox.SelectedItem as string ?? SaveSound.Off, SavedSoundVolume = (int)Math.Round(SavedSoundVolumeSlider.Value),
         ExternalEditorPath = settings.ExternalEditorPath
     };
     private async void Apply_Click(object sender, RoutedEventArgs e) => await SaveSettingsAsync(false);
@@ -317,6 +320,7 @@ public partial class MainWindow : Window
         // This is reached only after SaveAsync has finalized and moved the MP4 into its destination.
         SetLastClip(clip); Tell($"Saved {clip.Duration:0} seconds to {clip.Game}.");
         ShowOverlay(SaveFeedback.Saved, $"{clip.Game} · {clip.Duration:0} seconds", monitor);
+        SaveSound.Play(settings.SavedSound, settings.SavedSoundVolume);
         try { if (settings.Notifications) tray.ShowBalloonTip(3500, "Replay saved", $"{clip.Game} · {clip.Duration:0}s", Forms.ToolTipIcon.Info); }
         catch { /* A notification failure must never turn a successful save into a save error. */ }
         if (LibraryTab.IsSelected && IsVisible && WindowState != WindowState.Minimized) await ReloadLibraryAsync();
@@ -325,6 +329,21 @@ public partial class MainWindow : Window
     {
         try { overlay.Show(state, detail, settings, monitor); }
         catch { /* Recording and saving remain independent of optional UI feedback. */ }
+    }
+    private void PlaySavedSound_Click(object sender, RoutedEventArgs e)
+    {
+        var name = SavedSoundBox.SelectedItem as string ?? SaveSound.Off;
+        if (name == SaveSound.Off) name = SaveSound.Default;
+        SaveSound.Play(name, (int)Math.Round(SavedSoundVolumeSlider.Value));
+    }
+    // Choosing a sound plays it, so you can go down the list and listen.
+    private void SavedSound_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (SavedSoundBox.IsKeyboardFocusWithin && SavedSoundBox.SelectedItem is string name) SaveSound.Play(name, (int)Math.Round(SavedSoundVolumeSlider.Value));
+    }
+    private void SavedSoundVolume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (SavedSoundVolumeLabel != null) SavedSoundVolumeLabel.Text = (int)Math.Round(e.NewValue) + "%";
     }
     private void PreviewOverlay_Click(object sender, RoutedEventArgs e)
     {

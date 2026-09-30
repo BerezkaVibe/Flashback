@@ -80,6 +80,13 @@
       </Grid>
       <Button Content="Preview overlay" Click="PreviewOverlay_Click" HorizontalAlignment="Left"/>
       <CheckBox x:Name="NotifyCheck" Content="Also show Windows notifications for saved clips" Margin="0,14,0,7"/>
+      <TextBlock Text="Saved-clip sound" Style="{StaticResource Caption}" Margin="0,18,0,0"/>
+      <Grid Margin="0,0,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="20"/><ColumnDefinition/></Grid.ColumnDefinitions>
+       <ComboBox x:Name="SavedSoundBox" SelectionChanged="SavedSound_Changed" AutomationProperties.Name="Sound played when a clip is saved"/>
+       <DockPanel Grid.Column="2"><TextBlock x:Name="SavedSoundVolumeLabel" DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center"/>
+        <Slider x:Name="SavedSoundVolumeSlider" Minimum="1" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="5" IsMoveToPointEnabled="True" ValueChanged="SavedSoundVolume_Changed" AutomationProperties.Name="Saved-clip sound volume" Height="30" VerticalAlignment="Center"/></DockPanel>
+      </Grid>
+      <Button Content="Play sound" Click="PlaySavedSound_Click" HorizontalAlignment="Left" Margin="0,10,0,0"/>
       <TextBlock Text="Overlays work best in borderless or windowed games." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,0"/>
      </StackPanel></ScrollViewer></TabItem>
      <TabItem x:Name="AppearanceSettings" Header="Appearance" Style="{StaticResource SideTab}"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="0,0,12,0">

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -70,6 +70,8 @@ public sealed class Settings
     public bool ShowSavingOverlay { get; set; } = true;
     public string OverlayCorner { get; set; } = "Top right";
     public int OverlaySeconds { get; set; } = 3;
+    public string SavedSound { get; set; } = SaveSound.Default;
+    public int SavedSoundVolume { get; set; } = 60;
     public Settings Copy() => JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this))!;
     public void Validate()
     {
@@ -91,6 +93,8 @@ public sealed class Settings
         if (!NoiseLevels.Contains(MicNoiseReduction)) throw new ArgumentException("Choose a supported noise reduction level.");
         if (AppVolumes.Values.Any(v => v < 0 || v > 200)) throw new ArgumentException("Choose app recording levels from 0% to 200%.");
         if (OverlaySeconds < 2 || OverlaySeconds > 8) throw new ArgumentException("Choose an overlay duration from 2 to 8 seconds.");
+        if (!SaveSound.IsValid(SavedSound)) throw new ArgumentException("Choose a saved-clip sound.");
+        if (SavedSoundVolume < 1 || SavedSoundVolume > 100) throw new ArgumentException("Choose a saved-clip sound volume from 1% to 100%.");
     }
     // Puts back the default for each setting that doesn't pass Validate (a hand-edited file, or one from another
     // version), keeping the rest. Returns what was reset.
@@ -117,6 +121,8 @@ public sealed class Settings
         Fix(!NoiseLevels.Contains(MicNoiseReduction ?? ""), "noise reduction", () => MicNoiseReduction = d.MicNoiseReduction);
         Fix(AppVolumes == null || AppVolumes.Values.Any(v => v < 0 || v > 200), "app recording levels", () => AppVolumes = d.AppVolumes);
         Fix(OverlaySeconds < 2 || OverlaySeconds > 8, "saved-clip pop-up time", () => OverlaySeconds = d.OverlaySeconds);
+        Fix(!SaveSound.IsValid(SavedSound), "saved-clip sound", () => SavedSound = d.SavedSound);
+        Fix(SavedSoundVolume < 1 || SavedSoundVolume > 100, "saved-clip sound volume", () => SavedSoundVolume = d.SavedSoundVolume);
         Palette ??= d.Palette; AccentColor ??= d.AccentColor; AudioDeviceId ??= ""; MicrophoneDeviceId ??= ""; GameOverride ??= ""; ExternalEditorPath ??= "";
         // Anything else Validate still refuses: all defaults, as before.
         if (Throws(Validate)) { var fresh = new Settings(); foreach (var p in typeof(Settings).GetProperties().Where(p => p.CanWrite)) p.SetValue(this, p.GetValue(fresh)); reset.Add("everything else"); }
@@ -186,7 +192,7 @@ public static class Storage
         return clean[..Math.Min(clean.Length, 90)].TrimEnd('.', ' ');
     }
     public static string ClipName(string game, DateTimeOffset capturedAt, double duration)
-        => $"{SafeName(game)} — {capturedAt:yyyy-MM-dd_HH-mm-ss-fff} — {duration:0.#}s.mp4";
+        => $"{SafeName(game)} â€” {capturedAt:yyyy-MM-dd_HH-mm-ss-fff} â€” {duration:0.#}s.mp4";
 }
 
 public record Segment(string Name, double Start, double End)
