@@ -36,6 +36,7 @@
      </StackPanel>
      <local:ZoomCurveEditor x:Name="ZoomGraph" DockPanel.Dock="Top" Height="180" Margin="0,8,0,0" AutomationProperties.Name="Zoom curve"/>
      <TextBlock x:Name="ZoomReadout" DockPanel.Dock="Top" Foreground="{DynamicResource Accent}" FontSize="11" Margin="0,4,0,0"/>
+     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,4,0,0"><TextBlock Text="Max zoom" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/><local:ValueBox x:Name="ZoomMaxBox" Margin="4,0,0,0" AutomationProperties.Name="Maximum zoom"/><TextBlock Text="Takes" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"/><local:ValueBox x:Name="ZoomTimeBox" Margin="4,0,0,0" AutomationProperties.Name="How long the zoom takes"/></StackPanel>
      <CheckBox x:Name="ZoomOutCheck" DockPanel.Dock="Top" Content="Zoom back out at the end" Margin="0,10,0,0" Click="ZoomOutToggle_Click"/>
      <CheckBox x:Name="ZoomOutSameCheck" DockPanel.Dock="Top" Content="Same curve as zoom in" Margin="22,6,0,0" IsChecked="True" Click="ZoomOutToggle_Click" Visibility="Collapsed"/>
      <CheckBox x:Name="ZoomThroughCheck" DockPanel.Dock="Top" Content="Keep going through freezes" Margin="0,6,0,0" IsChecked="True" Click="ZoomThrough_Click" ToolTip="On: the zoom keeps zooming while a freeze frame holds the picture. Off: it holds still with the picture."/>
@@ -100,8 +101,8 @@
        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10">
         <StackPanel>
          <StackPanel x:Name="SlowTimingHost" Margin="2,0,2,8"/>
-        <DockPanel Margin="2,0,2,4"><TextBlock x:Name="RegionSpeedLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
-         <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.302585" Maximum="1.386294" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
+        <DockPanel Margin="2,0,2,4"><local:ValueBox x:Name="RegionSpeedLabel" DockPanel.Dock="Right" FontSize="12"/><TextBlock Text="Speed" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+         <Slider x:Name="RegionSpeedSlider" Width="260" Minimum="-2.995732" Maximum="2.772589" SmallChange="0.05" LargeChange="0.3" IsMoveToPointEnabled="True" Margin="0,4,0,6" ValueChanged="RegionSpeed_Changed" PreviewMouseLeftButtonDown="RegionSpeedSlider_Grab" AutomationProperties.Name="Speed of this part"/>
          <UniformGrid x:Name="SlowChoices" Rows="1"/>
          <Button Style="{StaticResource TrimButton}" Content="Remove speed change" Click="SlowRemove_Click" Background="Transparent" BorderBrush="Transparent" FontSize="11" MinHeight="26" Height="26" Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
         </StackPanel>
@@ -115,7 +116,7 @@
       <Popup x:Name="VolumePopup" Placement="MousePoint" StaysOpen="False" AllowsTransparency="True">
       <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Outline}" BorderThickness="1" CornerRadius="8" Padding="10" Width="290">
        <StackPanel>
-        <DockPanel Margin="2,0,2,6"><TextBlock x:Name="VolumeLabel" DockPanel.Dock="Right" Foreground="{DynamicResource Accent}" FontSize="12"/><TextBlock x:Name="VolumePopupTitle" Text="Volume" FontSize="12" FontWeight="SemiBold"/></DockPanel>
+        <DockPanel Margin="2,0,2,6"><local:ValueBox x:Name="VolumeLabel" DockPanel.Dock="Right" FontSize="12"/><TextBlock x:Name="VolumePopupTitle" Text="Volume" FontSize="12" FontWeight="SemiBold"/></DockPanel>
         <Slider x:Name="VolumeSlider" Minimum="0" Maximum="500" TickFrequency="5" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True" Margin="0,2,0,6" ValueChanged="VolumeSlider_Changed" AutomationProperties.Name="Volume of this part"/>
         <UniformGrid x:Name="VolumeChoices" Rows="1" Margin="0,0,0,8"/>
         <StackPanel x:Name="VolumeTimingHost" Margin="2,0,2,4"/>
@@ -234,11 +235,11 @@
        <Grid.ColumnDefinitions><ColumnDefinition Width="86"/><ColumnDefinition/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
        <TextBlock x:Name="DesktopMixName" Text="Desktop" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
-       <Slider x:Name="DesktopMix" Grid.Column="1" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Desktop audio volume"/>
-       <TextBlock x:Name="DesktopMixLabel" Grid.Column="2" Text="100%" TextAlignment="Right" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/>
+       <Slider x:Name="DesktopMix" Grid.Column="1" Minimum="0" Maximum="500" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" AutomationProperties.Name="Desktop audio volume"/>
+       <local:ValueBox x:Name="DesktopMixLabel" Grid.Column="2" Text="100%"/>
        <TextBlock Grid.Row="1" Text="Microphone" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,4,0,0"/>
-       <Slider x:Name="MicrophoneMix" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="200" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" Margin="0,4,0,0" AutomationProperties.Name="Microphone volume"/>
-       <TextBlock x:Name="MicrophoneMixLabel" Grid.Row="1" Grid.Column="2" Text="100%" TextAlignment="Right" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0" Foreground="{DynamicResource Accent}"/>
+       <Slider x:Name="MicrophoneMix" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="500" Value="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="Mix_Changed" VerticalAlignment="Center" Margin="0,4,0,0" AutomationProperties.Name="Microphone volume"/>
+       <local:ValueBox x:Name="MicrophoneMixLabel" Grid.Row="1" Grid.Column="2" Text="100%" Margin="0,4,0,0"/>
       </Grid>
       <TextBlock x:Name="ModeHint" Text="Fast export; edges may extend to nearby keyframes." Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"/>
      </StackPanel>

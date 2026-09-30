@@ -197,18 +197,19 @@ public partial class TrimWindow
         }
         var title = new TextBlock { Text = "♪ " + sound.Label, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 8) };
         panel.Children.Add(title);
-        FrameworkElement Slider(string label, double min, double max, double value, Func<double, string> format, Action<double> set)
+        // toSlider: from a typed value (as shown) to the slider's, when they differ; typedMin/Max are the shown range.
+        FrameworkElement Slider(string label, double min, double max, double value, Func<double, string> format, Action<double> set, Func<double, double>? toSlider = null, double? typedMin = null, double? typedMax = null)
         {
             var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
             var name = new TextBlock { Text = label, Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
-            var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = format(value) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
             var slider = new Slider { Minimum = min, Maximum = max, Value = value, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
+            var shown = ValueBox.For(slider, format, toSlider, typedMin, typedMax);
             slider.ValueChanged += (_, e) => { shown.Text = format(e.NewValue); set(e.NewValue); };
             DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
             row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider);
             panel.Children.Add(row); return row;
         }
-        Slider("Volume", 0, 200, sound.Volume * 100, v => $"{v:0}%", v => Edit("volume", s => s with { Volume = Math.Round(v) / 100 }));
+        Slider("Volume", 0, VolumeRegion.MaxGain * 100, sound.Volume * 100, v => $"{v:0}%", v => Edit("volume", s => s with { Volume = Math.Round(v) / 100 }));
         Slider("Fade in", 0, 5, sound.FadeIn, v => v < .05 ? "Off" : $"{v:0.0} s", v => Edit("fadeIn", s => s with { FadeIn = v < .05 ? 0 : Math.Round(v, 1) }));
         Slider("Fade out", 0, 5, sound.FadeOut, v => v < .05 ? "Off" : $"{v:0.0} s", v => Edit("fadeOut", s => s with { FadeOut = v < .05 ? 0 : Math.Round(v, 1) }));
         var duck = new CheckBox { Content = "Lower the clip's sound while this plays", IsChecked = sound.Duck, Margin = new Thickness(0, 6, 0, 2) };
@@ -219,7 +220,7 @@ public partial class TrimWindow
         duckLevel.Visibility = sound.Duck ? Visibility.Visible : Visibility.Collapsed;
         // Its own speed: normal under slowed parts and freezes, or slowed (or sped up) to match them.
         // The slider runs in doublings so 0.5× and 2× sit either side of 1×.
-        Slider("Speed", Math.Log2(SoundItem.MinSpeed), Math.Log2(SoundItem.MaxSpeed), Math.Log2(sound.Speed), v => $"{SoundSpeed(v):0.##}×", v => Edit("speed", s => s with { Speed = SoundSpeed(v) }));
+        Slider("Speed", Math.Log2(SoundItem.MinSpeed), Math.Log2(SoundItem.MaxSpeed), Math.Log2(sound.Speed), v => $"{SoundSpeed(v):0.##}×", v => Edit("speed", s => s with { Speed = SoundSpeed(v) }), Math.Log2, SoundItem.MinSpeed, SoundItem.MaxSpeed);
         static double SoundSpeed(double log) { double speed = Math.Pow(2, log); return Math.Abs(speed - 1) < .04 ? 1 : Math.Round(speed, 2); }
         var pitch = new CheckBox { Content = "Keep its pitch", IsChecked = sound.KeepPitch, Margin = new Thickness(0, 4, 0, 2), ToolTip = "Off: slower sounds deeper and faster sounds higher, like a tape" };
         pitch.Click += (_, _) => Edit("pitch", s => s with { KeepPitch = pitch.IsChecked == true });
@@ -285,8 +286,8 @@ public partial class TrimWindow
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
         var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
         static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
-        var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = Level(video.VideoVolume * 100) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
-        var slider = new Slider { Minimum = 0, Maximum = 200, Value = video.VideoVolume * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, ToolTip = "How loud the video's sound is in the export (the preview plays it up to 100%)" };
+        var slider = new Slider { Minimum = 0, Maximum = VolumeRegion.MaxGain * 100, Value = video.VideoVolume * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, ToolTip = "How loud the video's sound is in the export" };
+        var shown = ValueBox.For(slider, Level);
         slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); Edit("volume", o => o with { VideoVolume = Math.Round(e.NewValue) / 100 }); };
         DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
         row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);

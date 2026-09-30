@@ -25,7 +25,7 @@ internal sealed record SpeedRegion(double Start, double End, double Speed);
 // same moment. It adds time to the export instead of replacing footage; the hold is silent.
 internal sealed record FreezeFrame(double At, double Seconds)
 {
-    internal const double MinSeconds = .2, MaxSeconds = 10;
+    internal const double MinSeconds = .2, MaxSeconds = 60;
 }
 
 internal sealed class TrimTimeline : FrameworkElement

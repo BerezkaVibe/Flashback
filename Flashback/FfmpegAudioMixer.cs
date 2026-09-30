@@ -77,7 +77,7 @@ internal sealed unsafe class FfmpegAudioMixer : IFfmpegSound, IDisposable
         bool changed = false;
         for (int t = 0; t < tracks.Length; t++)
         {
-            float volume = volumes.TryGetValue(t, out var v) ? (float)Math.Clamp(v, 0, 2) : 0;
+            float volume = volumes.TryGetValue(t, out var v) ? (float)Math.Clamp(v, 0, VolumeRegion.MaxGain) : 0;
             bool on = volume > .0001f;
             if (on != tracks[t].On) changed = true;
             tracks[t].On = on; tracks[t].Volume = volume;

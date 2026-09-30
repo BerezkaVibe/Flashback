@@ -265,9 +265,9 @@ public partial class TrimWindow
     private void RegionSpeed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (syncingRegionSpeed || RegionSpeedLabel == null) return;
-        // Log scale, rounded to tidy steps: 0.05 below normal speed, 0.1 above it.
+        // Log scale, rounded to tidy steps: 0.05 below normal speed, 0.1 above it, 0.5 past 4×.
         double speed = Math.Exp(e.NewValue);
-        speed = speed < 1 ? Math.Round(speed / .05) * .05 : Math.Round(speed, 1);
+        speed = speed < 1 ? Math.Round(speed / .05) * .05 : speed > 4 ? Math.Round(speed * 2) / 2 : Math.Round(speed, 1);
         if (Math.Abs(speed - 1) < .03) speed = 1;
         SetSlowSpeed(Math.Clamp(speed, ShareExportOptions.MinRegionSpeed, ShareExportOptions.MaxRegionSpeed), fromSlider: true);
     }
@@ -335,7 +335,7 @@ public partial class TrimWindow
     }
     private void SetTrackVolume(int track, double volume)
     {
-        volume = Math.Clamp(Math.Round(volume, 2), 0, 2);
+        volume = Math.Clamp(Math.Round(volume, 2), 0, VolumeRegion.MaxGain);
         if (track == 1) DesktopMix.Value = volume * 100; else if (track == 2) MicrophoneMix.Value = volume * 100;
         else { if (Math.Abs(volume - 1) < .005) trackVolumes.Remove(track); else trackVolumes[track] = volume; RefreshLaneStates(); UpdateExportHint(); }
         ProjectChanged();
@@ -358,8 +358,8 @@ public partial class TrimWindow
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
         var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
         static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
-        var shown = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Text = Level(TrackVolume(track) * 100) }; shown.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
-        var slider = new Slider { Minimum = 0, Maximum = 200, Value = TrackVolume(track) * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
+        var slider = new Slider { Minimum = 0, Maximum = VolumeRegion.MaxGain * 100, Value = TrackVolume(track) * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
+        var shown = ValueBox.For(slider, Level);
         slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); SetTrackVolume(track, Math.Round(e.NewValue) / 100); };
         DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
         row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);
@@ -567,4 +567,34 @@ public partial class TrimWindow
             preset.SetResourceReference(Control.BorderBrushProperty, Math.Abs((double)preset.Tag - PreviewRate) < 1e-9 ? "Accent" : "Outline");
     }
     private static string RateText(double rate) => rate.ToString("0.##", CultureInfo.InvariantCulture) + "×";
+}
+
+public partial class TrimWindow
+{
+    // The volume, speed and mix values beside their sliders can be typed: exact, and past the sliders' ticks.
+    private void HookValueBoxes()
+    {
+        VolumeLabel.Minimum = 0; VolumeLabel.Maximum = VolumeRegion.MaxGain * 100;
+        VolumeLabel.Committed += v => { if (popupVolume is { } now) SetVolumeGain(Math.Round(v) / 100, fromSlider: false); VolumeLabel.Text = popupVolume is { } shown ? $"{shown.Gain * 100:0}%" : VolumeLabel.Text; };
+        RegionSpeedLabel.Minimum = ShareExportOptions.MinRegionSpeed; RegionSpeedLabel.Maximum = ShareExportOptions.MaxRegionSpeed;
+        RegionSpeedLabel.Committed += v =>
+        {
+            SetSlowSpeed(Math.Round(v, 2));
+            if (Timeline.SelectedSlow is int i && i >= 0 && i < Timeline.SlowRegions.Count) ShowRegionSpeed(Timeline.SlowRegions[i].Speed);
+        };
+        foreach (var (box, slider) in new[] { (DesktopMixLabel, DesktopMix), (MicrophoneMixLabel, MicrophoneMix) })
+        {
+            box.Minimum = 0; box.Maximum = VolumeRegion.MaxGain * 100;
+            box.Committed += v => { slider.IsSnapToTickEnabled = false; slider.Value = Math.Round(v); slider.IsSnapToTickEnabled = true; box.Text = $"{slider.Value:0}%"; };
+        }
+        // Zoom: how far it zooms, and how long the curve being edited (zooming in, or out) takes.
+        ZoomMaxBox.Minimum = 1.1; ZoomMaxBox.Maximum = ZoomRegion.Limit;
+        ZoomMaxBox.Committed += v => { UpdateSelectedZoom(r => r with { MaxZoom = Math.Round(v, 2) }); LoadZoomUi(); };
+        ZoomTimeBox.Minimum = .05; ZoomTimeBox.Maximum = ZoomRegion.MaxRamp;
+        ZoomTimeBox.Committed += v =>
+        {
+            UpdateSelectedZoom(r => editingZoomOut && r.Out != null ? r with { Out = r.Out.Scaled(v / r.Out.Length).Validated() } : r with { In = r.In.Scaled(v / r.In.Length).Validated() });
+            LoadZoomUi();
+        };
+    }
 }

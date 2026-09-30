@@ -25,7 +25,7 @@ internal sealed record SoundItem(string Path, double Start, double End, double O
     public bool KeepPitch { get; init; } = true;
     internal double Length => End - Start;
     internal string Label => System.IO.Path.GetFileName(Path);
-    internal const double MinSpeed = .25, MaxSpeed = 4;
+    internal const double MinSpeed = .1, MaxSpeed = 8;
 
     // A video's sound unlinked into a sound of its own, where it played: from the video's start for as long as
     // the video shows in the finished video, from the same place in the file and as loud. It plays at the speed

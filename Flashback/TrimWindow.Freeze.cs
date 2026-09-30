@@ -98,11 +98,15 @@ public partial class TrimWindow
         at.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); DockPanel.SetDock(at, Dock.Right);
         title.Children.Add(at); title.Children.Add(new TextBlock { Text = "Freeze frame", FontSize = 12, FontWeight = FontWeights.SemiBold });
         FreezeControls.Children.Add(title);
-        var label = new TextBlock { FontSize = 12, Margin = new Thickness(2, 0, 2, 4) };
-        label.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
-        var slider = new Slider { Minimum = FreezeFrame.MinSeconds, Maximum = FreezeFrame.MaxSeconds, Value = freeze.Seconds, SmallChange = .1, LargeChange = 1, IsMoveToPointEnabled = true, TickFrequency = .1, IsSnapToTickEnabled = true };
+        // In logs of seconds, so short holds get as much room as long ones.
+        var slider = new Slider { Minimum = Math.Log(FreezeFrame.MinSeconds), Maximum = Math.Log(FreezeFrame.MaxSeconds), Value = Math.Log(freeze.Seconds), SmallChange = .02, LargeChange = .2, IsMoveToPointEnabled = true };
+        double Seconds() => Math.Clamp(Math.Round(Math.Exp(slider.Value), 1), FreezeFrame.MinSeconds, FreezeFrame.MaxSeconds);
+        // The sentence can be typed over with just the seconds.
+        var label = ValueBox.For(slider, _ => $"Holds for {Seconds().ToString("0.#", CultureInfo.InvariantCulture)} s, then plays on", Math.Log, FreezeFrame.MinSeconds, FreezeFrame.MaxSeconds);
+        label.FontSize = 12; label.Margin = new Thickness(0, 0, 2, 4); label.TextAlignment = TextAlignment.Left; label.HorizontalAlignment = HorizontalAlignment.Left;
+        label.ToolTip = $"Click to type how many seconds it holds ({FreezeFrame.MinSeconds:0.#} to {FreezeFrame.MaxSeconds:0} s)";
         System.Windows.Automation.AutomationProperties.SetName(slider, "How long the freeze holds");
-        void Show() => label.Text = $"Holds for {slider.Value.ToString("0.#", CultureInfo.InvariantCulture)} s, then plays on";
+        void Show() => label.Text = $"Holds for {Seconds().ToString("0.#", CultureInfo.InvariantCulture)} s, then plays on";
         Show();
         bool snapped = false;
         slider.ValueChanged += (_, _) =>
@@ -110,17 +114,17 @@ public partial class TrimWindow
             int i = Timeline.Freezes.ToList().FindIndex(f => Math.Abs(f.At - freeze.At) < 1e-9);
             if (i < 0) return;
             if (!snapped) { Snapshot(); snapped = true; }
-            var next = Timeline.Freezes[i] with { Seconds = Math.Round(slider.Value, 1) };
+            var next = Timeline.Freezes[i] with { Seconds = Seconds() };
             Timeline.Freezes = Timeline.Freezes.Select((f, n) => n == i ? next : f).ToArray();
             FocusPart(next); Show(); UpdateExportHint(); UpdateSummary(); ProjectChanged();
         };
         FreezeControls.Children.Add(label); FreezeControls.Children.Add(slider);
         var quick = new UniformGrid { Rows = 1, Margin = new Thickness(0, 6, 0, 0) };
-        foreach (double s in new[] { .5, 1, 2, 3, 5 })
+        foreach (double s in new[] { .5, 1, 5, 10, 30 })
         {
             var pick = new Button { Content = s.ToString("0.#", CultureInfo.InvariantCulture) + " s", MinHeight = 26, Height = 26, Margin = new Thickness(2, 0, 2, 0), FontSize = 11, Background = System.Windows.Media.Brushes.Transparent };
             pick.SetResourceReference(StyleProperty, "TrimButton");
-            pick.Click += (_, _) => slider.Value = s;
+            pick.Click += (_, _) => slider.Value = Math.Log(s);
             quick.Children.Add(pick);
         }
         FreezeControls.Children.Add(quick);

@@ -320,7 +320,7 @@ public partial class TrimWindow
             if (video)
             {
                 Header("Sound and start");
-                When(SliderRow("Volume", "videoVolume", 0, 2, o => o.VideoVolume, (o, v) => o with { VideoVolume = Math.Round(v, 2) }, v => v < .005 ? "Muted" : $"{v * 100:0}%", tip: "How loud this video's own sound is in the export (the preview plays it up to 100%)"), o => !o.SoundUnlinked);
+                When(SliderRow("Volume", "videoVolume", 0, VolumeRegion.MaxGain, o => o.VideoVolume, (o, v) => o with { VideoVolume = Math.Round(v, 2) }, v => v < .005 ? "Muted" : $"{v * 100:0}%", tip: "How loud this video's own sound is in the export (the preview plays it up to 100%)"), o => !o.SoundUnlinked);
                 // Unlinked, its sound is a sound of its own on the audio timeline; linking it back gives the video its
                 // sound again (the separate sound stays until it's removed).
                 var unlinked = new WrapPanel { Margin = new Thickness(0, 2, 0, 0) };
@@ -372,7 +372,7 @@ public partial class TrimWindow
 
         // Placement shows the item as it is at the playhead; with keyframes, a change sets a keyframe there.
         Header("Placement");
-        SliderRow("Scale", "scale", Math.Log(OverlayItem.MinScale), Math.Log(OverlayItem.MaxScale), o => Math.Log(Now(o).Scale), (o, v) => Keyed(o, x => x with { Scale = Math.Round(Math.Exp(v), 3) }), v => $"{Math.Exp(v):0.##}×", tip: "Or drag a corner on the video");
+        SliderRow("Scale", "scale", Math.Log(OverlayItem.MinScale), Math.Log(OverlayItem.MaxScale), o => Math.Log(Now(o).Scale), (o, v) => Keyed(o, x => x with { Scale = Math.Round(Math.Exp(v), 3) }), v => $"{Math.Exp(v):0.##}×", tip: "Or drag a corner on the video", logScale: true);
         SliderRow("Rotation", "rotation", -180, 180, o => ((Now(o).Rotation % 360) + 540) % 360 - 180, (o, v) => Keyed(o, x => x with { Rotation = Math.Round(v) }), v => $"{v:0}°", tip: "Or drag the round handle on the video; hold Shift for 15° steps");
         SliderRow("Opacity", "opacity", 0, 1, o => Now(o).Opacity, (o, v) => Keyed(o, x => x with { Opacity = Math.Round(v, 2) }), v => $"{v * 100:0}%");
         var stick = new CheckBox { Content = "Stick to the video when it zooms", Margin = new Thickness(0, 6, 0, 0), ToolTip = "On: it zooms along with the picture, as if part of it. Off: it stays put on screen while the video zooms." };
@@ -433,12 +433,14 @@ public partial class TrimWindow
         grid.Children.Add(name); Grid.SetColumn(control, 1); grid.Children.Add(control);
         OverlayControls.Children.Add(grid); return grid;
     }
-    private Grid SliderRow(string label, string control, double min, double max, Func<OverlayItem, double> get, Func<OverlayItem, double, OverlayItem> set, Func<double, string> format, string? tip = null)
+    // logScale: the slider runs in natural logs of what it shows (like Scale); otherwise the shown number is
+    // the value, or a percentage of it.
+    private Grid SliderRow(string label, string control, double min, double max, Func<OverlayItem, double> get, Func<OverlayItem, double, OverlayItem> set, Func<double, string> format, string? tip = null, bool logScale = false)
     {
         var slider = new Slider { Minimum = min, Maximum = max, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, SmallChange = (max - min) / 100, LargeChange = (max - min) / 10 };
         System.Windows.Automation.AutomationProperties.SetName(slider, label);
-        var value = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-        value.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+        double scale = logScale ? 1 : ValueBox.ShownScale(min, max, format);
+        var value = logScale ? ValueBox.For(slider, format, Math.Log, Math.Exp(min), Math.Exp(max)) : ValueBox.For(slider, format, v => v / scale, min * scale, max * scale);
         slider.ValueChanged += (_, _) => { value.Text = format(slider.Value); EditOverlay(control, o => set(o, slider.Value)); };
         overlayRefresh.Add(o => { slider.Value = Math.Clamp(get(o), min, max); value.Text = format(slider.Value); });
         var holder = new DockPanel(); DockPanel.SetDock(value, Dock.Right); holder.Children.Add(value); holder.Children.Add(slider);

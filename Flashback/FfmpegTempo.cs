@@ -36,7 +36,7 @@ internal sealed unsafe class FfmpegTempo : IDisposable
 
     internal FfmpegTempo(IFfmpegSound mixer, bool keepPitch = true) { this.mixer = mixer; this.keepPitch = keepPitch; input = ffmpeg.av_frame_alloc(); output = ffmpeg.av_frame_alloc(); }
 
-    // A new speed (0.1× to 4×) from what's mixed next, starting over: anything waiting is dropped.
+    // A new speed (0.05× to 16×) from what's mixed next, starting over: anything waiting is dropped.
     internal void SetSpeed(double speed) { Speed = Math.Clamp(speed, .1, 4); Reset(); }
     // After a seek: nothing old comes out.
     internal void Reset() { spareStart = spareCount = 0; Start(Speed); }

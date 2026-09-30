@@ -58,7 +58,7 @@ internal sealed record ZoomRegion(double Start, double End, double X, double Y, 
     public double EndHold { get; init; }
     // Keeps zooming while a freeze holds the picture; off, it freezes with the picture.
     public bool ThroughFreezes { get; init; } = true;
-    internal const double Limit = 8, MaxRamp = 3;
+    internal const double Limit = 12, MaxRamp = 10;
     // The zoom-out ramp: its own curve, or the zoom-in curve mirrored.
     internal ZoomCurve OutCurve => Out ?? In;
     // Zoom level at a source time (1 outside the region).

@@ -101,8 +101,12 @@ public partial class TrimWindow
     }
     private static bool Matches(ZoomPreset p, ZoomRegion r) =>
         Math.Abs(p.MaxZoom - r.MaxZoom) < .01 && p.Curve.Points.Count == r.In.Points.Count && p.Curve.Points.Zip(r.In.Points).All(z => Math.Abs(z.First.T - z.Second.T) < .005 && Math.Abs(z.First.F - z.Second.F) < .005);
-    private void ShowZoomReadout(ZoomRegion r) =>
-        ZoomReadout.Text = $"Max {r.MaxZoom:0.0}× · reaches it in {r.In.Length:0.##} s" + (r.ZoomOut ? $" · zooms out over {r.OutCurve.Length:0.##} s" : " · then cuts back") + (r.MaxZoom > 3 ? " · softer above 3×" : "");
+    private void ShowZoomReadout(ZoomRegion r)
+    {
+        ZoomMaxBox.Text = $"{r.MaxZoom:0.0#}×"; ZoomTimeBox.Text = $"{(editingZoomOut ? r.OutCurve.Length : r.In.Length):0.##} s";
+        // The boxes under it hold the zoom and how long it takes; this says the rest.
+        ZoomReadout.Text = $"Zooms in over {r.In.Length:0.##} s" + (r.ZoomOut ? $", out over {r.OutCurve.Length:0.##} s" : ", then cuts back") + (r.MaxZoom > 3 ? " · softer above 3×" : "");
+    }
     private void UpdateSelectedZoom(Func<ZoomRegion, ZoomRegion> change)
     {
         int i = Timeline.SelectedZoom;

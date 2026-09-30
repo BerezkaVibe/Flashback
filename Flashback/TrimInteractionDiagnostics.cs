@@ -118,7 +118,9 @@ internal static class TrimInteractionDiagnostics
             trim.RegionSpeedSlider.Value=Math.Log(3.04);
             Check(tl.SlowRegions[^1].Speed==3,"The speed slider reaches faster speeds, rounded to tidy steps");
             trim.RegionSpeedSlider.Value=trim.RegionSpeedSlider.Minimum;
-            Check(Math.Abs(tl.SlowRegions[^1].Speed-.1)<1e-9,"The speed slider goes down to 0.1x");
+            Check(Math.Abs(tl.SlowRegions[^1].Speed-.05)<1e-9,"The speed slider goes down to 0.05x");
+            trim.RegionSpeedSlider.Value=trim.RegionSpeedSlider.Maximum;
+            Check(Math.Abs(tl.SlowRegions[^1].Speed-16)<1e-9,"The speed slider goes up to 16x");
             trim.HandleKey(Key.Z,ModifierKeys.Control,false);
             Check(tl.SlowRegions[^1].Speed==.25,"Undo reverts a whole slider drag in one step");
             trim.SlowPopup.IsOpen=false;

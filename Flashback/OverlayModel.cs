@@ -219,7 +219,7 @@ internal sealed record OverlayItem
         ShapeCorners = ShapeCorners is { Count: 4 } && ShapeCorners.All(c => double.IsFinite(c.X) && double.IsFinite(c.Y)) ? ShapeCorners : NoCorners,
         ShapeWidth = Math.Clamp(Finite(ShapeWidth, 420), 10, 4000), ShapeHeight = Math.Clamp(Finite(ShapeHeight, 260), 10, 4000),
         RegionStrength = Math.Clamp(Finite(RegionStrength, 24), 2, 200),
-        VideoOffset = Math.Max(0, Finite(VideoOffset, 0)), VideoVolume = Math.Clamp(Finite(VideoVolume, 1), 0, 2),
+        VideoOffset = Math.Max(0, Finite(VideoOffset, 0)), VideoVolume = Math.Clamp(Finite(VideoVolume, 1), 0, VolumeRegion.MaxGain),
         StartHold = Math.Clamp(Finite(StartHold, 0), 0, FreezeFrame.MaxSeconds), EndHold = Math.Clamp(Finite(EndHold, 0), 0, FreezeFrame.MaxSeconds),
         Keys = (Keys ?? Array.Empty<OverlayKeyframe>()).Where(k => k != null && new[] { k.T, k.X, k.Y, k.Scale, k.Rotation, k.Opacity }.All(double.IsFinite))
             // (Keyframe times run on the item's own clock, which is longer than End - Start when it's shown in holds.)
