@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -192,7 +192,7 @@ public static class Storage
         return clean[..Math.Min(clean.Length, 90)].TrimEnd('.', ' ');
     }
     public static string ClipName(string game, DateTimeOffset capturedAt, double duration)
-        => $"{SafeName(game)} â€” {capturedAt:yyyy-MM-dd_HH-mm-ss-fff} â€” {duration:0.#}s.mp4";
+        => $"{SafeName(game)} — {capturedAt:yyyy-MM-dd_HH-mm-ss-fff} — {duration:0.#}s.mp4";
 }
 
 public record Segment(string Name, double Start, double End)
