@@ -333,7 +333,7 @@ public partial class MainWindow : Window
     private void PlaySavedSound_Click(object sender, RoutedEventArgs e)
     {
         var name = SavedSoundBox.SelectedItem as string ?? SaveSound.Off;
-        if (name == SaveSound.Off) name = SaveSound.Default;
+        if (name == SaveSound.Off) name = SaveSound.Names[0];
         SaveSound.Play(name, (int)Math.Round(SavedSoundVolumeSlider.Value));
     }
     // Choosing a sound plays it, so you can go down the list and listen.

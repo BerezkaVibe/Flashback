@@ -70,7 +70,7 @@ public sealed class Settings
     public bool ShowSavingOverlay { get; set; } = true;
     public string OverlayCorner { get; set; } = "Top right";
     public int OverlaySeconds { get; set; } = 3;
-    public string SavedSound { get; set; } = SaveSound.Default;
+    public string SavedSound { get; set; } = SaveSound.Off;
     public int SavedSoundVolume { get; set; } = 60;
     public Settings Copy() => JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this))!;
     public void Validate()

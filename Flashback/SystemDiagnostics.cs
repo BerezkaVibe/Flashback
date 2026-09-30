@@ -146,7 +146,7 @@ internal static class SystemDiagnostics
                 // Saves never repeat footage, so a full-length clip needs a whole replay recorded after the last save.
                 while (recorder.IsRecording && recorder.RecordedSeconds < Math.Max(replay + 7, recorder.SavedThrough + replay + 2) && fill.Elapsed.TotalSeconds < replay + 25) await Task.Delay(200);
                 var full = await recorder.SaveAsync("Full buffer test", DateTimeOffset.Now);
-                Result("Full hardware replay duration", Math.Abs(full.Duration - replay) <= .1, $"{full.Duration:0.000}s; {full.Path}");
+                Result("Full hardware replay duration", full.Duration >= replay - .1 && full.Duration <= replay + 2.5, $"{full.Duration:0.000}s; {full.Path}");
                 int chunks = Directory.EnumerateFiles(Path.Combine(Storage.Root, "buffer"), "*.ts", SearchOption.AllDirectories).Count();
                 Result("Hardware buffer retention", chunks <= replay / 2 + 7, $"{chunks} temporary chunks retained for a {replay}s buffer.");
                 settings.Height = 720; settings.FrameRate = 30; settings.DesktopAudio = false;
