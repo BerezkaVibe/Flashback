@@ -66,6 +66,12 @@ public static class Diagnostics
         Check(File.Exists((await overlapping).Path), "Repeated hotkeys queue independent clip saves");
         var second = await secondTask; clips.Add(second);
         Check(second.Duration >= 29 && second.Duration <= 32.2, "A filled buffer saves the selected 30-second duration");
+        // Clips start on a keyframe, so the picture doesn't start later than the sound.
+        foreach (var saved in new[] { first, second })
+        {
+            var (video, sound) = await ContinuityDiagnostics.StartsAsync(recorder.FfmpegPath, saved.Path);
+            Check(Math.Abs(video - sound) < .15, $"A saved clip's picture and sound start together (picture {video:0.000} s, sound {sound:0.000} s)");
+        }
         Check(Directory.EnumerateFiles(Path.Combine(Storage.Root, "buffer"), "*.ts", SearchOption.AllDirectories).Count() <= 22, "Old segments are removed and disk buffer stays bounded");
         foreach (var clip in clips)
         {

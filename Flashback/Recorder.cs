@@ -593,7 +593,12 @@ public sealed class Recorder : IAsyncDisposable
                 await Task.Delay(100).ConfigureAwait(false);
             }
             if (selected.Count == 0) throw new IOException("The replay buffer is still warming up.");
-            start = Math.Max(start, selected[0].Start);
+            // A clip starts where its first segment does, on a keyframe, so its picture and sound begin together.
+            // Cut partway into a segment (the chunks are copied, not re-encoded), the sound started at the cut and
+            // the picture only at the next keyframe, up to a segment later, which some players and editors
+            // didn't line up. So a clip can run up to a segment longer than asked, and one saved right after
+            // another overlaps it by up to a segment rather than starting without a picture.
+            start = selected[0].Start;
             double duration = end - start;
             if (duration < 0.05) throw new IOException("No new footage has arrived since the last clip.");
             game = Storage.SafeName(game);
@@ -622,7 +627,7 @@ public sealed class Recorder : IAsyncDisposable
             }
             finally { files.Release(); }
             File.WriteAllLines(Path.Combine(staging, "clip.ffconcat"), new[] { "ffconcat version 1.0" }.Concat(selected.SelectMany(s => new[] { $"file '{s.Name}'", "duration " + s.Duration.ToString("0.000000", CultureInfo.InvariantCulture) })), new UTF8Encoding(false));
-            var muxArgs = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "1", "-ss", (start - selected[0].Start).ToString("0.000000", CultureInfo.InvariantCulture), "-i", "clip.ffconcat", "-t", duration.ToString("0.000000", CultureInfo.InvariantCulture), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", "-avoid_negative_ts", "disabled" };
+            var muxArgs = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "1", "-i", "clip.ffconcat", "-t", duration.ToString("0.000000", CultureInfo.InvariantCulture), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", "-avoid_negative_ts", "disabled" };
             if (layeredBuffer) muxArgs.AddRange(LayerTitles(layers, start, start + duration, layeredMicrophone));
             muxArgs.AddRange(new[] { "-f", "mp4", partial });
             using var mux = StartProcess(muxArgs, staging);
