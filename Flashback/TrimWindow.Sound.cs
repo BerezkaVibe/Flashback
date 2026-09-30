@@ -18,7 +18,7 @@ namespace Flashback;
 public partial class TrimWindow
 {
     internal static readonly string[] SoundExtensions = { ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus" };
-    private static readonly double[] VolumeChoiceValues = { 0, 25, 50, 150, 200 };
+    private static readonly double[] VolumeChoiceValues = { 0, 50, 150, 200, 300, 500 };
     private VolumeRegion? popupVolume;
     private SoundItem? popupSound;
     private Action? volumeTiming;
@@ -98,7 +98,7 @@ public partial class TrimWindow
     {
         if (popupVolume is not { } current || !Timeline.VolumeRegions.Contains(current)) return;
         if (!fromSlider || !volumeSnapshotted) { Snapshot(); volumeSnapshotted = fromSlider; }
-        var next = current with { Gain = Math.Clamp(gain, 0, 2) };
+        var next = current with { Gain = Math.Clamp(gain, 0, VolumeRegion.MaxGain) };
         Timeline.VolumeRegions = Timeline.VolumeRegions.Select(v => v == current ? next : v).ToArray();
         popupVolume = next; FocusPart(next);
         VolumeLabel.Text = $"{next.Gain * 100:0}%";

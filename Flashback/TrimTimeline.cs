@@ -520,6 +520,10 @@ internal sealed class TrimTimeline : FrameworkElement
         Focusable = true; FocusVisualStyle = null; Cursor = Cursors.Hand; Height = PreferredHeight;
         staticLayer.CacheMode = new BitmapCache { SnapsToDevicePixels = true };
         AddVisualChild(staticLayer); AddVisualChild(liveLayer);
+        // Added sounds' waveforms arrive in the background; redraw the lanes when one does.
+        Action peaksLoaded = () => Dispatcher.BeginInvoke(() => { lanesVersion++; InvalidateVisual(); });
+        Loaded += (_, _) => SoundPeaks.Loaded += peaksLoaded;
+        Unloaded += (_, _) => SoundPeaks.Loaded -= peaksLoaded;
     }
 
     // Two layers: the ruler, sections and waveforms are drawn once into a GPU-cached layer and
@@ -813,9 +817,10 @@ internal sealed class TrimTimeline : FrameworkElement
             {
                 var rect = new Rect(x0, top + 2, Math.Max(3, x1 - x0), LaneHeight - 4);
                 dc.DrawRoundedRectangle(lane.Muted ? AppMutedFill : AppFill, edge, rect, 4, 4);
-                var label = Text("♪ " + app + level, 10, lane.Muted ? Muted : Ink, dpi);
-                label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
-                if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
+                // The layer's peaks are by recording time, like the other lanes; a freeze's hold is silent.
+                if (PerformanceOptions.Waveforms)
+                    DrawClipWave(dc, (lane.Name, rect), rect, lane.Peaks, t => { if (!Mapped) return t; var (source, held) = sequence!.ToSource(t); return held > 0 ? double.NaN : source; }, lane.Muted ? WaveMuted : AppWave);
+                DrawBarLabel(dc, "♪ " + app + level, rect, lane.Muted ? Muted : Ink, lane.Peaks.Length > 0, dpi);
             }
     }
     // The app layer (lane index) whose bar is under a point, or -1.
@@ -902,13 +907,14 @@ internal sealed class TrimTimeline : FrameworkElement
         {
             var o = overlays[i]; bool focused = IsFocused(o) || i == selectedOverlay, muted = o.VideoVolume < .005;
             var edge = new Pen(focused ? Ink : MediaFill, focused ? 1.5 : 1) { DashStyle = muted && !focused ? DashStyles.Dash : null };
+            var videoPeaks = SoundPeaks.Get(o.VideoPath);
             foreach (var rect in VideoSoundRects(o, row))
             {
                 dc.DrawRoundedRectangle(VideoSoundFill, edge, rect, 4, 4);
+                // The video plays along with the footage under it, so its sound is read by recording time.
+                DrawClipWave(dc, (o, rect), rect, videoPeaks, t => o.VideoOffset + (Mapped ? sequence!.ToSource(t).Source : t) - o.Start, muted ? WaveMuted : VideoWave);
                 string level = muted ? " · muted" : Math.Abs(o.VideoVolume - 1) > .005 ? $" · {o.VideoVolume * 100:0}%" : "";
-                var label = Text("♪ " + o.Label + level, 10, Ink, dpi);
-                label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
-                if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
+                DrawBarLabel(dc, "♪ " + o.Label + level, rect, Ink, videoPeaks is { Length: > 0 }, dpi);
             }
         }
         for (int r = 0; r < SoundRows; r++) dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, SoundTop(r), width, SoundHeight), 4, 4);
@@ -917,15 +923,65 @@ internal sealed class TrimTimeline : FrameworkElement
             if (!SoundShows(s)) continue;
             var rect = SoundRect(s); bool focused = IsFocused(s);
             dc.DrawRoundedRectangle(SoundFill, new Pen(focused ? Ink : SoundEdge, focused ? 1.5 : 1), rect, 4, 4);
+            var peaks = SoundPeaks.Get(s.Path); double from = SoundView(s).From;
+            DrawClipWave(dc, s, rect, peaks, t => s.Offset + (t - from) * s.Speed, SoundWave);
             double pps = rect.Width / Math.Max(1e-6, s.Length);
             if (s.FadeIn > 0) dc.DrawGeometry(SoundEdge, null, Wedge(new Point(rect.Left, rect.Bottom), new Point(rect.Left + Math.Min(rect.Width, s.FadeIn * pps), rect.Top), new Point(rect.Left, rect.Top)));
             if (s.FadeOut > 0) dc.DrawGeometry(SoundEdge, null, Wedge(new Point(rect.Right, rect.Bottom), new Point(rect.Right - Math.Min(rect.Width, s.FadeOut * pps), rect.Top), new Point(rect.Right, rect.Top)));
-            var label = Text("♪ " + s.Label + (s.Duck ? " · ducks" : ""), 10, Ink, dpi);
-            label.MaxTextWidth = Math.Max(1, rect.Width - 8); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
-            if (rect.Width > 24) dc.DrawText(label, new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2));
+            DrawBarLabel(dc, "♪ " + s.Label + (s.Duck ? " · ducks" : ""), rect, Ink, peaks is { Length: > 0 }, dpi);
         }
         static Geometry Wedge(Point a, Point b, Point c) { var g = new StreamGeometry(); using (var x = g.Open()) { x.BeginFigure(a, true, true); x.LineTo(b, false, false); x.LineTo(c, false, false); } g.Freeze(); return g; }
     }
+    // Waveforms inside sound bars and app layers, like the recording's own lanes: the loudest moment of the
+    // file under each pixel column. fileTime turns a view time into seconds in the file (NaN for silence).
+    // Outlines are kept until the view or the part changes, so redraws for other edits reuse them.
+    private static readonly Brush SoundWave = Brush("#B886EFAC"), VideoWave = Brush("#B893C5FD"), AppWave = Brush("#B8D8B4FE");
+    private readonly Dictionary<object, (object Key, StreamGeometry Geometry)> clipWaves = new();
+    private void DrawClipWave(DrawingContext dc, object id, Rect rect, float[]? peaks, Func<double, double> fileTime, Brush brush)
+    {
+        if (peaks is not { Length: > 0 }) return;
+        double width = Math.Max(1, ActualWidth - 2 * Inset), left = Math.Max(rect.Left, Inset), right = Math.Min(rect.Right, Inset + width);
+        if (right - left < 2) return;
+        object key = (rect, ViewStart, Span, width, peaks, Mapped ? (double)sequence!.Version : -1);
+        if (!clipWaves.TryGetValue(id, out var cached) || !cached.Key.Equals(key))
+        {
+            int columns = (int)(right - left);
+            double mid = rect.Top + rect.Height / 2, reach = rect.Height / 2 - 2.5;
+            var upper = new Point[columns]; var lower = new Point[columns];
+            for (int px = 0; px < columns; px++)
+            {
+                double f0 = fileTime(ViewStart + (left + px - Inset) / width * Span), f1 = fileTime(ViewStart + (left + px + 1 - Inset) / width * Span);
+                float peak = 0;
+                if (!double.IsNaN(f0) && !double.IsNaN(f1))
+                {
+                    int a = (int)(Math.Min(f0, f1) * 100), b = Math.Max(a + 1, (int)(Math.Max(f0, f1) * 100));
+                    if (b - a > 400) b = a + 1;
+                    for (int i = Math.Max(0, a); i < Math.Min(peaks.Length, b); i++) peak = Math.Max(peak, peaks[i]);
+                }
+                double h = Math.Max(.5, peak * reach);
+                upper[px] = new Point(left + px + .5, mid - h); lower[columns - 1 - px] = new Point(left + px + .5, mid + h);
+            }
+            var geometry = new StreamGeometry();
+            using (var g = geometry.Open()) { g.BeginFigure(upper[0], true, true); g.PolyLineTo(upper, false, false); g.PolyLineTo(lower, false, false); }
+            geometry.Freeze();
+            if (clipWaves.Count > 400) clipWaves.Clear();
+            clipWaves[id] = cached = (key, geometry);
+        }
+        dc.PushClip(new RectangleGeometry(rect, 4, 4));
+        dc.DrawGeometry(brush, null, cached.Geometry);
+        dc.Pop();
+    }
+    // A bar's name at its left; over a waveform it sits on a small dark tag so it stays readable.
+    private void DrawBarLabel(DrawingContext dc, string text, Rect rect, Brush ink, bool overWave, double dpi)
+    {
+        if (rect.Width <= 24) return;
+        var label = Text(text, 10, ink, dpi);
+        label.MaxTextWidth = Math.Max(1, rect.Width - (overWave ? 14 : 8)); label.MaxLineCount = 1; label.Trimming = TextTrimming.CharacterEllipsis;
+        var at = new Point(rect.X + 5, rect.Y + (rect.Height - label.Height) / 2);
+        if (overWave) dc.DrawRoundedRectangle(LabelTag, null, new Rect(at.X - 3, at.Y - 1, label.WidthIncludingTrailingWhitespace + 6, label.Height + 2), 3, 3);
+        dc.DrawText(label, at);
+    }
+    private static readonly Brush LabelTag = Brush("#C0161B21");
     // Small handles on the ends of the selected part show they can be dragged.
     private void DrawFocusGrips(DrawingContext dc)
     {

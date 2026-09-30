@@ -13,14 +13,14 @@ public partial class MainWindow
     {
         bool lighter = LighterModeCheck.IsChecked == true;
         foreach (var box in PerformanceExtras) box.IsChecked = !lighter;
-        Tell(lighter ? "Lighter mode: extras off. Click Apply settings to use it." : "Extras back on. Click Apply settings to use them.");
+        Tell(lighter ? "Lighter mode: extras off." : "Extras back on.");
     }
     private void PerformanceToggle_Click(object sender, RoutedEventArgs e) => SyncLighterMode();
     private void SyncLighterMode() => LighterModeCheck.IsChecked = PerformanceExtras.All(b => b.IsChecked == false);
-    // Fills in the recommendation without applying it; the user confirms with Apply settings.
+    // Fills in the recommendation; it saves like any other change.
     private void RecommendedVideo_Click(object sender, RoutedEventArgs e)
     {
         ResolutionBox.SelectedValue = 720; FpsBox.SelectedValue = 30;
-        Tell("720p at 30 FPS is set under Video. Click Apply settings to record with it.");
+        Tell("720p at 30 FPS is set under Video.");
     }
 }

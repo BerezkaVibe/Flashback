@@ -69,3 +69,38 @@ internal static class AudioWaveforms
         }
     }
 }
+
+// Waveforms for sound files and videos added to the editor, loaded once per file in the background (one
+// at a time, at low priority) and kept while the app runs. Get returns null until a file's is ready, then
+// Loaded fires so the timeline can draw it.
+internal static class SoundPeaks
+{
+    private static readonly Dictionary<string, float[]> cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> loading = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly SemaphoreSlim oneAtATime = new(1, 1);
+    internal static event Action? Loaded;
+    internal static float[]? Get(string path)
+    {
+        if (!PerformanceOptions.Waveforms || string.IsNullOrEmpty(path)) return null;
+        lock (cache)
+        {
+            if (cache.TryGetValue(path, out var peaks)) return peaks;
+            if (!loading.Add(path)) return null;
+        }
+        _ = Task.Run(async () =>
+        {
+            float[] peaks;
+            await oneAtATime.WaitAsync().ConfigureAwait(false);
+            try { peaks = File.Exists(path) ? await AudioWaveforms.LoadAsync(path, 0, CancellationToken.None).ConfigureAwait(false) : Array.Empty<float>(); }
+            catch { peaks = Array.Empty<float>(); } // No sound, or unreadable: nothing to draw.
+            finally { oneAtATime.Release(); }
+            lock (cache)
+            {
+                if (cache.Count > 64) cache.Clear();
+                cache[path] = peaks; loading.Remove(path);
+            }
+            Loaded?.Invoke();
+        });
+        return null;
+    }
+}

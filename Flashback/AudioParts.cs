@@ -5,8 +5,12 @@ using System.Linq;
 namespace Flashback;
 
 // A stretch of one audio lane played louder or quieter (Gain 1 leaves it as recorded, 0 mutes it,
-// 2 doubles it). Lanes match the trimmer: the combined track, or desktop then microphone.
-internal sealed record VolumeRegion(int Lane, double Start, double End, double Gain);
+// 2 doubles it, up to 5). Lanes match the trimmer: the combined track, or desktop then microphone.
+internal sealed record VolumeRegion(int Lane, double Start, double End, double Gain)
+{
+    // FFmpeg plays and exports any level; past 5 a normal recording is mostly clipping.
+    internal const double MaxGain = 5;
+}
 
 // A music or sound file laid over the clip. Start is the moment of the recording it's anchored to (plus
 // Hold seconds into a freeze's hold, when it starts during one), so it slides with the video when freezes,

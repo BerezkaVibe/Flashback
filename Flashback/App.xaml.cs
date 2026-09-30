@@ -15,6 +15,9 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Crashes are written down (crash.log in the data folder), so a bug report can include them.
+        DispatcherUnhandledException += (_, x) => LogCrash("UI", x.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, x) => LogCrash("App", x.ExceptionObject as Exception);
         var data = Array.IndexOf(e.Args, "--data-dir");
         if (data >= 0 && data + 1 < e.Args.Length) Storage.Root = Path.GetFullPath(e.Args[data + 1]);
         // Which preview player the editor uses in a test run (--preview-player ffmpeg|windows), whatever the setting.
@@ -328,9 +331,20 @@ public partial class App : Application
         TrimWindow.AskToSave = true; TrimWindow.LightInBackground = true;
         var main = new MainWindow(); MainWindow = main;
         if (!e.Args.Contains("--tray")) main.Show();
-        await main.AutoStartAsync();
+        await main.AutoStartAsync(e.Args.Contains("--resume-recording"), e.Args.Contains("--updated"));
     }
     protected override void OnExit(ExitEventArgs e) { singleton?.Dispose(); base.OnExit(e); }
+    private static void LogCrash(string where, Exception? error)
+    {
+        try
+        {
+            var path = Path.Combine(Storage.Root, "crash.log");
+            // Only the newest crashes matter; start over past 200 KB.
+            if (File.Exists(path) && new FileInfo(path).Length > 200_000) File.Delete(path);
+            File.AppendAllText(path, $"{DateTimeOffset.Now:O} Flashback {typeof(App).Assembly.GetName().Version?.ToString(3)} ({where}){Environment.NewLine}{error}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch { }
+    }
 }
 
 

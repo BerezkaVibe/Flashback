@@ -134,7 +134,7 @@ internal sealed record ShareExportOptions(double TargetMb = 0, int Height = 0, i
         if (!Speeds.Contains(Speed)) throw new ArgumentException("Choose a supported speed.");
         if (SlowRegions.Any(r => r.Speed < MinRegionSpeed - 1e-9 || r.Speed > MaxRegionSpeed + 1e-9 || r.End <= r.Start)) throw new ArgumentException("A speed part is outside 0.1× to 4×.");
         if (Freezes.Any(f => !double.IsFinite(f.At) || f.At < 0 || !(f.Seconds >= FreezeFrame.MinSeconds - 1e-9 && f.Seconds <= FreezeFrame.MaxSeconds + 1e-9))) throw new ArgumentException("A freeze frame holds for 0.2 to 10 seconds.");
-        if (VolumeRegions.Any(v => v.Gain is < 0 or > 2 || v.End <= v.Start)) throw new ArgumentException("A volume part is outside 0% to 200%.");
+        if (VolumeRegions.Any(v => v.Gain < 0 || v.Gain > VolumeRegion.MaxGain || v.End <= v.Start)) throw new ArgumentException($"A volume part is outside 0% to {VolumeRegion.MaxGain * 100:0}%.");
         if (Sounds.FirstOrDefault(s => !File.Exists(s.Path)) is { } lost) throw new ArgumentException($"The sound {Path.GetFileName(lost.Path)} can't be found. Remove it or add it again.");
         if (Overlays.FirstOrDefault(o => o.Kind == OverlayKind.Video && !File.Exists(o.VideoPath)) is { } lostVideo) throw new ArgumentException($"The video {Path.GetFileName(lostVideo.VideoPath)} can't be found. Remove it or add it again.");
         if (Overlays.FirstOrDefault(o => o.Kind == OverlayKind.Image && !File.Exists(o.ImagePath)) is { } missing) throw new ArgumentException($"The picture {Path.GetFileName(missing.ImagePath)} can't be found. Remove it or add it again.");

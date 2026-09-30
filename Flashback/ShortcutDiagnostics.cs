@@ -66,7 +66,7 @@ internal static class ShortcutDiagnostics
                 Check(!window.CapturingShortcutForTest, "The native entry handler is removed when another window gains focus");
             }
             finally { other.Close(); }
-            window.Activate(); SystemTestNative.SetForegroundWindow(handle); Keyboard.Focus(window.ApplyButton); await Task.Delay(150);
+            window.Activate(); SystemTestNative.SetForegroundWindow(handle); Keyboard.ClearFocus(); await Task.Delay(150);
             window.ToggleButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var wait = Stopwatch.StartNew();
             while (!window.TopSaveButton.IsEnabled && wait.Elapsed.TotalSeconds < 15) await Task.Delay(100);

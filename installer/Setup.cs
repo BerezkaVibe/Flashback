@@ -14,16 +14,16 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Flashback Setup")]
-[assembly: AssemblyVersion("0.9.5.0")]
-[assembly: AssemblyFileVersion("0.9.5.0")]
+[assembly: AssemblyVersion("0.9.6.0")]
+[assembly: AssemblyFileVersion("0.9.6.0")]
 
 internal static class Setup
 {
 #if TEST
     // A test build, marked as one wherever setup shows its version.
-    const string Version="0.9.5-TEST";
+    const string Version="0.9.6-TEST";
 #else
-    const string Version="0.9.5";
+    const string Version="0.9.6";
 #endif
     const string Marker="Flashback-install-4a0fe501-ea28-4327-802f-21a68ab327e9";
     const string Manifest="installed-files.txt";
@@ -60,8 +60,14 @@ internal static class Setup
                 MessageBox.Show("Flashback was uninstalled. Saved clips and preferences were kept.","Flashback",MessageBoxButtons.OK,MessageBoxIcon.Information);
                 CleanupHelper();return 0;
             }
-            // Started by Flashback's in-app updater: install without prompts, then relaunch.
-            if(args.Length==1 && args[0]=="--update") { Application.Run(new SetupWindow(true));return 0; }
+            // Started by Flashback's in-app updater: install without prompts, then relaunch. The app passes how to
+            // come back (in the tray, recording again); only those known switches are passed on. --quiet updates
+            // (the app updating itself while idle) don't take focus from whatever you're doing.
+            if(args.Length>=1 && args[0]=="--update")
+            {
+                var back=args.Skip(1).Where(a=>a=="--tray" || a=="--resume-recording" || a=="--updated").Distinct();
+                Application.Run(new SetupWindow(true,string.Join(" ",back),args.Contains("--quiet")));return 0;
+            }
             Application.Run(new SetupWindow());return 0;
         }
         catch(Exception ex) { if(args.Length==2 && (args[0]=="--smoke-test" || args[0]=="--lock-test"))File.WriteAllText(args[1]+"-failure.txt",ex.ToString());else MessageBox.Show(ex.Message,"Flashback setup",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1; }
@@ -315,8 +321,11 @@ internal static class Setup
     sealed class SetupWindow : Form
     {
         readonly Button action=new Button();readonly Label status=new Label();readonly CheckBox desktop=new CheckBox();readonly ProgressBar progress=new ProgressBar();bool busy,done;
-        public SetupWindow(bool update=false)
+        readonly string relaunch;readonly bool quiet;
+        protected override bool ShowWithoutActivation { get { return quiet; } }
+        public SetupWindow(bool update=false,string relaunch="",bool quiet=false)
         {
+            this.relaunch=relaunch;this.quiet=quiet;
 #if UNINSTALL
             bool uninstall=true;
 #else
@@ -373,7 +382,7 @@ internal static class Setup
                 status.Text="Installing Flashback "+Version+"…";
                 await Task.Run(()=>InstallFiles(InstallPath,n=>BeginInvoke(new Action(()=>progress.Value=n))));
                 Register(File.Exists(DesktopLink));progress.Value=100;done=true;
-                Process.Start(Path.Combine(InstallPath,"Flashback.exe"));busy=false;Close();
+                Process.Start(Path.Combine(InstallPath,"Flashback.exe"),relaunch);busy=false;Close();
             }
             catch(Exception ex) {status.Text="The update could not finish. Your previous version is unchanged.\r\n"+ex.Message;busy=false;action.Enabled=true;}
         }

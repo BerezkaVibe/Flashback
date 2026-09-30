@@ -44,7 +44,7 @@ public partial class MainWindow
     private void ResetTrimKeys_Click(object sender, RoutedEventArgs e)
     {
         LoadTrimShortcuts(new Settings { Hotkey = settings.Hotkey, PauseHotkey = settings.PauseHotkey });
-        Tell("Editor keys reset to their defaults. Click Apply settings to keep them.");
+        Tell("Editor keys reset to their defaults."); SaveSoon();
     }
     private bool IsShortcutBox(TextBox box) => ReferenceEquals(box, HotkeyBox) || ReferenceEquals(box, PauseHotkeyBox) || trimBoxes.ContainsKey(box);
     private void SetShortcut(TextBox box, Key key, ModifierKeys mods, bool finished)
@@ -56,11 +56,11 @@ public partial class MainWindow
         }
         else box.Text = (mods.HasFlag(ModifierKeys.Control) ? "Ctrl+" : "") + (mods.HasFlag(ModifierKeys.Alt) ? "Alt+" : "") + (mods.HasFlag(ModifierKeys.Shift) ? "Shift+" : "") + key;
         if (!finished) return;
-        Keyboard.Focus(ApplyButton);
+        Keyboard.ClearFocus();
         try
         {
             var draft = new Settings { Hotkey = HotkeyBox.Text, PauseHotkey = PauseHotkeyBox.Text }; ReadTrimShortcuts(draft);
-            TrimShortcuts.Validate(draft); Tell("Shortcut selected. Click Apply settings to use it.");
+            TrimShortcuts.Validate(draft); Tell("Shortcut set."); SaveSoon();
         }
         catch (System.ArgumentException ex) { Tell(ex.Message, true); }
     }

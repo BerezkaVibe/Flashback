@@ -71,6 +71,15 @@ internal static class Updater
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, $"Flashback-{update.Version}-Setup.exe");
         var partial = path + ".partial";
+        // Already downloaded (and still intact): use it. Older versions' installers are cleared out.
+        foreach (var old in Directory.EnumerateFiles(folder, "Flashback-*-Setup.exe*"))
+            if (!old.StartsWith(path, StringComparison.OrdinalIgnoreCase)) try { File.Delete(old); } catch { }
+        if (File.Exists(path) && new FileInfo(path).Length == update.Size)
+        {
+            if (update.Sha256 == null) return path;
+            await using var file = File.OpenRead(path);
+            if (Convert.ToHexString(await SHA256.HashDataAsync(file, token)).Equals(update.Sha256, StringComparison.OrdinalIgnoreCase)) return path;
+        }
         using (var response = await http.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, token))
         {
             response.EnsureSuccessStatusCode();

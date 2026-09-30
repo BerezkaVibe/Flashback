@@ -74,7 +74,7 @@ public partial class MainWindow : Window
         OverlayDurationBox.DisplayMemberPath = "Label"; OverlayDurationBox.SelectedValuePath = "Value";
         DisplayBox.ItemsSource = DisplayChoices();
         foreach (var combo in new[] { FpsBox, ResolutionBox, DisplayBox }) { combo.DisplayMemberPath = "Label"; combo.SelectedValuePath = "Value"; }
-        LoadControls();
+        LoadControls(); HookAutoSave();
         UpdateEditorLabel();
         if (!renderOnly)
         {
@@ -112,7 +112,12 @@ public partial class MainWindow : Window
         // Check the hardware encoder in the background (once per driver) so Record starts quickly.
         if (!renderOnly && !syntheticCapture) Loaded += (_, _) => _ = VideoEncoder.WarmAsync(recorder.FfmpegPath, settings.Copy());
     }
-    public async Task AutoStartAsync() { if (settings.StartBufferOnLaunch) await ToggleAsync(); }
+    // resume: started again by an update while it was recording.
+    public async Task AutoStartAsync(bool resume = false, bool updated = false)
+    {
+        if (updated) AnnounceUpdated();
+        if (settings.StartBufferOnLaunch || resume) await ToggleAsync();
+    }
     private void LoadControls()
     {
         LoadAppearance();
@@ -128,7 +133,7 @@ public partial class MainWindow : Window
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
-        UpdateCheck.IsChecked = settings.CheckForUpdates; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; WindowsPreviewCheck.IsChecked = settings.WindowsPreview;
+        UpdateCheck.IsChecked = settings.CheckForUpdates; AutoUpdateCheck.IsChecked = settings.InstallUpdatesAutomatically; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; WindowsPreviewCheck.IsChecked = settings.WindowsPreview;
         if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = "Needs Windows 11 (or Windows 10 build 20348 or later)."; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
     private void ReplayLength_Changed(object sender,RoutedPropertyChangedEventArgs<double> e)
@@ -151,19 +156,26 @@ public partial class MainWindow : Window
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
-        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, WindowsPreview = WindowsPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
+        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, InstallUpdatesAutomatically = AutoUpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, WindowsPreview = WindowsPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         ExternalEditorPath = settings.ExternalEditorPath
     };
-    private async void Apply_Click(object sender, RoutedEventArgs e)
+    private async void Apply_Click(object sender, RoutedEventArgs e) => await SaveSettingsAsync(false);
+    // Saves what the settings page shows. Changes save by themselves (see MainWindow.AutoSave.cs); an automatic
+    // save with nothing changed does nothing, and one that can't be used yet says why without undoing it.
+    private async Task SaveSettingsAsync(bool automatic)
     {
         if (busy || recorder.IsSaving) return;
-        busy = true; Refresh();
         var previous = settings.Copy();
+        Settings next;
+        try { next = ReadControls(); }
+        catch (Exception ex) { if (!automatic) ReportError(ex); return; }
+        if (automatic && Unchanged(next, previous)) return;
+        busy = true; Refresh();
         try
         {
-            var next = ReadControls(); next.Validate(); Storage.EnsureWritable(next.OutputFolder);
+            next.Validate(); Storage.EnsureWritable(next.OutputFolder);
             hotkeys.Register(next.Hotkey, next.PauseHotkey);
             try
             {
@@ -180,7 +192,7 @@ public partial class MainWindow : Window
             settings = next; PerformanceOptions.Apply(next); if (!restart) recorder.SetAudioLive(next);
             overlay.Dispose();
             if (restart) { Tell("Restarting the buffer with your settings…"); await recorder.StartAsync(settings, syntheticCapture); }
-            Tell("Settings saved." + (restart ? " The replay buffer is filling again." : "") + (hotkeys.UsesSharedInput ? " Shared shortcut active; the other app may respond too." : ""));
+            Tell("Settings saved." + (restart ? " The replay buffer restarted with them and is filling again." : "") + (hotkeys.UsesSharedInput ? " Shared shortcut active; the other app may respond too." : ""));
         }
         catch (Exception ex)
         {
@@ -342,7 +354,7 @@ public partial class MainWindow : Window
         if (key == Key.None) return;
         if (key == Key.Tab) return;
         e.Handled = true;
-        if (key == Key.Escape) { CancelShortcut((TextBox)sender); Keyboard.Focus(ApplyButton); return; }
+        if (key == Key.Escape) { CancelShortcut((TextBox)sender); Keyboard.ClearFocus(); return; }
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin) return;
         var mods = Keyboard.Modifiers;
         if (mods.HasFlag(ModifierKeys.Windows)) { Tell("Choose a single key or combine it with Ctrl, Alt or Shift."); return; }
@@ -408,7 +420,7 @@ public partial class MainWindow : Window
     {
         CopyErrorButton.Visibility = error ? Visibility.Visible : Visibility.Collapsed;
         if (error) errorDetails = $"Flashback {typeof(MainWindow).Assembly.GetName().Version} · {DateTimeOffset.Now:O}\n{message}";
-        MessageLabel.Text = message;
+        MessageLabel.Text = message; LogMessage(message, error);
         MessageLabel.ToolTip = message;
         MessageLabel.Foreground = new SolidColorBrush(error ? Color.FromRgb(244, 154, 154) : Color.FromRgb(157, 166, 177));
         if (error) try { tray.ShowBalloonTip(5000, "Flashback", message.Length > 220 ? message[..220] : message, Forms.ToolTipIcon.Warning); } catch { }

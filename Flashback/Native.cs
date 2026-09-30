@@ -120,6 +120,17 @@ public static class GameTracker
     };
     public static string LastForeground { get; private set; } = "Desktop";
     internal static bool IsKnownGame(string processName) => Known.ContainsKey(processName);
+    // Whether any of the known games is running at all, in front or not.
+    internal static bool AnyKnownGameRunning()
+    {
+        foreach (var name in Known.Keys)
+        {
+            var found = Process.GetProcessesByName(name);
+            foreach (var p in found) p.Dispose();
+            if (found.Length > 0) return true;
+        }
+        return false;
+    }
     public static void Update()
     {
         try

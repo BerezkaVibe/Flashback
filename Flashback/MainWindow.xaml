@@ -2,7 +2,7 @@
  <Grid Background="{DynamicResource AppBackground}"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition/></Grid.ColumnDefinitions>
  <Border Background="{DynamicResource AppBackground}" BorderThickness="0"><Grid Margin="15,26,15,18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
  <StackPanel><Border Width="32" Height="3" Background="{DynamicResource Accent}" CornerRadius="2" Margin="0,0,0,32"/><Button x:Name="CaptureNav" Style="{StaticResource IconButton}" Content="&#xE8B2;" ToolTip="Clips" AutomationProperties.Name="Clips" Click="Navigate_Click" Tag="0" Margin="0,0,0,12"/><Button x:Name="TrimNav" Style="{StaticResource IconButton}" Content="&#xE8C6;" ToolTip="Edit video" AutomationProperties.Name="Edit video" Click="OpenTrim_Click" Margin="0,0,0,12"/><Button x:Name="ClipsNav" Visibility="Collapsed" Style="{StaticResource IconButton}" Content="&#xE8B2;" ToolTip="Saved clips" AutomationProperties.Name="Saved clips" Click="Navigate_Click" Tag="0"/></StackPanel>
- <Button x:Name="SettingsNav" Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" AutomationProperties.Name="Settings" Click="Navigate_Click" Tag="1" Grid.Row="2"/>
+ <StackPanel Grid.Row="2"><Button x:Name="SettingsNav" Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" AutomationProperties.Name="Settings" Click="Navigate_Click" Tag="1"/><Button x:Name="BugReportButton" Style="{StaticResource IconButton}" Content="&#xEBE8;" Width="30" Height="30" FontSize="13" Opacity=".6" Margin="0,8,0,0" ToolTip="Report a bug" AutomationProperties.Name="Report a bug" Click="BugReport_Click"/></StackPanel>
  </Grid></Border>
  <Grid Grid.Column="1" Margin="28,24,28,18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
  <Grid Margin="0,0,0,28"><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Image Source="Assets/Flashback.ico" Width="34" Height="34" Margin="0,0,12,0" RenderOptions.BitmapScalingMode="HighQuality"/><TextBlock Text="Flashback" FontSize="23" FontWeight="SemiBold" VerticalAlignment="Center"/><Button x:Name="UpdateButton" Visibility="Collapsed" Style="{StaticResource IconButton}" Width="30" Height="30" MinHeight="30" FontSize="15" Content="&#xE896;" Foreground="#3FB950" Margin="10,3,0,0" VerticalAlignment="Center" Click="Update_Click" AutomationProperties.Name="Install update"/></StackPanel><StackPanel HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock x:Name="HeaderCapture" FontSize="12" HorizontalAlignment="Right" ToolTip="Recording frame rate, not game FPS."/><TextBlock x:Name="HeaderVersion" FontSize="11" Foreground="{DynamicResource Muted}" HorizontalAlignment="Right" Margin="0,5,0,0"/></StackPanel></Grid>
@@ -95,7 +95,7 @@
       <TextBlock Text="Recording" Style="{StaticResource Caption}" Margin="0,16,0,4"/>
       <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Text="Recording is the biggest cost, and it's set under Video. On a weaker PC we recommend 720p at 30 FPS: it uses about half the CPU of 1080p 60 (about 11% of one core instead of 23% in our tests)."/>
       <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" Text="The per-app audio mixer and microphone noise suppression each add about another 10% of a core, so leave them off if you don't need them."/>
-      <Button x:Name="RecommendedVideoButton" Content="Use 720p 30 FPS" Click="RecommendedVideo_Click" HorizontalAlignment="Left" Margin="0,8,0,0" ToolTip="Sets Video to 720p at 30 FPS. Click Apply settings to use it."/>
+      <Button x:Name="RecommendedVideoButton" Content="Use 720p 30 FPS" Click="RecommendedVideo_Click" HorizontalAlignment="Left" Margin="0,8,0,0" ToolTip="Sets Video to 720p at 30 FPS."/>
       <TextBlock Text="Editing and browsing" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
       <CheckBox x:Name="ThumbnailsCheck" Content="Clip thumbnails on the Clips page" Click="PerformanceToggle_Click" ToolTip="Off: clips are listed without preview pictures, which saves reading every video file"/>
       <CheckBox x:Name="WaveformsCheck" Content="Audio waveforms in the editor" Click="PerformanceToggle_Click" ToolTip="Off: the audio lanes still work, without reading the whole soundtrack to draw them"/>
@@ -118,12 +118,13 @@
       <TextBlock Text="External editor" Style="{StaticResource Caption}" Margin="0,18,0,7"/>
       <TextBlock x:Name="EditorLabel" Foreground="{DynamicResource Muted}" Margin="0,0,0,10" TextWrapping="Wrap"/><Button Content="Choose app…" Click="ChooseEditor_Click" HorizontalAlignment="Left" Margin="0,0,0,12"/>      <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,18,0,0"/>
       <CheckBox x:Name="UpdateCheck" Content="Check for updates when Flashback starts"/>
+      <CheckBox x:Name="AutoUpdateCheck" Content="Install updates automatically" Margin="22,6,0,0" IsEnabled="{Binding IsChecked, ElementName=UpdateCheck}" ToolTip="Downloads new versions in the background and installs them in a few seconds when no game is running and the editor is closed. Flashback comes back as it was, recording again if it was."/>
       <StackPanel Orientation="Horizontal" Margin="0,4,0,12"><Button x:Name="CheckUpdatesButton" Content="Check now" Click="CheckUpdates_Click"/><TextBlock x:Name="UpdateStatusLabel" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/></StackPanel>
      </StackPanel></ScrollViewer></TabItem>
     </TabControl>
     <StackPanel Grid.Row="1" Margin="174,12,0,0">
-     <Button x:Name="ApplyButton" Content="Apply settings" HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}" Click="Apply_Click"/>
-     <TextBlock Text="Hotkey and overlay changes keep your buffer. Recording or output-folder changes restart it." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
+     <Button x:Name="ApplyButton" Content="Apply settings" Visibility="Collapsed" Click="Apply_Click"/>
+     <TextBlock Text="Changes save as you make them. Hotkey and overlay changes keep your buffer; recording or output-folder changes restart it." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
     </StackPanel></Grid>
    </TabItem>
 
