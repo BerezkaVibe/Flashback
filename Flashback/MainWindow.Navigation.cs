@@ -23,6 +23,7 @@ public partial class MainWindow
             button.SetResourceReference(Control.ForegroundProperty,current ? "Accent" : "Muted");
             AutomationProperties.SetItemStatus(button, current ? "Selected" : "");
         }
+        UpdateConsoleChrome();
     }
     private static void SetActionName(Button button, string name)
     { button.ToolTip = name; AutomationProperties.SetName(button, name); }
