@@ -1,7 +1,7 @@
 # -FfmpegLibs: the bin folder of an FFmpeg 9.0 LGPL shared build (avcodec-63.dll and friends) for the FFmpeg
 # preview player, the editor's default. Required, unless -NoFfmpegPlayer is given for a build whose editor
 # uses the Windows player.
-param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.6', [string]$FfmpegLibs = '', [switch]$NoFfmpegPlayer)
+param([string]$FfmpegPath = 'D:\ffmpeg\ffmpeg.exe', [string]$Version = '0.9.7', [string]$FfmpegLibs = '', [switch]$NoFfmpegPlayer)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $env:DOTNET_CLI_HOME = Join-Path $projectRoot '.dotnet-home'
