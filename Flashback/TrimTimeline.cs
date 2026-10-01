@@ -1273,8 +1273,8 @@ internal sealed class TrimTimeline : FrameworkElement
             drag = Drag.PartEdge; resizing = focusedPart; resizingStart = atStart; resizeStart = span.Start; resizeEnd = span.End;
             pressPoint = point; overlayDragMoved = false; CaptureMouse(); e.Handled = true; return;
         }
-        if (pendingCut == null && cutTags.FindIndex(t => t.Tag.Contains(point)) is int cutTag and >= 0) { CutTagClicked?.Invoke(cutTags[cutTag].Cut); e.Handled = true; return; }
-        if (pendingCut == null && lanesExpanded && volumeTags.FindIndex(t => t.Tag.Contains(point)) is int volumeTag and >= 0) { VolumeTagClicked?.Invoke(volumeTags[volumeTag].Part); e.Handled = true; return; }
+        if (pendingCut == null && cutTags.FindIndex(t => t.Tag.Contains(point)) is int cutTag and >= 0) { var cut = cutTags[cutTag].Cut; var area = cutTags[cutTag].Tag; PressToClick(p => area.Contains(p), () => CutTagClicked?.Invoke(cut)); e.Handled = true; return; }
+        if (pendingCut == null && lanesExpanded && volumeTags.FindIndex(t => t.Tag.Contains(point)) is int volumeTag and >= 0) { var part = volumeTags[volumeTag].Part; var area = volumeTags[volumeTag].Tag; PressToClick(p => area.Contains(p), () => VolumeTagClicked?.Invoke(part)); e.Handled = true; return; }
         if (pendingCut == null && VideoSoundAt(point) is { Index: >= 0 } linked)
         {
             // Press on a video's sound: a click opens it, a drag moves (or trims) the video it's linked to.
@@ -1309,7 +1309,7 @@ internal sealed class TrimTimeline : FrameworkElement
         }
         if (pendingCut == null && ZoomTagAt(point) is int zoomTag and >= 0) { ZoomTagClicked?.Invoke(zoomTag); e.Handled = true; return; }
         if (pendingCut == null && !Placing && FreezeHit(point) is { Index: >= 0 } freezeHit) { drag = freezeHit.End ? Drag.FreezeEnd : Drag.FreezeMove; dragFreeze = freezeHit.Index; freezeDragMoved = false; pressPoint = point; CaptureMouse(); e.Handled = true; return; }
-        if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { SlowTagClicked?.Invoke(tag); e.Handled = true; return; }
+        if (pendingCut == null && SlowTagAt(point) is int tag and >= 0) { int slow = tag; var area = slowTags[tag]; PressToClick(p => area.Contains(p), () => SlowTagClicked?.Invoke(slow)); e.Handled = true; return; }
         if (Placing && (pendingCut != null || BandAt(point) > -2))
         {
             // Wait to see whether this is a click (place a cut point) or a drag (move the playhead).
@@ -1318,7 +1318,7 @@ internal sealed class TrimTimeline : FrameworkElement
         int lane = LaneAt(point);
         if (lane >= 0 && lanes[lane].Toggleable) { LaneToggled?.Invoke(lane); e.Handled = true; return; }
         // An app's bar opens its volume and mute (the cut and volume tools, when out, work on its row instead).
-        if (pendingCut == null && AppLayerAt(point) is int appLayer and >= 0) { AppLayerPicked?.Invoke(appLayer); e.Handled = true; return; }
+        if (pendingCut == null && AppLayerAt(point) is int appLayer and >= 0) { PressToClick(p => AppLayerAt(p) == appLayer, () => AppLayerPicked?.Invoke(appLayer)); e.Handled = true; return; }
         if (e.ClickCount == 2 && point.Y >= TrackTop && point.Y <= TrackTop + TrackHeight)
         {
             double t = TimeAt(point.X);
@@ -1335,6 +1335,9 @@ internal sealed class TrimTimeline : FrameworkElement
         PartClicked?.Invoke(PartAt(point));
         BeginDrag(point); CaptureMouse(); DragStarted?.Invoke(); MoveTo(point.X); e.Handled=true;
     }
+    // A press on something that opens settings: it counts as a click when the button comes up still over it.
+    private Action? tagClick; private Func<Point, bool>? tagStill;
+    private void PressToClick(Func<Point, bool> stillOver, Action click) { tagClick = click; tagStill = stillOver; CaptureMouse(); }
     private void PanToPointer(double x) => PanTo((x - Inset) / Math.Max(1, ActualWidth - 2 * Inset) * Total - Span / 2);
     internal void BeginDrag(Point point)
     {
@@ -1553,6 +1556,15 @@ internal sealed class TrimTimeline : FrameworkElement
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        if (tagClick != null)
+        {
+            // A click on a tag opens its settings now that the button is up: a settings window opened while it was
+            // still down closed again as it came up, so it only stayed while the button was held.
+            var click = tagClick; var still = tagStill!; tagClick = null; tagStill = null;
+            ReleaseMouseCapture(); e.Handled = true;
+            if (still(e.GetPosition(this))) click();
+            return;
+        }
         if (IsMouseCaptured && drag is Drag.FreezeMove or Drag.FreezeEnd)
         {
             int picked = dragFreeze; bool moved = freezeDragMoved;
@@ -1580,7 +1592,7 @@ internal sealed class TrimTimeline : FrameworkElement
         ReleaseMouseCapture(); e.Handled=true;
     }
     protected override void OnLostMouseCapture(MouseEventArgs e)
-    { base.OnLostMouseCapture(e); EndDrag(); }
+    { base.OnLostMouseCapture(e); tagClick = null; tagStill = null; EndDrag(); }
     internal void EndDrag()
     {
         if (drag == Drag.None) return;
