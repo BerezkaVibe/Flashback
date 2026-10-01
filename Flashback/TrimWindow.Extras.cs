@@ -68,7 +68,7 @@ public partial class TrimWindow
     {
         waveformLoad?.Cancel(); waveformLoad = new CancellationTokenSource(); var token = waveformLoad.Token;
         TrackMixPanel.Visibility = media.HasSeparateTracks ? Visibility.Visible : Visibility.Collapsed;
-        DesktopMix.Value = 100; MicrophoneMix.Value = 100; trackVolumes.Clear();
+        DesktopMix.Value = 100; MicrophoneMix.Value = 100; trackVolumes.Clear(); recordedLevels.Clear();
         var names = media.HasSeparateTracks ? new[] { ("Desktop", 1), ("Microphone", 2) } : media.HasAudio ? new[] { ("Audio", 0) } : Array.Empty<(string, int)>();
         var lanes = names.Select(n => (Name: n.Item1, Track: n.Item2, Apps: (IReadOnlyList<(string, double)>)Array.Empty<(string, double)>())).ToList();
         if (media.AudioTracks >= 3 + AppMixSource.Slots)
@@ -82,7 +82,7 @@ public partial class TrimWindow
                 lanes = new() { ("Other apps", 1, Array.Empty<(string, double)>()) };
                 if (titles[2] == "Microphone") lanes.Add(("Microphone", 2, Array.Empty<(string, double)>()));
                 for (int t = 3; t < titles.Count; t++)
-                    if (LayerLog.Parse(titles[t]) is { Count: > 0 } apps) lanes.Add((string.Join(" / ", apps.Select(a => a.App).Distinct()), t, apps));
+                    if (LayerLog.Parse(titles[t]) is { Count: > 0 } apps) { lanes.Add((string.Join(" / ", apps.Select(a => a.App).Distinct()), t, apps)); if (LayerLog.ParseLevel(titles[t]) is int level and not 100) recordedLevels[t] = level; }
             }
         }
         Timeline.Lanes = lanes.Select(n => new AudioLane(n.Name, Array.Empty<float>(), false, media.HasSeparateTracks) { Apps = n.Apps }).ToArray();
@@ -92,6 +92,8 @@ public partial class TrimWindow
         if (Timeline.LanesExpanded) await LoadWaveformsAsync(token);
     }
     private int[] laneTracks = Array.Empty<int>();
+    // The level (percent) an app layer was recorded at, by track, when it wasn't 100: Settings' level for that app.
+    private readonly Dictionary<int, int> recordedLevels = new();
     private bool waveformsLoaded;
     // Waveforms decode only once the audio dropdown is opened, and never on the UI thread.
     private async Task LoadWaveformsAsync(CancellationToken token)
@@ -351,21 +353,23 @@ public partial class TrimWindow
     {
         if (exportCancellation != null || lane < 0 || lane >= Timeline.Lanes.Count || !Timeline.Lanes[lane].IsAppLayer) return;
         int track = laneTracks[lane]; var layer = Timeline.Lanes[lane];
+        // The level is shown against the app itself: recorded at 20% in Settings, it opens at 20%, and 100% is the app at full volume.
+        double recorded = recordedLevels.TryGetValue(track, out var recordedPercent) ? recordedPercent / 100.0 : 1;
         popupSound = null; var panel = SoundControls; panel.Children.Clear();
         panel.Children.Add(new TextBlock { Text = "♪ " + layer.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 2) });
-        var note = new TextBlock { Text = "Recorded on its own layer. Mute it to take it out of the export, or use the cut and volume tools on its row for just part of it." + (Player.UsesFfmpeg ? " The preview plays it as the export will." : " (The Windows preview player still plays everything; the FFmpeg one in Settings > Performance plays it as the export will.)"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+        var note = new TextBlock { Text = (recordedLevels.ContainsKey(track) ? $"Recorded at {recorded * 100:0}% in Settings, so that is where its volume starts. " : "") + "Recorded on its own layer. Mute it to take it out of the export, or use the cut and volume tools on its row for just part of it." + (Player.UsesFfmpeg ? " The preview plays it as the export will." : " (The Windows preview player still plays everything; the FFmpeg one in Settings > Performance plays it as the export will.)"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
         note.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); panel.Children.Add(note);
         var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
         var name = new TextBlock { Text = "Volume", Width = 74, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }; name.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
         static string Level(double v) => v < .5 ? "Muted" : $"{v:0}%";
-        var slider = new Slider { Minimum = 0, Maximum = VolumeRegion.MaxGain * 100, Value = TrackVolume(track) * 100, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
+        var slider = new Slider { Minimum = 0, Maximum = VolumeRegion.MaxGain * 100 * recorded, Value = TrackVolume(track) * 100 * recorded, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center };
         var shown = ValueBox.For(slider, Level);
-        slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); SetTrackVolume(track, Math.Round(e.NewValue) / 100); };
+        slider.ValueChanged += (_, e) => { shown.Text = Level(e.NewValue); SetTrackVolume(track, Math.Round(e.NewValue) / 100 / recorded); };
         DockPanel.SetDock(name, Dock.Left); DockPanel.SetDock(shown, Dock.Right);
         row.Children.Add(name); row.Children.Add(shown); row.Children.Add(slider); panel.Children.Add(row);
         var mute = new Button { Content = TrackVolume(track) < .005 ? "Bring it back" : "Mute (remove it from the export)", FontSize = 11, MinHeight = 26, Height = 26, Margin = new Thickness(0, 6, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch };
         mute.SetResourceReference(StyleProperty, "TrimButton");
-        mute.Click += (_, _) => { slider.Value = TrackVolume(track) < .005 ? 100 : 0; mute.Content = TrackVolume(track) < .005 ? "Bring it back" : "Mute (remove it from the export)"; };
+        mute.Click += (_, _) => { slider.Value = TrackVolume(track) < .005 ? 100 * recorded : 0; mute.Content = TrackVolume(track) < .005 ? "Bring it back" : "Mute (remove it from the export)"; };
         panel.Children.Add(mute);
         SoundPopup.IsOpen = true;
     }

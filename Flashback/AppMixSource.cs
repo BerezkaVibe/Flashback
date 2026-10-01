@@ -41,6 +41,7 @@ public sealed class AppMixSource : IRecordingAudio
     private readonly LayerLog? log;
     private readonly double logOffset;
     private readonly string?[] layerApps = new string?[Slots + 1];
+    private readonly Dictionary<string, string> layerProcess = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> lastSound = new(StringComparer.OrdinalIgnoreCase);
     private long emitted; // frames written to the pipes, counted from the timeline origin
     private readonly CancellationTokenSource cancel = new();
@@ -77,7 +78,15 @@ public sealed class AppMixSource : IRecordingAudio
     }
     private static Dictionary<string, double> Normalize(IReadOnlyDictionary<string, int> source) =>
         source.ToDictionary(p => p.Key.ToLowerInvariant(), p => Math.Clamp(p.Value, 0, 200) / 100.0);
-    public void SetLevels(IReadOnlyDictionary<string, int> appLevels) => levels = Normalize(appLevels);
+    public void SetLevels(IReadOnlyDictionary<string, int> appLevels)
+    {
+        levels = Normalize(appLevels);
+        // A layer already open keeps its app but takes the new level, so a clip saved later names it.
+        if (log == null) return;
+        lock (layerApps) for (int l = 1; l <= Slots; l++) if (layerApps[l] is { } app) log.SetLevel(l, PercentFor(app));
+    }
+    // An app's recording level in percent, from the layer's label (levels go by process name).
+    private int PercentFor(string label) => (int)Math.Round(LevelFor(layerProcess.TryGetValue(label, out var process) ? process : label) * 100);
     private double LevelFor(string name) => levels.TryGetValue(name.ToLowerInvariant(), out var level) ? level : 1;
 
     public void Start(Func<long>? timelineOrigin = null)
@@ -160,7 +169,7 @@ public sealed class AppMixSource : IRecordingAudio
         float level = (float)LevelFor(stream.Name);
         if (level <= 0) return;
         var samples = MemoryMarshal.Cast<byte, float>(data.AsSpan());
-        int layer = Layered ? LayerFor(stream.Label, samples, start) : 0;
+        int layer = Layered ? LayerFor(stream.Label, stream.Name, samples, start) : 0;
         var ring = outputs[layer].Ring;
         lock (mix)
         {
@@ -174,13 +183,14 @@ public sealed class AppMixSource : IRecordingAudio
         }
     }
     // The layer an app's sound goes to (0: Other apps). An app gets one when it's first heard.
-    private int LayerFor(string app, ReadOnlySpan<float> samples, long at)
+    private int LayerFor(string app, string process, ReadOnlySpan<float> samples, long at)
     {
         bool audible = false;
         foreach (float v in samples) if (Math.Abs(v) > Audible) { audible = true; break; }
         lock (layerApps)
         {
             if (audible) lastSound[app] = at;
+            layerProcess[app] = process;
             for (int l = 1; l <= Slots; l++) if (string.Equals(layerApps[l], app, StringComparison.OrdinalIgnoreCase)) return l;
             if (!audible) return 0;
             int free = Array.FindIndex(layerApps, 1, a => a == null);
@@ -201,7 +211,7 @@ public sealed class AppMixSource : IRecordingAudio
         double time = logOffset + Math.Max(0, at) / (double)SampleRate;
         if (layerApps[layer] != null) log?.Close(layer, time);
         layerApps[layer] = app;
-        if (app != null) log?.Open(layer, app, time);
+        if (app != null) log?.Open(layer, app, time, PercentFor(app));
     }
 
     // Opens a stream for every process with an audio session on the playback device,
@@ -343,9 +353,17 @@ public sealed class AppMixSource : IRecordingAudio
 // capture while the replay buffer lives, for naming a saved clip's layer tracks. Old entries are dropped.
 public sealed class LayerLog
 {
-    internal sealed record Span(int Layer, string App, double From, double To);
+    internal sealed record Span(int Layer, string App, double From, double To, int Level = 100);
     private readonly List<Span> spans = new();
-    internal void Open(int layer, string app, double at) { lock (spans) spans.Add(new Span(layer, app, at, double.PositiveInfinity)); }
+    internal void Open(int layer, string app, double at, int level = 100) { lock (spans) spans.Add(new Span(layer, app, at, double.PositiveInfinity, level)); }
+    internal void SetLevel(int layer, int level)
+    {
+        lock (spans)
+        {
+            int i = spans.FindLastIndex(s => s.Layer == layer && double.IsPositiveInfinity(s.To));
+            if (i >= 0) spans[i] = spans[i] with { Level = level };
+        }
+    }
     internal void Close(int layer, double at)
     {
         lock (spans)
@@ -362,13 +380,22 @@ public sealed class LayerLog
     internal string Title(int layer, double from, double to)
     {
         var parts = Snapshot().Where(s => s.Layer == layer && s.To > from && s.From < to).OrderBy(s => s.From)
-            .Select(s => $"{Clean(s.App)}@{Math.Max(0, s.From - from).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}");
+            .Select(s => $"{Clean(s.App)}@{Math.Max(0, s.From - from).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}{(s.Level != 100 ? "*" + s.Level : "")}");
         return "Apps: " + string.Join(";", parts);
     }
     private static string Clean(string app)
     {
-        var text = new string(app.Where(c => !char.IsControl(c) && c is not ';' and not '@' and not '=' and not '\\').ToArray()).Trim();
+        var text = new string(app.Where(c => !char.IsControl(c) && c is not ';' and not '@' and not '*' and not '=' and not '\\').ToArray()).Trim();
         return text.Length == 0 ? "App" : text;
+    }
+    // The level (percent) the layer's apps were recorded at, "Spotify@0.00*20" being 20; null when they differ or
+    // the title has none (100 is left out of titles).
+    internal static int? ParseLevel(string? title)
+    {
+        if (title == null || !title.StartsWith("Apps:", StringComparison.Ordinal)) return null;
+        var levels = title[5..].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => { int star = p.LastIndexOf('*'); return star > 0 && int.TryParse(p[(star + 1)..], out var v) ? v : 100; }).Distinct().ToList();
+        return levels.Count == 1 ? levels[0] : null;
     }
     // The apps (and when each starts) in a layer track's title; empty for any other title.
     internal static IReadOnlyList<(string App, double From)> Parse(string? title)
@@ -378,7 +405,8 @@ public sealed class LayerLog
         foreach (var part in title[5..].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             int at = part.LastIndexOf('@');
-            if (at > 0 && double.TryParse(part[(at + 1)..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var from)) list.Add((part[..at], from));
+            int star = part.IndexOf('*', at + 1);
+            if (at > 0 && double.TryParse(star < 0 ? part[(at + 1)..] : part[(at + 1)..star], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var from)) list.Add((part[..at], from));
         }
         return list;
     }

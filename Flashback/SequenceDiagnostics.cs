@@ -335,6 +335,11 @@ internal static class SequenceDiagnostics
         var titles = Recorder.LayerTitles(log, 101, 107, microphone: false).ToList();
         Check(titles.Contains("title=Apps: Spotify@0.00") && titles.Contains("title=Apps: Google Chrome@0.00;Discord@3.00") && titles.Contains("title=Microphone (off)") && titles.Count(t => t == "title=Apps: ") == 4,
             "A saved clip's app layers are named for their apps, and when each starts in the clip");
+        var levelLog = new LayerLog(); levelLog.Open(1, "Discord", 100, 20); levelLog.Open(2, "Spotify", 100); levelLog.Open(3, "Chrome", 100, 20); levelLog.SetLevel(3, 35);
+        var levelTitles = Recorder.LayerTitles(levelLog, 100, 107, microphone: false).Select(t => t.StartsWith("title=") ? t[6..] : t).ToList();
+        Check(levelTitles.Contains("Apps: Discord@0.00*20") && levelTitles.Contains("Apps: Spotify@0.00") && levelTitles.Contains("Apps: Chrome@0.00*35")
+            && LayerLog.ParseLevel("Apps: Discord@0.00*20") == 20 && LayerLog.ParseLevel("Apps: Spotify@0.00") == 100 && LayerLog.ParseLevel("Apps: A@0.00*20;B@2.00*50") == null && LayerLog.Parse("Apps: Discord@3.50*20")[0].From == 3.5,
+            "A layer's title carries the level its app was recorded at (Settings' per-app level), and the editor reads it back");
         var make = new List<string> { "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6" };
         foreach (var tone in new[] { "sine=frequency=300:duration=6,volume=0.5", "anullsrc=r=48000:cl=stereo:d=6", "sine=frequency=900:duration=6,volume=0.5", "sine=frequency=1500:duration=6,volume=0.5" }) make.AddRange(new[] { "-f", "lavfi", "-i", tone });
         make.AddRange(new[] { "-filter_complex", "[1:a][3:a][4:a]amix=inputs=3:normalize=0[all];[2:a]asplit=5[m][q1][q2][q3][q4]", "-map", "0:v", "-map", "[all]", "-map", "1:a", "-map", "[m]", "-map", "3:a", "-map", "4:a", "-map", "[q1]", "-map", "[q2]", "-map", "[q3]", "-map", "[q4]",
