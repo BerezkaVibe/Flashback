@@ -15,6 +15,8 @@ internal sealed record AudioLane(string Name, float[] Peaks, bool Muted, bool To
     // It's drawn as bars where it made sound, like music, rather than as a waveform.
     public IReadOnlyList<(string App, double From)> Apps { get; init; } = Array.Empty<(string, double)>();
     public double Volume { get; init; } = 1;
+    // The level (1 = 100%) the app was recorded at in Settings, which the layer's volume is shown against.
+    public double Recorded { get; init; } = 1;
     internal bool IsAppLayer => Apps.Count > 0;
 }
 // A stretch where the picture (Lane -1) or one audio lane is removed without removing time.
@@ -811,7 +813,7 @@ internal sealed class TrimTimeline : FrameworkElement
     {
         dc.DrawRoundedRectangle(SoundRow, null, new Rect(Inset, top, width, LaneHeight), 4, 4);
         var edge = new Pen(AppEdge, 1) { DashStyle = lane.Muted ? DashStyles.Dash : null };
-        string level = lane.Muted ? " · muted" : Math.Abs(lane.Volume - 1) > .005 ? $" · {lane.Volume * 100:0}%" : "";
+        string level = lane.Muted ? " · muted" : Math.Abs(lane.Volume * lane.Recorded - 1) > .005 ? $" · {lane.Volume * lane.Recorded * 100:0}%" : "";
         foreach (var (from, to, app) in AppBars(lane))
             foreach (var (x0, x1) in XSpans(from, to))
             {

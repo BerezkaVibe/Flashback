@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 namespace Flashback;
 
 // Decodes one audio track to 8 kHz mono and keeps a peak per 10 ms for the timeline.
-// Runs once per opened clip at below-normal priority; nothing is kept on disk.
+// Runs at below-normal priority (lowest when loading ahead); finished waveforms are kept on disk (LoadAllAsync).
 internal static class AudioWaveforms
 {
     // Each audio track's name (its title or handler name), in track order, from ffmpeg's summary of the file.
@@ -31,7 +31,7 @@ internal static class AudioWaveforms
         return titles;
     }
 
-    internal static async Task<float[]> LoadAsync(string path, int track, CancellationToken token)
+    internal static async Task<float[]> LoadAsync(string path, int track, CancellationToken token, ProcessPriorityClass priority = ProcessPriorityClass.BelowNormal)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -40,7 +40,7 @@ internal static class AudioWaveforms
         using var job = new ChildProcessJob();
         using var process = Process.Start(info) ?? throw new IOException("Could not read the audio.");
         job.Add(process);
-        try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+        try { process.PriorityClass = priority; } catch { }
         var errors = process.StandardError.ReadToEndAsync();
         var peaks = new List<float>(8192);
         var stream = process.StandardOutput.BaseStream; var buffer = new byte[16000];
@@ -73,7 +73,7 @@ internal static class AudioWaveforms
     // Peaks for several tracks of one file. A file's audio has to be read through the whole file (a video's
     // pictures sit between its sound), which costs far more than decoding, so every track not already kept
     // comes from one pass instead of one process each, and finished waveforms are kept on disk for next time.
-    internal static async Task<float[][]> LoadAllAsync(string path, IReadOnlyList<int> tracks, CancellationToken token)
+    internal static async Task<float[][]> LoadAllAsync(string path, IReadOnlyList<int> tracks, CancellationToken token, ProcessPriorityClass priority = ProcessPriorityClass.BelowNormal)
     {
         var result = new float[tracks.Count][];
         string? key = CacheKey(path);
@@ -87,13 +87,13 @@ internal static class AudioWaveforms
         var fresh = new Dictionary<int, float[]>();
         if (wanted.Count > 1 && wanted.Count <= 32)
         {
-            try { var merged = await LoadMergedAsync(path, wanted, token).ConfigureAwait(false); for (int w = 0; w < wanted.Count; w++) fresh[wanted[w]] = merged[w]; }
+            try { var merged = await LoadMergedAsync(path, wanted, token, priority).ConfigureAwait(false); for (int w = 0; w < wanted.Count; w++) fresh[wanted[w]] = merged[w]; }
             catch (OperationCanceledException) { throw; }
             catch { fresh.Clear(); } // Fall back to a pass for each track.
         }
         if (fresh.Count == 0)
         {
-            var each = await Task.WhenAll(wanted.Select(t => LoadAsync(path, t, token))).ConfigureAwait(false);
+            var each = await Task.WhenAll(wanted.Select(t => LoadAsync(path, t, token, priority))).ConfigureAwait(false);
             for (int w = 0; w < wanted.Count; w++) fresh[wanted[w]] = each[w];
         }
         foreach (int i in missing) { result[i] = fresh[tracks[i]]; if (key != null) WriteCached(key, tracks[i], result[i]); }
@@ -103,7 +103,7 @@ internal static class AudioWaveforms
 
     // Every wanted track decoded to 8 kHz mono and merged into one stream with a channel for each, so the
     // file is read and demuxed once.
-    private static async Task<float[][]> LoadMergedAsync(string path, IReadOnlyList<int> tracks, CancellationToken token)
+    private static async Task<float[][]> LoadMergedAsync(string path, IReadOnlyList<int> tracks, CancellationToken token, ProcessPriorityClass priority)
     {
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -113,7 +113,7 @@ internal static class AudioWaveforms
         using var job = new ChildProcessJob();
         using var process = Process.Start(info) ?? throw new IOException("Could not read the audio.");
         job.Add(process);
-        try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+        try { process.PriorityClass = priority; } catch { }
         var errors = process.StandardError.ReadToEndAsync();
         var peaks = Enumerable.Range(0, n).Select(_ => new List<float>(8192)).ToArray();
         var peak = new float[n]; int inBlock = 0, channel = 0; int carry = -1;

@@ -89,7 +89,10 @@ public partial class TrimWindow
         DesktopMixName.Text = lanes.Count > 0 && lanes[0].Name == "Other apps" ? "Other apps" : "Desktop";
         laneTracks = lanes.Select(n => n.Track).ToArray(); waveformsLoaded = false;
         RefreshLaneStates();
-        await LoadWaveformsAsync(token); // Starts as the clip opens, at low priority, so it is ready when the audio opens.
+        // Reading the whole file competes with the editor opening the video, so it waits a few seconds (at once
+        // if the audio is already open), at low priority, to be ready by the time the audio opens.
+        if (!Timeline.LanesExpanded) { try { await Task.Delay(4000, token); } catch (OperationCanceledException) { return; } }
+        await LoadWaveformsAsync(token);
     }
     private int[] laneTracks = Array.Empty<int>();
     // The level (percent) an app layer was recorded at, by track, when it wasn't 100: Settings' level for that app.
@@ -102,7 +105,8 @@ public partial class TrimWindow
         waveformsLoaded = true; string path = source; var tracks = laneTracks;
         try
         {
-            var peaks = await Task.Run(() => AudioWaveforms.LoadAllAsync(path, tracks, token), token);
+            var priority = Timeline.LanesExpanded ? System.Diagnostics.ProcessPriorityClass.BelowNormal : System.Diagnostics.ProcessPriorityClass.Idle; // Early loading never gets in the way
+            var peaks = await Task.Run(() => AudioWaveforms.LoadAllAsync(path, tracks, token, priority), token);
             if (token.IsCancellationRequested || path != source) return;
             Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Peaks = peaks[i] }).ToArray(); RefreshLaneStates();
         }
@@ -305,7 +309,7 @@ public partial class TrimWindow
     {
         ApplyPreviewTracks();
         if (!media.HasSeparateTracks || Timeline.Lanes.Count != laneTracks.Length) return;
-        Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i), Volume = LaneVolume(i) }).ToArray();
+        Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Muted = LaneMuted(i), Volume = LaneVolume(i), Recorded = recordedLevels.TryGetValue(laneTracks[i], out var recorded) ? recorded / 100.0 : 1 }).ToArray();
     }
     // The FFmpeg preview plays the separate tracks at their lanes' volumes, with each lane's cut-outs and
     // volume parts, as the export mixes them (a muted app layer isn't heard); with every lane at 100% and
