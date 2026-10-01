@@ -113,6 +113,12 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--layout-test"))
+        {
+            try { await LayoutDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--open-cpu-test"))
         {
             try { await OpenCpuDiagnostics.RunAsync(); Shutdown(0); }
@@ -303,6 +309,12 @@ public partial class App : Application
         if (e.Args.Contains("--self-test") || e.Args.Contains("--capture-test"))
         {
             try { await Diagnostics.RunAsync(e.Args.Contains("--capture-test")); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--layout-shots"))
+        {
+            try { await LayoutShots.RunAsync(); Shutdown(0); }
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }

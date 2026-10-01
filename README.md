@@ -56,6 +56,33 @@ Display capture retries indefinitely, with bounded memory and capped retry delay
 - The optional overlay appears immediately when Save replay or its hotkey is pressed, then updates with success or failure; saving runs in the background. Choose its corner and duration in Settings. Windows notifications are separate. Banners show over borderless and windowed games.
 - Startup and automatic buffering are optional and off by default.
 
+## Layouts
+
+Settings > Appearance > Layout changes how the main window looks. Nothing else changes; every setting and page works the same in each layout.
+
+- **Flashback (Default)**: the window as it has always been, with the sidebar.
+- **Console (Compact)** (480 × 530) and **Console (Spacious)** (580 × 640): a command-window look. A frameless window with the pages as tabs in the titlebar (status, clips, settings, editor), a monospaced font, square controls, `[x]` switches and `[play]`-style buttons in the clip list. A Status page shows the capture, trigger, audio sources, the buffer filling and recent messages. The console layouts have their own palettes and accents. The editor keeps its normal look.
+- **Custom layouts** are small `.json` files in `%LOCALAPPDATA%\Flashback\Layouts`. Use **Import file…**, paste a GitHub link and press **Download**, or **Save template** to start from the current layout. The list is read again whenever it is opened. A layout holds only values (size, font, spacing, tabs, colors), nothing is run, and every value is checked: a bad file is refused with the reason, and sizes are held to sensible limits. Links must be `https` links to GitHub (github.com file pages, raw.githubusercontent.com or gist.githubusercontent.com), and files over 32 KB are refused.
+
+```json
+{
+  "name": "Streamer Compact",
+  "author": "someone",
+  "baseStyle": "console",
+  "window":     { "width": 500, "height": 550, "minWidth": 440, "minHeight": 480 },
+  "typography": { "fontFamily": "Consolas", "fontSize": 11 },
+  "spacing":    { "margin": 6, "logHeight": 65 },
+  "navigation": { "tabs": ["status", "clips", "settings", "editor"] },
+  "theme": {
+    "palette": "Matrix", "accent": "Green",
+    "colors": { "background": "#000000", "surface": "#080808", "control": "#121212", "outline": "#222222",
+                "accent": "#00FF66", "text": "#EEEEEE", "muted": "#888888", "dim": "#555555" }
+  }
+}
+```
+
+Only `name` is required. Tabs must include `settings`. Palettes: Monochrome, Matrix, Midnight, Dracula, Gruvbox, Charcoal, Slate. Accents: White, Green, Cyan, Purple, Amber, Rose, Mint. `colors` is optional and overrides the palette and accent.
+
 ## Clips and editing
 
 Clips save into game/app subfolders with local timestamps, for example `Rainbow Six Siege — 2026-09-19_14-22-08-125 — 60s.mp4`. A manual game-folder override is available in Settings.

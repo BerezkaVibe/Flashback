@@ -16,6 +16,11 @@ public sealed class Settings
     public string Quality { get; set; } = "Balanced";
     public string Palette { get; set; } = "Charcoal";
     public string AccentColor { get; set; } = "Mint";
+    // The window layout: "Flashback (Default)", a built-in console layout, or a layout file in the Layouts folder
+    // (see LayoutCatalog). The console layouts keep their own colors so the default layout's are left alone.
+    public string Layout { get; set; } = LayoutCatalog.DefaultName;
+    public string ConsolePalette { get; set; } = "Monochrome";
+    public string ConsoleAccent { get; set; } = "White";
     public string Encoder { get; set; } = "Automatic";
     public int DisplayIndex { get; set; }
     public bool DesktopAudio { get; set; } = true;
@@ -123,6 +128,9 @@ public sealed class Settings
         Fix(OverlaySeconds < 2 || OverlaySeconds > 8, "saved-clip pop-up time", () => OverlaySeconds = d.OverlaySeconds);
         Fix(!SaveSound.IsValid(SavedSound), "saved-clip sound", () => SavedSound = d.SavedSound);
         Fix(SavedSoundVolume < 1 || SavedSoundVolume > 100, "saved-clip sound volume", () => SavedSoundVolume = d.SavedSoundVolume);
+        Layout = LayoutCatalog.Clean(Layout);
+        if (!Appearance.ConsolePalettes.Contains(ConsolePalette ?? "")) ConsolePalette = d.ConsolePalette;
+        if (!Appearance.ConsoleAccents.Contains(ConsoleAccent ?? "")) ConsoleAccent = d.ConsoleAccent;
         Palette ??= d.Palette; AccentColor ??= d.AccentColor; AudioDeviceId ??= ""; MicrophoneDeviceId ??= ""; GameOverride ??= ""; ExternalEditorPath ??= "";
         // Anything else Validate still refuses: all defaults, as before.
         if (Throws(Validate)) { var fresh = new Settings(); foreach (var p in typeof(Settings).GetProperties().Where(p => p.CanWrite)) p.SetValue(this, p.GetValue(fresh)); reset.Add("everything else"); }

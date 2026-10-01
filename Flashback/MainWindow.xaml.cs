@@ -149,7 +149,7 @@ public partial class MainWindow : Window
     {
         ReplaySeconds = (int)(Math.Round(LengthSlider.Value/5)*5), FrameRate = (int)FpsBox.SelectedValue, Height = (int)ResolutionBox.SelectedValue,
         Quality = (string)QualityBox.SelectedValue, DisplayIndex = (int)DisplayBox.SelectedValue,
-        Encoder = (string)EncoderBox.SelectedItem, Palette=settings.Palette, AccentColor=settings.AccentColor,
+        Encoder = (string)EncoderBox.SelectedItem, Palette=settings.Palette, AccentColor=settings.AccentColor, Layout=settings.Layout, ConsolePalette=settings.ConsolePalette, ConsoleAccent=settings.ConsoleAccent,
         DesktopAudio = AudioCheck.IsChecked == true, ShowCursor = CursorCheck.IsChecked == true,
         AudioDeviceId = AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId,
         MicrophoneAudio = MicrophoneCheck.IsChecked == true, AudioBitrate = AudioBitrateBox.SelectedValue as int? ?? settings.AudioBitrate, MicNoiseReduction = (MicNoiseBox.SelectedItem as ComboBoxItem)?.Tag as string ?? settings.MicNoiseReduction,
@@ -434,6 +434,7 @@ public partial class MainWindow : Window
         trayToggle.Text = active || recovery.IsRunning ? "Pause buffer" : "Start buffer"; trayToggle.Enabled = ToggleButton.IsEnabled;
         traySave.Enabled = TopSaveButton.IsEnabled;
         tray.Text = active || recovery.IsRunning ? "Flashback — recording" : "Flashback — paused";
+        UpdateConsoleStatus();
     }
     private void Tell(string message, bool error = false)
     {
