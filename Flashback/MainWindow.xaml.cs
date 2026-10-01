@@ -136,7 +136,7 @@ public partial class MainWindow : Window
         SavedSoundBox.SelectedItem = settings.SavedSound; SavedSoundVolumeSlider.Value = settings.SavedSoundVolume;
         LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
         UpdateCheck.IsChecked = settings.CheckForUpdates; AutoUpdateCheck.IsChecked = settings.InstallUpdatesAutomatically; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; WindowsPreviewCheck.IsChecked = settings.WindowsPreview;
-        if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = "Needs Windows 11 (or Windows 10 build 20348 or later)."; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
+        if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = AppMixSource.Requirement; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
     private void ReplayLength_Changed(object sender,RoutedPropertyChangedEventArgs<double> e)
     {

@@ -31,8 +31,10 @@ public sealed class AppMixSource : IRecordingAudio
     private const int RingFrames = SampleRate * 2, Latency = SampleRate / 10;
     // Quieter than this (about -60 dB) isn't a sound for giving an app a layer.
     private const float Audible = .001f;
-    // Windows 10 build 20348 and Windows 11 support process loopback capture.
+    // Capturing one app's sound (process loopback) needs Windows 11 or newer; the build number is what Windows reports.
     internal static bool Supported => Environment.OSVersion.Version.Build >= 20348;
+    // What to tell someone whose PC can't do it: Windows 11 or newer, and Windows 10 is named only on Windows 10.
+    internal static string Requirement => Environment.OSVersion.Version is { Major: 10, Build: < 22000 } ? "Per-app levels aren't available on Windows 10. They need Windows 11 or newer." : "Per-app levels need Windows 11 or newer.";
     private readonly string deviceId;
     private readonly ConcurrentDictionary<int, AppStream> streams = new();
     private readonly object mix = new();
@@ -72,7 +74,7 @@ public sealed class AppMixSource : IRecordingAudio
     // time this source's time starts at.
     public AppMixSource(string deviceId, IReadOnlyDictionary<string, int> appLevels, LayerLog? log = null, double logOffset = 0)
     {
-        if (!Supported) throw new PlatformNotSupportedException("Per-app recording levels need Windows 11 or Windows 10 build 20348 or later.");
+        if (!Supported) throw new PlatformNotSupportedException("Per-app recording levels need Windows 11 or newer.");
         this.deviceId = deviceId; levels = Normalize(appLevels); this.log = log; this.logOffset = logOffset;
         outputs = Enumerable.Range(0, log != null ? Slots + 1 : 1).Select(_ => new Output()).ToArray();
     }

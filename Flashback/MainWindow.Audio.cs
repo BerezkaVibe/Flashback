@@ -27,7 +27,7 @@ public partial class MainWindow
     private void LoadAppMix()
     {
         AppMixRows.Children.Clear(); appMixSliders.Clear();
-        if (!AppMixSource.Supported) { AppMixToggle.Visibility = Visibility.Collapsed; AppMixNote.Text = "Per-app levels need Windows 11 or a recent Windows 10 build."; AppMixNote.Visibility = Visibility.Visible; return; }
+        if (!AppMixSource.Supported) { AppMixToggle.Visibility = Visibility.Collapsed; AppMixNote.Text = AppMixSource.Requirement; AppMixNote.Visibility = Visibility.Visible; return; }
         var running = AppMixSource.ActiveAppPaths(AudioDeviceBox.SelectedValue as string ?? settings.AudioDeviceId);
         var apps = running.Keys.Concat(settings.AppVolumes.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(a => a, StringComparer.OrdinalIgnoreCase);
         foreach (var app in apps)
