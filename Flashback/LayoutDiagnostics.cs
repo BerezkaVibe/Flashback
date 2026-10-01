@@ -37,6 +37,8 @@ internal static class LayoutDiagnostics
             && f.Tabs.SequenceEqual(new[] { "clips", "settings", "editor" }) && f.Colors["background"] == "#101010" && f.Colors["accent"] == "#FF8800" && f.Colors.Count == 2 && f.Author == "someone",
             $"A full layout is read in every part ({full.Error})");
         Check(full.Notes.Any(n => n.Contains("nonsense")), "A color the app doesn't use is ignored with a note");
+        var vivid = LayoutParser.Parse("{ \"name\": \"Vivid\", \"theme\": { \"palette\": \"synthwave\", \"accent\": \"hot pink\" } }").Layout;
+        Check(vivid is { Palette: "Synthwave", Accent: "Hot Pink" } && Appearance.Palettes.Length >= 13 && Appearance.Accents.Length >= 16 && Appearance.ConsolePalettes.Length >= 17 && Appearance.ConsoleColors("Ocean", "Lime")["Accent"] == "#B6F23A" && Appearance.ConsoleColors("Ocean", "Violet")["OnAccent"] == "#F5F5F5" && Appearance.Palettes.Concat(Appearance.ConsolePalettes).All(p => Appearance.PaletteChoices(true).Concat(Appearance.PaletteChoices(false)).Any(c => c.Name == p)), "The newer palettes and vivid accents are available in both families, and read in layout files");
         var clamped = LayoutParser.Parse("{ \"name\": \"Big\", \"window\": { \"width\": 99999, \"height\": 5 }, \"typography\": { \"fontSize\": 99 } }");
         Check(clamped.Layout is { Width: 1400, Height: 380, FontSize: 18 } && clamped.Notes.Count >= 3, "Sizes outside the limits are held to them, with notes");
         foreach (var (json, expect, label) in new[]

@@ -318,6 +318,12 @@ public partial class App : Application
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
+        if (e.Args.Contains("--palette-sheet"))
+        {
+            try { await PaletteSheet.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Contains("--render-ui"))
         {
             var preview = new MainWindow(true);

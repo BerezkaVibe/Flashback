@@ -8,27 +8,95 @@ using System.Windows.Shapes;
 
 namespace Flashback;
 
+// One entry in the palette or accent list: its name and the colors to draw its swatch with.
+internal sealed record ColorChoice(string Name, Brush Fill, Brush Edge);
+
 internal static class Appearance
 {
-    internal static readonly string[] Palettes = { "Charcoal", "Midnight", "Slate" };
-    internal static readonly string[] Accents = { "Mint", "Blue", "Lavender", "Rose", "Amber" };
-    // The console layouts' colors: Surface, controls and outlines come from the palette, the highlight from the accent.
-    internal static readonly string[] ConsolePalettes = { "Monochrome", "Matrix", "Midnight", "Dracula", "Gruvbox", "Charcoal", "Slate" };
-    internal static readonly string[] ConsoleAccents = { "White", "Green", "Cyan", "Purple", "Amber", "Rose", "Mint" };
+    // Backgrounds, as: window, surface, controls, outlines, titlebar. The first three of each family keep the
+    // colors they have always had; the rest are newer, richer and more colorful, and are shared by both families.
+    private static readonly Dictionary<string, string[]> Shared = new()
+    {
+        ["Ocean"] = new[] { "#04141D", "#082230", "#0E3347", "#1B5373", "#051823" },
+        ["Teal"] = new[] { "#041816", "#082826", "#0E3B38", "#1A5F5A", "#051C1A" },
+        ["Forest"] = new[] { "#06140C", "#0C2216", "#133522", "#22583A", "#07180F" },
+        ["Violet"] = new[] { "#0E0726", "#180F3C", "#251754", "#3B2878", "#10092C" },
+        ["Plum"] = new[] { "#16081C", "#241030", "#351A48", "#522B70", "#190A20" },
+        ["Crimson"] = new[] { "#1A060A", "#2B0B12", "#40111B", "#661C2C", "#1E070C" },
+        ["Ember"] = new[] { "#180C03", "#281507", "#3D210B", "#63380F", "#1C0E04" },
+        ["Synthwave"] = new[] { "#120628", "#1D0C3E", "#2C1259", "#4A1D85", "#15072F" },
+        ["Nord"] = new[] { "#1D222B", "#262C37", "#323B49", "#4A566A", "#20262F" },
+        ["Cocoa"] = new[] { "#120D0A", "#1D1511", "#2B201A", "#46352B", "#150F0C" }
+    };
+    private static readonly string[] SharedOrder = { "Ocean", "Teal", "Forest", "Violet", "Plum", "Crimson", "Ember", "Synthwave", "Nord", "Cocoa" };
+
+    // Vivid highlights, shared by both families next to their own older ones.
+    private static readonly Dictionary<string, string> VividAccents = new()
+    {
+        ["Electric Blue"] = "#3D9BFF", ["Sky"] = "#38D0FF", ["Aqua"] = "#19E6D2", ["Neon Green"] = "#2BF26D", ["Lime"] = "#B6F23A",
+        ["Gold"] = "#FFC62E", ["Orange"] = "#FF8A1E", ["Red"] = "#FF4D5E", ["Hot Pink"] = "#FF4FA8", ["Magenta"] = "#E655FF", ["Violet"] = "#9F6BFF"
+    };
+    private static readonly string[] VividOrder = { "Electric Blue", "Sky", "Aqua", "Neon Green", "Lime", "Gold", "Orange", "Red", "Hot Pink", "Magenta", "Violet" };
+
+    // The default layout's own: kept as they were.
+    private static readonly Dictionary<string, string> ClassicAccentColors = new() { ["Mint"] = "#9CE2C1", ["Blue"] = "#9FCBFF", ["Lavender"] = "#CEB5FF", ["Rose"] = "#F5AAC9", ["Amber"] = "#F3C881" };
+    private static readonly Dictionary<string, string[]> ClassicPalette = new()
+    {
+        ["Charcoal"] = new[] { "#060708", "#111318", "#252B34", "#353E49", "#060708" },
+        ["Midnight"] = new[] { "#0D1323", "#161E32", "#212C43", "#31415F", "#0D1323" },
+        ["Slate"] = new[] { "#20252B", "#282F37", "#353E49", "#505C6B", "#20252B" }
+    };
+    // The console layouts': kept as they were.
+    private static readonly Dictionary<string, string> ConsoleAccentColors = new() { ["White"] = "#FFFFFF", ["Green"] = "#00FF66", ["Cyan"] = "#38BDF8", ["Purple"] = "#C084FC", ["Amber"] = "#FBBF24", ["Rose"] = "#F43F5E", ["Mint"] = "#2DD4BF" };
+    private static readonly Dictionary<string, string[]> ConsolePalette = new()
+    {
+        ["Monochrome"] = new[] { "#000000", "#080808", "#121212", "#222222", "#050505" },
+        ["Matrix"] = new[] { "#040805", "#08120A", "#0F1F12", "#1C3822", "#050B06" },
+        ["Midnight"] = new[] { "#080D1A", "#0F172A", "#19243C", "#28385E", "#0A1020" },
+        ["Dracula"] = new[] { "#12111A", "#1A1826", "#262338", "#3C3756", "#15141F" },
+        ["Gruvbox"] = new[] { "#141412", "#1E1E1A", "#292924", "#404037", "#181815" },
+        ["Charcoal"] = new[] { "#0E0F12", "#16181D", "#22252C", "#353945", "#111317" },
+        ["Slate"] = new[] { "#171B21", "#20252B", "#2B323B", "#3E4854", "#1B2027" }
+    };
+
+    internal static readonly string[] Palettes = ClassicPalette.Keys.Concat(SharedOrder).ToArray();
+    internal static readonly string[] Accents = ClassicAccentColors.Keys.Concat(VividOrder).ToArray();
+    internal static readonly string[] ConsolePalettes = ConsolePalette.Keys.Concat(SharedOrder).ToArray();
+    internal static readonly string[] ConsoleAccents = ConsoleAccentColors.Keys.Concat(VividOrder).ToArray();
+
+    private static string[] PaletteColors(string name, bool console) =>
+        (console ? ConsolePalette : ClassicPalette).TryGetValue(name, out var own) ? own : Shared.TryGetValue(name, out var shared) ? shared : (console ? ConsolePalette["Monochrome"] : ClassicPalette["Charcoal"]);
+    private static string AccentColor(string name, bool console) =>
+        (console ? ConsoleAccentColors : ClassicAccentColors).TryGetValue(name, out var own) ? own : VividAccents.TryGetValue(name, out var vivid) ? vivid : console ? "#FFFFFF" : "#9CE2C1";
+
+    private static Brush Frozen(string hex) { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); b.Freeze(); return b; }
+    // The lists the pickers show: each name with a swatch (a palette's surface, an accent's color).
+    internal static List<ColorChoice> PaletteChoices(bool console) => (console ? ConsolePalettes : Palettes).Select(n => { var c = PaletteColors(n, console); return new ColorChoice(n, Frozen(c[2]), Frozen(c[3])); }).ToList();
+    internal static List<ColorChoice> AccentChoices(bool console) => (console ? ConsoleAccents : Accents).Select(n => new ColorChoice(n, Frozen(AccentColor(n, console)), Frozen(AccentColor(n, console)))).ToList();
+
+    // Text on the highlight: dark on a light one, light on a dark one.
+    private static string OnAccentFor(Color accent) => (accent.R * .299 + accent.G * .587 + accent.B * .114) / 255 > .55 ? "#111419" : "#F5F5F5";
+
+    internal static void Apply(string palette, string accent)
+    {
+        string[] colors = PaletteColors(palette, false); string accentHex = AccentColor(accent, false);
+        void Set(string key, string value) { var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value)); brush.Freeze(); Application.Current.Resources[key] = brush; }
+        Set("AppBackground", colors[0]); Set("Surface", colors[1]); Set("ControlSurface", colors[2]); Set("Outline", colors[3]);
+        Set("Accent", accentHex);
+        var surface = (Color)ColorConverter.ConvertFromString(colors[1]); var highlight = (Color)ColorConverter.ConvertFromString(accentHex);
+        Set("OnAccent", OnAccentFor(highlight));
+        void Tint(string key, double strength)
+        {
+            var color = Color.FromRgb((byte)(surface.R * (1 - strength) + highlight.R * strength), (byte)(surface.G * (1 - strength) + highlight.G * strength), (byte)(surface.B * (1 - strength) + highlight.B * strength));
+            Set(key, color.ToString());
+        }
+        Tint("SelectionSurface", .24); Tint("HoverSurface", .12);
+    }
+
     // Colors by resource name for a console layout: its palette and accent, then any of its own colors on top.
     internal static Dictionary<string, string> ConsoleColors(string palette, string accent, IReadOnlyDictionary<string, string>? own = null)
     {
-        string[] c = palette switch
-        {
-            "Matrix" => new[] { "#040805", "#08120A", "#0F1F12", "#1C3822", "#050B06" },
-            "Midnight" => new[] { "#080D1A", "#0F172A", "#19243C", "#28385E", "#0A1020" },
-            "Dracula" => new[] { "#12111A", "#1A1826", "#262338", "#3C3756", "#15141F" },
-            "Gruvbox" => new[] { "#141412", "#1E1E1A", "#292924", "#404037", "#181815" },
-            "Charcoal" => new[] { "#0E0F12", "#16181D", "#22252C", "#353945", "#111317" },
-            "Slate" => new[] { "#171B21", "#20252B", "#2B323B", "#3E4854", "#1B2027" },
-            _ => new[] { "#000000", "#080808", "#121212", "#222222", "#050505" }
-        };
-        string highlight = accent switch { "Green" => "#00FF66", "Cyan" => "#38BDF8", "Purple" => "#C084FC", "Amber" => "#FBBF24", "Rose" => "#F43F5E", "Mint" => "#2DD4BF", _ => "#FFFFFF" };
+        string[] c = PaletteColors(palette, true); string highlight = AccentColor(accent, true);
         var map = new Dictionary<string, string> { ["AppBackground"] = c[0], ["Surface"] = c[1], ["ControlSurface"] = c[2], ["Outline"] = c[3], ["TitlebarBackground"] = c[4], ["Accent"] = highlight, ["Ink"] = "#EEEEEE", ["Muted"] = "#888888", ["Dim"] = "#555555" };
         if (own != null)
         {
@@ -45,28 +113,8 @@ internal static class Appearance
         var surface = (Color)ColorConverter.ConvertFromString(map["Surface"]); var accentColor = (Color)ColorConverter.ConvertFromString(map["Accent"]);
         string Tint(double s) => Color.FromRgb((byte)(surface.R * (1 - s) + accentColor.R * s), (byte)(surface.G * (1 - s) + accentColor.G * s), (byte)(surface.B * (1 - s) + accentColor.B * s)).ToString();
         map["SelectionSurface"] = Tint(.25); map["HoverSurface"] = Tint(.14);
-        double luma = (accentColor.R * .299 + accentColor.G * .587 + accentColor.B * .114) / 255;
-        map["OnAccent"] = luma > .55 ? "#111419" : "#F5F5F5";
+        map["OnAccent"] = OnAccentFor(accentColor);
         return map;
-    }
-    internal static void Apply(string palette, string accent)
-    {
-        string[] colors=palette switch {
-            "Midnight"=>new[]{"#0D1323","#161E32","#212C43","#31415F"},
-            "Slate"=>new[]{"#20252B","#282F37","#353E49","#505C6B"},
-            _=>new[]{"#060708","#111318","#252B34","#353E49"}
-        };
-        void Set(string key,string value) { var brush=new SolidColorBrush((Color)ColorConverter.ConvertFromString(value)); brush.Freeze(); Application.Current.Resources[key]=brush; }
-        Set("AppBackground",colors[0]); Set("Surface",colors[1]); Set("ControlSurface",colors[2]); Set("Outline",colors[3]);
-        Set("Accent",accent switch { "Blue"=>"#9FCBFF","Lavender"=>"#CEB5FF","Rose"=>"#F5AAC9","Amber"=>"#F3C881",_=>"#9CE2C1" });
-        var surface=(Color)ColorConverter.ConvertFromString(colors[1]);
-        var highlight=((SolidColorBrush)Application.Current.Resources["Accent"]).Color;
-        void Tint(string key,double strength)
-        {
-            var color=Color.FromRgb((byte)(surface.R*(1-strength)+highlight.R*strength),(byte)(surface.G*(1-strength)+highlight.G*strength),(byte)(surface.B*(1-strength)+highlight.B*strength));
-            Set(key,color.ToString());
-        }
-        Tint("SelectionSurface",.24); Tint("HoverSurface",.12);
     }
 }
 
@@ -112,22 +160,22 @@ public partial class MainWindow
     {
         var palettes = console ? Appearance.ConsolePalettes : Appearance.Palettes; var accents = console ? Appearance.ConsoleAccents : Appearance.Accents;
         string palette = console ? settings.ConsolePalette : settings.Palette, accent = console ? settings.ConsoleAccent : settings.AccentColor;
-        PaletteBox.ItemsSource = palettes; AccentBox.ItemsSource = accents;
-        PaletteBox.SelectedItem = palettes.Contains(palette) ? palette : palettes[0];
-        AccentBox.SelectedItem = accents.Contains(accent) ? accent : accents[0];
+        PaletteBox.ItemsSource = Appearance.PaletteChoices(console); AccentBox.ItemsSource = Appearance.AccentChoices(console);
+        PaletteBox.SelectedValue = palettes.Contains(palette) ? palette : palettes[0];
+        AccentBox.SelectedValue = accents.Contains(accent) ? accent : accents[0];
     }
     private void Appearance_Changed(object sender,SelectionChangedEventArgs e)
     {
         if(!appearanceReady) return;
-        if (PaletteBox.SelectedItem == null || AccentBox.SelectedItem == null) return;
+        if (PaletteBox.SelectedValue is not string palette || AccentBox.SelectedValue is not string accent) return;
         if (layout.Console)
         {
-            settings.ConsolePalette=(string)PaletteBox.SelectedItem; settings.ConsoleAccent=(string)AccentBox.SelectedItem;
+            settings.ConsolePalette=palette; settings.ConsoleAccent=accent;
             ApplyConsoleColors(layout); ShowLayoutNote(layout);
         }
         else
         {
-            settings.Palette=(string)PaletteBox.SelectedItem; settings.AccentColor=(string)AccentBox.SelectedItem;
+            settings.Palette=palette; settings.AccentColor=accent;
             Appearance.Apply(settings.Palette,settings.AccentColor);
         }
         UpdateNavigation(); UpdateQuickAudio(); UpdateConsoleChrome();

@@ -91,7 +91,7 @@ internal static class EditorWorkspaceDiagnostics
         try
         {
             main.MainTabs.SelectedIndex=1;
-            main.PaletteBox.SelectedItem="Midnight"; main.AccentBox.SelectedItem="Blue";
+            main.PaletteBox.SelectedValue="Midnight"; main.AccentBox.SelectedValue="Blue";
             Check(Storage.Load(out _).Palette=="Midnight" && Storage.Load(out _).AccentColor=="Blue","Appearance selection persists immediately");
             main.AppearanceSettings.IsSelected=true;
             EditorDiagnostics.Render((FrameworkElement)main.Content,1000,860,"appearance-settings.png");
