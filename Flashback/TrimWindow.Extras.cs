@@ -89,7 +89,7 @@ public partial class TrimWindow
         DesktopMixName.Text = lanes.Count > 0 && lanes[0].Name == "Other apps" ? "Other apps" : "Desktop";
         laneTracks = lanes.Select(n => n.Track).ToArray(); waveformsLoaded = false;
         RefreshLaneStates();
-        if (Timeline.LanesExpanded) await LoadWaveformsAsync(token);
+        await LoadWaveformsAsync(token); // Starts as the clip opens, at low priority, so it is ready when the audio opens.
     }
     private int[] laneTracks = Array.Empty<int>();
     // The level (percent) an app layer was recorded at, by track, when it wasn't 100: Settings' level for that app.
@@ -102,7 +102,7 @@ public partial class TrimWindow
         waveformsLoaded = true; string path = source; var tracks = laneTracks;
         try
         {
-            var peaks = await Task.Run(() => Task.WhenAll(tracks.Select(t => AudioWaveforms.LoadAsync(path, t, token))), token);
+            var peaks = await Task.Run(() => AudioWaveforms.LoadAllAsync(path, tracks, token), token);
             if (token.IsCancellationRequested || path != source) return;
             Timeline.Lanes = Timeline.Lanes.Select((l, i) => l with { Peaks = peaks[i] }).ToArray(); RefreshLaneStates();
         }

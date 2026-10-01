@@ -349,6 +349,12 @@ internal static class SequenceDiagnostics
         var read = await AudioWaveforms.TitlesAsync(layered, CancellationToken.None);
         Check(read.Count == 9 && read[1] == "Other apps" && LayerLog.Parse(read[3]) is [("Spotify", 0)] && LayerLog.Parse(read[4]) is [("Google Chrome", 0), ("Discord", 3)] && LayerLog.Parse(read[5]).Count == 0,
             $"The editor reads the app layers back from the clip ({string.Join(" | ", read)})");
+        var allPeaks = await AudioWaveforms.LoadAllAsync(layered, Enumerable.Range(0, read.Count).ToArray(), CancellationToken.None);
+        var onePeaks = await AudioWaveforms.LoadAsync(layered, 3, CancellationToken.None);
+        var again = await AudioWaveforms.LoadAllAsync(layered, new[] { 3 }, CancellationToken.None);
+        bool sameWave = allPeaks.Length == read.Count && Math.Abs(allPeaks[3].Length - onePeaks.Length) <= 2 && Enumerable.Range(0, Math.Min(onePeaks.Length, allPeaks[3].Length)).All(i => Math.Abs(onePeaks[i] - allPeaks[3][i]) < .02f) && again.Length == 1 && again[0].Length == allPeaks[3].Length;
+        Check(sameWave && allPeaks[3].Max() > .1f && allPeaks[5].Max() < .02f,
+            $"All of a clip's waveforms come from one pass and match reading a track alone, and the kept copy matches ({allPeaks[3].Length} peaks)");
         async Task<string> ExportLayers(string name, ShareExportOptions with)
         {
             var output = Path.Combine(folder, name + ".mp4"); if (File.Exists(output)) File.Delete(output);
