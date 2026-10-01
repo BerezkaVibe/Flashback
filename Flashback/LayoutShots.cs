@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -48,8 +48,8 @@ internal static class PaletteSheet
     internal static async Task RunAsync()
     {
         Directory.CreateDirectory(Storage.Root);
-        await Sheet(false, new[] { ("Charcoal", "Mint"), ("Midnight", "Lavender"), ("Ocean", "Sky"), ("Teal", "Aqua"), ("Forest", "Neon Green"), ("Violet", "Violet"), ("Plum", "Hot Pink"), ("Crimson", "Red"), ("Ember", "Orange"), ("Synthwave", "Magenta"), ("Nord", "Electric Blue"), ("Cocoa", "Gold") }, "palette-sheet.png");
-        await Sheet(true, new[] { ("Monochrome", "White"), ("Matrix", "Green"), ("Dracula", "Purple"), ("Ocean", "Sky"), ("Forest", "Neon Green"), ("Plum", "Hot Pink"), ("Crimson", "Red"), ("Ember", "Orange"), ("Synthwave", "Magenta"), ("Nord", "Electric Blue"), ("Cocoa", "Gold"), ("Teal", "Aqua") }, "palette-sheet-console.png");
+        await Sheet(false, new[] { ("Charcoal", "Mint"), ("Jet Black", "Red"), ("Jet Black", "Ruby"), ("Jet Black", "Hot Pink"), ("Jet Black", "Fuchsia"), ("Jet Black", "Violet"), ("Jet Black", "Cobalt"), ("Jet Black", "Electric Blue"), ("Jet Black", "Aqua"), ("Jet Black", "Neon Green"), ("Jet Black", "Yellow"), ("Jet Black", "Orange") }, "palette-sheet.png");
+        await Sheet(true, new[] { ("Monochrome", "White"), ("Jet Black", "Red"), ("Jet Black", "Hot Pink"), ("Monochrome", "Magenta"), ("Matrix", "Neon Green"), ("Monochrome", "Cobalt"), ("Monochrome", "Sky"), ("Monochrome", "Aqua"), ("Monochrome", "Spring"), ("Monochrome", "Lime"), ("Monochrome", "Gold"), ("Monochrome", "Orange") }, "palette-sheet-console.png");
     }
     private static async Task Sheet(bool console, (string Palette, string Accent)[] pairs, string file)
     {

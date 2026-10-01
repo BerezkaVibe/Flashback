@@ -13,30 +13,15 @@ internal sealed record ColorChoice(string Name, Brush Fill, Brush Edge);
 
 internal static class Appearance
 {
-    // Backgrounds, as: window, surface, controls, outlines, titlebar. The first three of each family keep the
-    // colors they have always had; the rest are newer, richer and more colorful, and are shared by both families.
-    private static readonly Dictionary<string, string[]> Shared = new()
-    {
-        ["Ocean"] = new[] { "#04141D", "#082230", "#0E3347", "#1B5373", "#051823" },
-        ["Teal"] = new[] { "#041816", "#082826", "#0E3B38", "#1A5F5A", "#051C1A" },
-        ["Forest"] = new[] { "#06140C", "#0C2216", "#133522", "#22583A", "#07180F" },
-        ["Violet"] = new[] { "#0E0726", "#180F3C", "#251754", "#3B2878", "#10092C" },
-        ["Plum"] = new[] { "#16081C", "#241030", "#351A48", "#522B70", "#190A20" },
-        ["Crimson"] = new[] { "#1A060A", "#2B0B12", "#40111B", "#661C2C", "#1E070C" },
-        ["Ember"] = new[] { "#180C03", "#281507", "#3D210B", "#63380F", "#1C0E04" },
-        ["Synthwave"] = new[] { "#120628", "#1D0C3E", "#2C1259", "#4A1D85", "#15072F" },
-        ["Nord"] = new[] { "#1D222B", "#262C37", "#323B49", "#4A566A", "#20262F" },
-        ["Cocoa"] = new[] { "#120D0A", "#1D1511", "#2B201A", "#46352B", "#150F0C" }
-    };
-    private static readonly string[] SharedOrder = { "Ocean", "Teal", "Forest", "Violet", "Plum", "Crimson", "Ember", "Synthwave", "Nord", "Cocoa" };
 
-    // Vivid highlights, shared by both families next to their own older ones.
+    // Vivid highlights, shared by both families next to their own older ones: fully saturated, in order of hue.
     private static readonly Dictionary<string, string> VividAccents = new()
     {
-        ["Electric Blue"] = "#3D9BFF", ["Sky"] = "#38D0FF", ["Aqua"] = "#19E6D2", ["Neon Green"] = "#2BF26D", ["Lime"] = "#B6F23A",
-        ["Gold"] = "#FFC62E", ["Orange"] = "#FF8A1E", ["Red"] = "#FF4D5E", ["Hot Pink"] = "#FF4FA8", ["Magenta"] = "#E655FF", ["Violet"] = "#9F6BFF"
+        ["Red"] = "#FF3B4E", ["Ruby"] = "#FF1F5A", ["Hot Pink"] = "#FF3FA4", ["Fuchsia"] = "#FF2DD1", ["Magenta"] = "#E040FF", ["Violet"] = "#9B6BFF", ["Indigo"] = "#6C63FF", ["Cobalt"] = "#2F6BFF",
+        ["Electric Blue"] = "#2F9BFF", ["Sky"] = "#2FD0FF", ["Aqua"] = "#00F5D4", ["Spring"] = "#00FFA3", ["Neon Green"] = "#2BFF6A", ["Lime"] = "#B8FF2B", ["Yellow"] = "#FFE600",
+        ["Gold"] = "#FFC400", ["Orange"] = "#FF8A00", ["Coral"] = "#FF6A4D"
     };
-    private static readonly string[] VividOrder = { "Electric Blue", "Sky", "Aqua", "Neon Green", "Lime", "Gold", "Orange", "Red", "Hot Pink", "Magenta", "Violet" };
+    private static readonly string[] VividOrder = VividAccents.Keys.ToArray();
 
     // The default layout's own: kept as they were.
     private static readonly Dictionary<string, string> ClassicAccentColors = new() { ["Mint"] = "#9CE2C1", ["Blue"] = "#9FCBFF", ["Lavender"] = "#CEB5FF", ["Rose"] = "#F5AAC9", ["Amber"] = "#F3C881" };
@@ -44,7 +29,8 @@ internal static class Appearance
     {
         ["Charcoal"] = new[] { "#060708", "#111318", "#252B34", "#353E49", "#060708" },
         ["Midnight"] = new[] { "#0D1323", "#161E32", "#212C43", "#31415F", "#0D1323" },
-        ["Slate"] = new[] { "#20252B", "#282F37", "#353E49", "#505C6B", "#20252B" }
+        ["Slate"] = new[] { "#20252B", "#282F37", "#353E49", "#505C6B", "#20252B" },
+        ["Jet Black"] = new[] { "#000000", "#040404", "#0C0C0C", "#1E1E1E", "#000000" }
     };
     // The console layouts': kept as they were.
     private static readonly Dictionary<string, string> ConsoleAccentColors = new() { ["White"] = "#FFFFFF", ["Green"] = "#00FF66", ["Cyan"] = "#38BDF8", ["Purple"] = "#C084FC", ["Amber"] = "#FBBF24", ["Rose"] = "#F43F5E", ["Mint"] = "#2DD4BF" };
@@ -56,22 +42,22 @@ internal static class Appearance
         ["Dracula"] = new[] { "#12111A", "#1A1826", "#262338", "#3C3756", "#15141F" },
         ["Gruvbox"] = new[] { "#141412", "#1E1E1A", "#292924", "#404037", "#181815" },
         ["Charcoal"] = new[] { "#0E0F12", "#16181D", "#22252C", "#353945", "#111317" },
-        ["Slate"] = new[] { "#171B21", "#20252B", "#2B323B", "#3E4854", "#1B2027" }
+        ["Slate"] = new[] { "#171B21", "#20252B", "#2B323B", "#3E4854", "#1B2027" },
+        ["Jet Black"] = new[] { "#000000", "#040404", "#0C0C0C", "#1E1E1E", "#000000" }
     };
 
-    internal static readonly string[] Palettes = ClassicPalette.Keys.Concat(SharedOrder).ToArray();
+    internal static readonly string[] Palettes = ClassicPalette.Keys.ToArray();
     internal static readonly string[] Accents = ClassicAccentColors.Keys.Concat(VividOrder).ToArray();
-    internal static readonly string[] ConsolePalettes = ConsolePalette.Keys.Concat(SharedOrder).ToArray();
+    internal static readonly string[] ConsolePalettes = ConsolePalette.Keys.ToArray();
     internal static readonly string[] ConsoleAccents = ConsoleAccentColors.Keys.Concat(VividOrder).ToArray();
 
     private static string[] PaletteColors(string name, bool console) =>
-        (console ? ConsolePalette : ClassicPalette).TryGetValue(name, out var own) ? own : Shared.TryGetValue(name, out var shared) ? shared : (console ? ConsolePalette["Monochrome"] : ClassicPalette["Charcoal"]);
+        (console ? ConsolePalette : ClassicPalette).TryGetValue(name, out var own) ? own : console ? ConsolePalette["Monochrome"] : ClassicPalette["Charcoal"];
     private static string AccentColor(string name, bool console) =>
         (console ? ConsoleAccentColors : ClassicAccentColors).TryGetValue(name, out var own) ? own : VividAccents.TryGetValue(name, out var vivid) ? vivid : console ? "#FFFFFF" : "#9CE2C1";
 
     private static Brush Frozen(string hex) { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); b.Freeze(); return b; }
     // The lists the pickers show: each name with a swatch (a palette's surface, an accent's color).
-    internal static List<ColorChoice> PaletteChoices(bool console) => (console ? ConsolePalettes : Palettes).Select(n => { var c = PaletteColors(n, console); return new ColorChoice(n, Frozen(c[2]), Frozen(c[3])); }).ToList();
     internal static List<ColorChoice> AccentChoices(bool console) => (console ? ConsoleAccents : Accents).Select(n => new ColorChoice(n, Frozen(AccentColor(n, console)), Frozen(AccentColor(n, console)))).ToList();
 
     // Text on the highlight: dark on a light one, light on a dark one.
@@ -160,14 +146,14 @@ public partial class MainWindow
     {
         var palettes = console ? Appearance.ConsolePalettes : Appearance.Palettes; var accents = console ? Appearance.ConsoleAccents : Appearance.Accents;
         string palette = console ? settings.ConsolePalette : settings.Palette, accent = console ? settings.ConsoleAccent : settings.AccentColor;
-        PaletteBox.ItemsSource = Appearance.PaletteChoices(console); AccentBox.ItemsSource = Appearance.AccentChoices(console);
-        PaletteBox.SelectedValue = palettes.Contains(palette) ? palette : palettes[0];
+        PaletteBox.ItemsSource = palettes; AccentBox.ItemsSource = Appearance.AccentChoices(console);
+        PaletteBox.SelectedItem = palettes.Contains(palette) ? palette : palettes[0];
         AccentBox.SelectedValue = accents.Contains(accent) ? accent : accents[0];
     }
     private void Appearance_Changed(object sender,SelectionChangedEventArgs e)
     {
         if(!appearanceReady) return;
-        if (PaletteBox.SelectedValue is not string palette || AccentBox.SelectedValue is not string accent) return;
+        if (PaletteBox.SelectedItem is not string palette || AccentBox.SelectedValue is not string accent) return;
         if (layout.Console)
         {
             settings.ConsolePalette=palette; settings.ConsoleAccent=accent;
