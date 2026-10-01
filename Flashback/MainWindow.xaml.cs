@@ -134,7 +134,7 @@ public partial class MainWindow : Window
         OverlayCheck.IsChecked = settings.OverlayEnabled;
         OverlayCornerBox.SelectedItem = settings.OverlayCorner; OverlayDurationBox.SelectedValue = settings.OverlaySeconds;
         SavedSoundBox.SelectedItem = settings.SavedSound; SavedSoundVolumeSlider.Value = settings.SavedSoundVolume;
-        LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications;
+        LaunchCheck.IsChecked = settings.StartWithWindows; AutoBufferCheck.IsChecked = settings.StartBufferOnLaunch; NotifyCheck.IsChecked = settings.Notifications; BufferStorageBox.SelectedIndex = settings.BufferInMemory ? 1 : 0;
         UpdateCheck.IsChecked = settings.CheckForUpdates; AutoUpdateCheck.IsChecked = settings.InstallUpdatesAutomatically; GpuExportCheck.IsChecked = settings.ExportGpuDecode; ThumbnailsCheck.IsChecked = settings.ShowThumbnails; WaveformsCheck.IsChecked = settings.ShowWaveforms; PreviewEffectsCheck.IsChecked = settings.PreviewEffects; AnimationsCheck.IsChecked = settings.UiAnimations; SyncLighterMode(); PerformanceOptions.Apply(settings); SeparateTracksCheck.IsChecked = settings.SeparateAudioTracks; SeparateAppsCheck.IsChecked = settings.SeparateAppAudio; WindowsPreviewCheck.IsChecked = settings.WindowsPreview;
         if (!AppMixSource.Supported) { SeparateAppsCheck.IsEnabled = false; SeparateAppsNote.Text = AppMixSource.Requirement; } AutoGameCheck.IsChecked = settings.AutoStartWithGames;
     }
@@ -158,7 +158,7 @@ public partial class MainWindow : Window
         DesktopMuted = settings.DesktopMuted, MicrophoneMuted = settings.MicrophoneMuted,
         MicrophoneDeviceId = MicrophoneDeviceBox.SelectedValue as string ?? settings.MicrophoneDeviceId,
         OutputFolder = FolderBox.Text.Trim(), GameOverride = GameBox.Text.Trim(), Hotkey = HotkeyBox.Text.Trim(),
-        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, InstallUpdatesAutomatically = AutoUpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, WindowsPreview = WindowsPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true,
+        StartWithWindows = LaunchCheck.IsChecked == true, CheckForUpdates = UpdateCheck.IsChecked == true, InstallUpdatesAutomatically = AutoUpdateCheck.IsChecked == true, ExportGpuDecode = GpuExportCheck.IsChecked != false, ShowThumbnails = ThumbnailsCheck.IsChecked != false, ShowWaveforms = WaveformsCheck.IsChecked != false, PreviewEffects = PreviewEffectsCheck.IsChecked != false, UiAnimations = AnimationsCheck.IsChecked != false, SeparateAudioTracks = SeparateTracksCheck.IsChecked == true, SeparateAppAudio = SeparateAppsCheck.IsChecked == true, WindowsPreview = WindowsPreviewCheck.IsChecked == true, AutoStartWithGames = AutoGameCheck.IsChecked == true, StartBufferOnLaunch = AutoBufferCheck.IsChecked == true, Notifications = NotifyCheck.IsChecked == true, BufferInMemory = BufferStorageBox.SelectedIndex == 1,
         PauseHotkey = PauseHotkeyBox.Text, OverlayEnabled = OverlayCheck.IsChecked == true, ShowSavingOverlay = true,
         OverlayCorner = (string)OverlayCornerBox.SelectedItem, OverlaySeconds = (int)OverlayDurationBox.SelectedValue,
         SavedSound = SavedSoundBox.SelectedItem as string ?? SaveSound.Off, SavedSoundVolume = (int)Math.Round(SavedSoundVolumeSlider.Value),
@@ -434,7 +434,7 @@ public partial class MainWindow : Window
         trayToggle.Text = active || recovery.IsRunning ? "Pause buffer" : "Start buffer"; trayToggle.Enabled = ToggleButton.IsEnabled;
         traySave.Enabled = TopSaveButton.IsEnabled;
         tray.Text = active || recovery.IsRunning ? "Flashback — recording" : "Flashback — paused";
-        UpdateConsoleStatus();
+        UpdateConsoleStatus(); UpdateBufferStorageNote();
     }
     private void Tell(string message, bool error = false)
     {

@@ -133,6 +133,27 @@
       <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Text="Recording is the biggest cost, and it's set under Video. On a weaker PC we recommend 720p at 30 FPS: it uses about half the CPU of 1080p 60 (about 11% of one core instead of 23% in our tests)."/>
       <TextBlock Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" Text="The per-app audio mixer and microphone noise suppression each add about another 10% of a core, so leave them off if you don't need them."/>
       <Button x:Name="RecommendedVideoButton" Content="Use 720p 30 FPS" Click="RecommendedVideo_Click" HorizontalAlignment="Left" Margin="0,8,0,0" ToolTip="Sets Video to 720p at 30 FPS."/>
+      <StackPanel Orientation="Horizontal" Margin="0,18,0,4">
+       <TextBlock Text="Replay buffer is kept" Style="{DynamicResource Caption}" Margin="0" VerticalAlignment="Center"/>
+       <TextBlock x:Name="BufferStorageInfo" Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource Muted}" Margin="8,1,0,0" VerticalAlignment="Center" Cursor="Help" Focusable="True" ToolTipService.InitialShowDelay="100" ToolTipService.ShowDuration="120000" AutomationProperties.Name="Disk or memory: the differences">
+        <TextBlock.ToolTip>
+         <StackPanel Width="380">
+          <TextBlock Text="On disk (default)" FontWeight="SemiBold" Margin="0,0,0,3"/>
+          <TextBlock TextWrapping="Wrap" Text="+ Uses very little memory, so the buffer can be as long as you like at any quality." Margin="0,0,0,2"/>
+          <TextBlock TextWrapping="Wrap" Text="+ Survives a crash or an encoder restart: the footage already recorded is still there." Margin="0,0,0,2"/>
+          <TextBlock TextWrapping="Wrap" Text="- Writes a few megabytes every second to your drive while it records. That is gentle on an SSD, but a slow or busy hard drive can add stutter." Margin="0,0,0,9"/>
+          <TextBlock Text="In memory" FontWeight="SemiBold" Margin="0,0,0,3"/>
+          <TextBlock TextWrapping="Wrap" Text="+ Nothing is written to your drive while you play: no wear on an SSD and no waiting on a slow hard drive." Margin="0,0,0,2"/>
+          <TextBlock TextWrapping="Wrap" Text="- Takes memory from your game: as much as the buffer holds (see the estimate below)." Margin="0,0,0,2"/>
+          <TextBlock TextWrapping="Wrap" Text="- The buffer is lost if Flashback or its encoder crashes, and when you pause or change recording settings." Margin="0,0,0,2"/>
+          <TextBlock TextWrapping="Wrap" Text="- Saving a clip still writes that clip, and briefly a temporary copy of it, to your drive." Margin="0,0,0,9"/>
+          <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Text="A buffer too big for memory (more than a fifth of your RAM, at most 4 GB) stays on disk on its own. If you aren't sure, leave it on disk."/>
+         </StackPanel>
+        </TextBlock.ToolTip>
+       </TextBlock>
+      </StackPanel>
+      <ComboBox x:Name="BufferStorageBox" SelectionChanged="BufferStorage_Changed" AutomationProperties.Name="Where the replay buffer is kept"><ComboBoxItem Content="On disk (default)"/><ComboBoxItem Content="In memory"/></ComboBox>
+      <TextBlock x:Name="BufferStorageNote" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
       <TextBlock Text="Editing and browsing" Style="{DynamicResource Caption}" Margin="0,18,0,4"/>
       <CheckBox x:Name="ThumbnailsCheck" Content="Clip thumbnails on the Clips page" Click="PerformanceToggle_Click" ToolTip="Off: clips are listed without preview pictures, which saves reading every video file"/>
       <CheckBox x:Name="WaveformsCheck" Content="Audio waveforms in the editor" Click="PerformanceToggle_Click" ToolTip="Off: the audio lanes still work, without reading the whole soundtrack to draw them"/>

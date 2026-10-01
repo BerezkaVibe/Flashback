@@ -20,6 +20,8 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, x) => LogCrash("App", x.ExceptionObject as Exception);
         var data = Array.IndexOf(e.Args, "--data-dir");
         if (data >= 0 && data + 1 < e.Args.Length) Storage.Root = Path.GetFullPath(e.Args[data + 1]);
+        // A test run with the replay buffer held in memory whatever the setting (--memory-buffer).
+        if (e.Args.Contains("--memory-buffer")) Recorder.ForceMemoryForTests = true;
         // Which preview player the editor uses in a test run (--preview-player ffmpeg|windows), whatever the setting.
         var previewPlayer = Array.IndexOf(e.Args, "--preview-player");
         if (previewPlayer >= 0 && previewPlayer + 1 < e.Args.Length) TrimWindow.UseFfmpegPreview = !string.Equals(e.Args[previewPlayer + 1], "windows", StringComparison.OrdinalIgnoreCase);
@@ -122,6 +124,12 @@ public partial class App : Application
         if (e.Args.Contains("--layout-test"))
         {
             try { await LayoutDiagnostics.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
+        if (e.Args.Contains("--memory-buffer-test"))
+        {
+            try { await MemoryBufferDiagnostics.RunAsync(); Shutdown(0); }
             catch (Exception ex) { Directory.CreateDirectory(Storage.Root); File.WriteAllText(Path.Combine(Storage.Root, "test-failure.txt"), ex.ToString()); Shutdown(1); }
             return;
         }

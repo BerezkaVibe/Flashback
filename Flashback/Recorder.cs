@@ -42,6 +42,14 @@ public sealed class Recorder : IAsyncDisposable
     private List<Segment> retainedSegments = new();
     private double timelineOffset;
     private int nextSegmentNumber;
+    // The buffer held in memory instead of in segment files (see MemoryBuffer); chosen each time the buffer starts.
+    private MemoryBuffer? memory; private bool inMemory;
+    internal bool BufferInMemory => inMemory;
+    internal int MemoryChunks => memory?.Segments().Count ?? 0;
+    internal string? SessionFolder => session;
+    // What the last save used, for the tests: the segments joined and where the last save ended.
+    internal string LastSaveReport { get; private set; } = "";
+    internal static bool ForceMemoryForTests { get; set; }
     public bool LastRestartPreservedBuffer { get; private set; }
     private Settings settings = new();
     private double progressSeconds;
@@ -167,7 +175,13 @@ public sealed class Recorder : IAsyncDisposable
             }
             session ??= Path.Combine(cache, "session-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(session);
-            EnsureSpace(session, settings.EstimatedBufferMb + 512);
+            // In memory only when asked for and when it fits: a buffer larger than the limit is kept on disk.
+            inMemory = (settings.BufferInMemory || ForceMemoryForTests) && settings.EstimatedBufferMb <= MemoryBuffer.LimitMb;
+            EnsureSpace(session, inMemory ? 512 : settings.EstimatedBufferMb + 512);
+            string? memoryPipe = null;
+            if (inMemory) { memory ??= new MemoryBuffer(); memoryPipe = memory.StartEpoch(settings.FrameRate); }
+            else if (memory != null) { memory.Dispose(); memory = null; }
+            LastStartupReport += inMemory ? "Replay buffer: held in memory.\n" : "Replay buffer: on disk.\n";
             LastError = ""; stopping = false; BufferedSeconds = 0; BufferBytes = 0;
             Volatile.Write(ref progressSeconds, timelineOffset); Volatile.Write(ref progressTick, Stopwatch.GetTimestamp());
             Volatile.Write(ref measuredFps, 0);
@@ -216,7 +230,7 @@ public sealed class Recorder : IAsyncDisposable
                         try { File.WriteAllText(Path.Combine(Storage.Root, "last-display-recovery.txt"), $"{DateTimeOffset.Now:O}\n{ErrorTail()}"); } catch { }
                 }, synthetic || DisableNativeForTests ? null : framePool => new GpuDesktopCapture(CaptureDisplay.Resolve(originalDisplay!, CaptureDisplay.Enumerate()), size.Width, size.Height, settings.FrameRate, settings.ShowCursor, framePool));
             }
-            var args = BuildArguments(settings, session, audio, synthetic, transfer, display, nextSegmentNumber, microphone, selectedEncoder, video, SyncPatternForTests);
+            var args = BuildArguments(settings, session, audio, synthetic, transfer, display, nextSegmentNumber, microphone, selectedEncoder, video, SyncPatternForTests, memoryPipe);
             UsesGpuTransfer = args.Any(a => a.Contains("hwupload_cuda", StringComparison.Ordinal));
             LastStartupReport += $"Encoding path: {(synthetic ? "synthetic test" : video != null ? selectedEncoder?.IsAmd == true ? "NV12 frame bridge to AMD AMF" : "NV12 frame bridge to NVIDIA NVENC; GPU resize requested (compatibility fallback logged separately)" : UsesGpuTransfer ? "CUDA transfer to NVIDIA" : "direct NVIDIA display device")}.\n";
             Mark("capture configured");
@@ -292,7 +306,7 @@ public sealed class Recorder : IAsyncDisposable
         "Strong" => prefix + "highpass=f=80,afftdn=nr=20:nf=-35:tn=1",
         _ => ""
     };
-    internal static List<string> BuildArguments(Settings s, string dir, IRecordingAudio? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false)
+    internal static List<string> BuildArguments(Settings s, string dir, IRecordingAudio? audio, bool synthetic, bool transfer = false, CaptureDisplay? display = null, int startSegmentNumber = 0, AudioLoopback? microphone = null, VideoEncoder? encoder = null, VideoFrameBridge? bridge = null, bool syncTest = false, string? memoryPipe = null)
     {
         var args = new List<string> { "-hide_banner", "-loglevel", "warning", "-nostats", "-y", "-filter_complex_threads", "2", "-stats_period", "0.25", "-progress", "pipe:1" };
         var audioInputs = new List<int>();
@@ -413,8 +427,17 @@ public sealed class Recorder : IAsyncDisposable
             // A lone microphone (desktop audio off) gets its noise reduction here.
             if (audioInputs.Count == 1 && !layers) args.AddRange(new[] { "-af", "aresample=async=1000:first_pts=0" + (microphone != null && audio == null && !synthetic ? NoiseFilter(s, ",") : "") });
         }
-        args.AddRange(new[] { "-f", "segment", "-segment_time", "2", "-segment_time_delta", "0.02", "-segment_format", "mpegts", "-segment_list", "segments.csv", "-segment_list_type", "csv", "-segment_list_size", (s.ReplaySeconds / 2 + 12).ToString(), "-reset_timestamps", "1", "part-%09d.ts" });
-        args.InsertRange(args.Count - 1, new[] { "-segment_start_number", startSegmentNumber.ToString(CultureInfo.InvariantCulture) });
+        if (memoryPipe != null)
+        {
+            // One continuous stream into a pipe the recorder reads into memory and cuts at keyframes; the tables go
+            // in before every picture so each cut piece stands on its own, and the stream starts at time zero.
+            args.AddRange(new[] { "-f", "mpegts", "-mpegts_flags", "+pat_pmt_at_frames", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", memoryPipe });
+        }
+        else
+        {
+            args.AddRange(new[] { "-f", "segment", "-segment_time", "2", "-segment_time_delta", "0.02", "-segment_format", "mpegts", "-segment_list", "segments.csv", "-segment_list_type", "csv", "-segment_list_size", (s.ReplaySeconds / 2 + 12).ToString(), "-reset_timestamps", "1", "part-%09d.ts" });
+            args.InsertRange(args.Count - 1, new[] { "-segment_start_number", startSegmentNumber.ToString(CultureInfo.InvariantCulture) });
+        }
         return args;
     }
     private static List<string> BuildProducerArguments(Settings s, bool synthetic, CaptureDisplay? display, VideoEncoder? encoder, (int Width, int Height) size, string output, bool syncTest = false)
@@ -495,6 +518,7 @@ public sealed class Recorder : IAsyncDisposable
     private List<Segment> ReadCurrentSegments()
     {
         if (session == null) return new();
+        if (inMemory) return memory?.Segments(memory.CurrentEpoch) ?? new();
         try
         {
             using var stream = new FileStream(Path.Combine(session, "segments.csv"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -535,12 +559,14 @@ public sealed class Recorder : IAsyncDisposable
                     var names = all.Where(s => s.End > cutoff).Select(s => s.Name).ToHashSet();
                     // Never delete the current, unfinalized segment (its sequence is larger).
                     var latest = all[^1].Name;
+                    if (inMemory) memory!.Keep(names, latest);
+                    else
                     foreach (var path in Directory.EnumerateFiles(session!, "part-*.ts"))
                         if (string.CompareOrdinal(Path.GetFileName(path), latest) < 0 && !names.Contains(Path.GetFileName(path)))
                             try { File.Delete(path); } catch (IOException) { }
                     retainedSegments = retainedSegments.Where(s => s.End > cutoff).ToList();
                     BufferedSeconds = Math.Max(0, Math.Min(settings.ReplaySeconds, all[^1].End - Math.Max(savedThrough, all.First(s => names.Contains(s.Name)).Start)));
-                    BufferBytes = Directory.EnumerateFiles(session!, "*.ts").Sum(p => new FileInfo(p).Length);
+                    BufferBytes = inMemory ? memory!.Bytes : Directory.EnumerateFiles(session!, "*.ts").Sum(p => new FileInfo(p).Length);
                     EnsureSpace(session!, 256);
                 }
                 finally { files.Release(); }
@@ -561,6 +587,30 @@ public sealed class Recorder : IAsyncDisposable
             Faulted?.Invoke(generation, LastError);
         }
     }
+    // The saved part of a memory buffer, written out to join into a clip: each run of consecutive chunks of one
+    // stream becomes one file (a continuous stream), with the time it covers. Called with the file lock held.
+    private async Task<List<(string Name, double Duration)>> WriteMemoryPiecesAsync(List<Segment> selected, string staging)
+    {
+        var pieces = new List<(string, double)>(); var run = new List<Segment>(); int number = 0;
+        async Task FlushAsync()
+        {
+            if (run.Count == 0) return;
+            string file = $"stream-{number++:D3}.ts";
+            await using (var output = new FileStream(Path.Combine(staging, file), FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20, true))
+                await memory!.WriteAsync(run.Select(s => s.Name), output).ConfigureAwait(false);
+            pieces.Add((file, run.Sum(s => s.Duration))); run.Clear();
+        }
+        foreach (var seg in selected)
+        {
+            // Names are mem-<stream>-<number>: a new run starts at another stream or where the numbers skip.
+            if (run.Count > 0 && !Consecutive(run[^1].Name, seg.Name)) await FlushAsync().ConfigureAwait(false);
+            run.Add(seg);
+        }
+        await FlushAsync().ConfigureAwait(false);
+        return pieces;
+    }
+    private static bool Consecutive(string a, string b) =>
+        a.Length == b.Length && a[..8] == b[..8] && long.TryParse(a[8..], out var x) && long.TryParse(b[8..], out var y) && y == x + 1;
     public async Task<ClipResult> SaveAsync(string game, DateTimeOffset pressedAt)
     {
         if (session == null) throw new InvalidOperationException("Start the replay buffer before saving a clip.");
@@ -593,6 +643,7 @@ public sealed class Recorder : IAsyncDisposable
                 await Task.Delay(100).ConfigureAwait(false);
             }
             if (selected.Count == 0) throw new IOException("The replay buffer is still warming up.");
+            LastSaveReport = $"saved through {savedThrough:0.00}, end {end:0.00}; segments " + string.Join(", ", selected.Select(s => $"{s.Name[^6..]}@{s.Start:0.0}-{s.End:0.0}"));
             // A clip starts where its first segment does, on a keyframe, so its picture and sound begin together.
             // Cut partway into a segment (the chunks are copied, not re-encoded), the sound started at the cut and
             // the picture only at the next keyframe, up to a segment later, which some players and editors
@@ -607,14 +658,16 @@ public sealed class Recorder : IAsyncDisposable
             var output = Path.Combine(destination, Storage.ClipName(game, pressedAt, duration));
             if (File.Exists(output)) output = Path.Combine(destination, Path.GetFileNameWithoutExtension(output) + "-" + Guid.NewGuid().ToString("N")[..6] + ".mp4");
             partial = output + ".partial";
-            EnsureSpace(destination, selected.Sum(s => new FileInfo(Path.Combine(session, s.Name)).Length) / 1048576.0 + 128);
+            EnsureSpace(destination, selected.Sum(s => inMemory ? memory!.SizeOf(s.Name) : new FileInfo(Path.Combine(session, s.Name)).Length) / 1048576.0 + 128);
             staging = Path.Combine(session, "save-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(staging);
             await files.WaitAsync().ConfigureAwait(false);
+            var pieces = selected.Select(s => (s.Name, s.Duration)).ToList();   // what the clip is joined from, in order
             try
             {
+                if (inMemory) pieces = await WriteMemoryPiecesAsync(selected, staging).ConfigureAwait(false);
                 // Snapshot completed chunks while cleanup is locked. Never overwrite or move saved clips.
-                foreach (var seg in selected)
+                else foreach (var seg in selected)
                 {
                     // A hard link keeps the chunk alive after buffer cleanup without rewriting
                     // hundreds of megabytes mid-game; copying is only the fallback.
@@ -626,7 +679,7 @@ public sealed class Recorder : IAsyncDisposable
                 }
             }
             finally { files.Release(); }
-            File.WriteAllLines(Path.Combine(staging, "clip.ffconcat"), new[] { "ffconcat version 1.0" }.Concat(selected.SelectMany(s => new[] { $"file '{s.Name}'", "duration " + s.Duration.ToString("0.000000", CultureInfo.InvariantCulture) })), new UTF8Encoding(false));
+            File.WriteAllLines(Path.Combine(staging, "clip.ffconcat"), new[] { "ffconcat version 1.0" }.Concat(pieces.SelectMany(s => new[] { $"file '{s.Name}'", "duration " + s.Duration.ToString("0.000000", CultureInfo.InvariantCulture) })), new UTF8Encoding(false));
             var muxArgs = new List<string> { "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "1", "-i", "clip.ffconcat", "-t", duration.ToString("0.000000", CultureInfo.InvariantCulture), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", "-avoid_negative_ts", "disabled" };
             if (layeredBuffer) muxArgs.AddRange(LayerTitles(layers, start, start + duration, layeredMicrophone));
             muxArgs.AddRange(new[] { "-f", "mp4", partial });
@@ -710,19 +763,21 @@ public sealed class Recorder : IAsyncDisposable
         if (microphone != null) { await microphone.DisposeAsync(); microphone = null; }
         if (video != null) { await video.DisposeAsync(); video = null; }
         injectedFailure = null;
+        // A buffer in memory: the stream has ended, so its last chunk is finished before anything is kept.
+        if (inMemory && memory != null) await memory.EndAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
         if (preserveBuffer && session != null)
         {
-            retainedSegments = ReadSegments().Where(s => File.Exists(Path.Combine(session, s.Name))).ToList();
+            retainedSegments = ReadSegments().Where(s => inMemory ? memory!.Has(s.Name) : File.Exists(Path.Combine(session, s.Name))).ToList();
             // Advance past even an unfinished file, so no previous bytes are overwritten.
-            nextSegmentNumber = Directory.EnumerateFiles(session, "part-*.ts")
+            if (!inMemory) nextSegmentNumber = Directory.EnumerateFiles(session, "part-*.ts")
                 .Select(p => int.TryParse(Path.GetFileNameWithoutExtension(p).AsSpan(5), out var n) ? n + 1 : 0).DefaultIfEmpty(nextSegmentNumber).Max();
             timelineOffset = retainedSegments.LastOrDefault()?.End ?? timelineOffset;
-            File.Delete(Path.Combine(session, "segments.csv"));
+            if (!inMemory) File.Delete(Path.Combine(session, "segments.csv"));
         }
         else
         {
             if (session != null) { TryDeleteDirectory(session); session = null; }
-            retainedSegments.Clear(); timelineOffset = 0; nextSegmentNumber = 0; savedThrough = 0; layers.Clear();
+            retainedSegments.Clear(); timelineOffset = 0; nextSegmentNumber = 0; savedThrough = 0; layers.Clear(); memory?.Clear();
         }
         BufferedSeconds = 0; BufferBytes = 0; stopping = false;
     }
@@ -734,7 +789,7 @@ public sealed class Recorder : IAsyncDisposable
         if (drive.IsReady && drive.AvailableFreeSpace < minimumMb * 1048576) throw new IOException("Not enough free disk space. Choose another clip folder or free some space.");
     }
     private static void TryDeleteDirectory(string path) { try { Directory.Delete(path, true); } catch { } }
-    public async ValueTask DisposeAsync() { await StopAsync(); job.Dispose(); }
+    public async ValueTask DisposeAsync() { await StopAsync(); memory?.Dispose(); job.Dispose(); }
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateHardLink(string newFile, string existingFile, IntPtr security);
 }

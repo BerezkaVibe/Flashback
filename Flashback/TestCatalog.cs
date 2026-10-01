@@ -38,6 +38,7 @@ internal static class TestCatalog
         new("--open-time-test", "Editor opening time", "Editor", "How long each step of opening a clip in the editor takes, and how long the window freezes meanwhile.", UsesScreen: true),
         new("--timeline-click-test", "Timeline clicks", "Editor", "A quick real-mouse click on each part of the timeline opens its settings, and they stay open.", UsesScreen: true),
         new("--layout-test", "Layouts", "App", "The console layouts, the layout importer (files and GitHub links) and going back to the default layout.", UsesScreen: true),
+        new("--memory-buffer-test", "Replay buffer in memory", "Recording", "The buffer held in memory: the stream is cut into chunks byte for byte, nothing is written to the buffer folder, clips save and play, a restart keeps the buffer, and a buffer too big for memory stays on disk."),
         new("--open-cpu-test", "CPU after opening", "Editor", "Which threads use the CPU, second by second, after the editor opens a clip and while it plays.", UsesScreen: true),
         new("--sound-drag-test", "Dragging sounds between rows", "Editor", "Drags a sound down and back up with the real mouse; it moves one row at a time.", UsesScreen: true),
         new("--limits-test", "0.9.6: limits, typed values, waveforms, settings", "Editor", "Exports at the new limits (16x, 0.05x, 60 s freezes, 500% volume, 12x zoom), typing exact values, sound waveforms and settings saving themselves.", UsesScreen: true),

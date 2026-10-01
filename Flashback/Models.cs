@@ -77,6 +77,10 @@ public sealed class Settings
     public int OverlaySeconds { get; set; } = 3;
     public string SavedSound { get; set; } = SaveSound.Off;
     public int SavedSoundVolume { get; set; } = 60;
+    // Where the replay buffer lives while recording: on disk (the default) or in memory. A buffer larger than
+    // MemoryBuffer.LimitMb stays on disk whatever this says.
+    public bool BufferInMemory { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool BufferFitsInMemory => EstimatedBufferMb <= MemoryBuffer.LimitMb;
     public Settings Copy() => JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this))!;
     public void Validate()
     {
@@ -138,7 +142,7 @@ public sealed class Settings
     }
     public bool RequiresBufferRestart(Settings other) => ReplaySeconds != other.ReplaySeconds || FrameRate != other.FrameRate
         || Height != other.Height || Quality != other.Quality || Encoder != other.Encoder || DisplayIndex != other.DisplayIndex
-        || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
+        || BufferInMemory != other.BufferInMemory || DesktopAudio != other.DesktopAudio || AudioDeviceId != other.AudioDeviceId
         || MicrophoneAudio != other.MicrophoneAudio || MicrophoneDeviceId != other.MicrophoneDeviceId
         || ShowCursor != other.ShowCursor || OutputFolder != other.OutputFolder || AudioBitrate != other.AudioBitrate || SeparateAudioTracks != other.SeparateAudioTracks || SeparateAppAudio != other.SeparateAppAudio || MixerActive != other.MixerActive || MicNoiseReduction != other.MicNoiseReduction;
     public static readonly int[] AudioBitrates = { 128, 160, 192, 256, 320 };
