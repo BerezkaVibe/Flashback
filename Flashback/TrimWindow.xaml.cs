@@ -40,7 +40,9 @@ public partial class TrimWindow : Window
     public TrimWindow(string? path = null, bool renderOnly = false)
     {
         InitializeComponent(); WindowTheme.Attach(this); previewEnabled = !renderOnly;
+        OpenTiming.Mark("constructor: layout loaded");
         Player = CreatePlayer();
+        OpenTiming.Mark("constructor: player created");
         LoadKeys();
         Activated += (_, _) => LoadKeys();
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
@@ -59,6 +61,7 @@ public partial class TrimWindow : Window
         InitParts();
         InitTiming(); InitFreezes(); InitSectionOrder();
         InitAudioParts(); InitSequence();
+        OpenTiming.Mark("constructor: tools set up");
         LoadSpeedPresets();
         // Scrubbing pauses the preview; letting go picks playback back up if it was playing.
         Timeline.DragStarted += () => { resumeAfterDrag = playing; Pause(); };
@@ -69,6 +72,7 @@ public partial class TrimWindow : Window
         clock = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         clock.Tick += (_, _) => RefreshPlayback();
         if (path != null) LoadClip(path,false);
+        OpenTiming.Mark("constructor: clip loaded");
         Closing += (_, e) =>
         {
             if (exportCancellation != null) { closeAfterCancel = true; exportCancellation.Cancel(); e.Cancel = true; return; }
@@ -90,7 +94,7 @@ public partial class TrimWindow : Window
     {
         if (exportCancellation != null) { ImportError("Finish or cancel the export before opening another video."); return false; }
         // Read and validate first so a bad drop cannot erase an existing edit.
-        var imported=TrimImport.Read(new[] { path });
+        var imported=TrimImport.Read(new[] { path }); OpenTiming.Mark("LoadClip: file read (ffmpeg -i)");
         if (string.Equals(source,imported.Path,StringComparison.OrdinalIgnoreCase)) return true;
         if (confirmChanges && !ConfirmLeave("Save your changes to this clip first?")) return false;
         if(!FlushProject()) return false; if (!confirmChanges && source.Length>0) TrimRecovery.Forget(source); projectPath=null; savedProject=null; projectSaveTimer?.Stop(); Pause(); Player.Close(); playersReleased=false; pausedInBackground=false; source=imported.Path; media=imported.Media; var sourceInfo=new FileInfo(source); sourceBytes=sourceInfo.Length; sourceWriteTicks=sourceInfo.LastWriteTimeUtc.Ticks;
@@ -100,13 +104,13 @@ public partial class TrimWindow : Window
         SourceLabel.Text=Path.GetFileName(source); SourceLabel.ToolTip=source;
         TrimContent.Visibility=Visibility.Visible; EmptyState.Visibility=Visibility.Collapsed;
         StatusLabel.Text="";
-        if (previewEnabled) { Player.Source=new Uri(source); if (!Player.PlaysTimeline) { Player.Play(); Player.Pause(); } clock.Start(); }
+        if (previewEnabled) { Player.Source=new Uri(source); if (!Player.PlaysTimeline) { Player.Play(); Player.Pause(); } clock.Start(); OpenTiming.Mark("LoadClip: player source set"); }
         // Changes left unsaved by a crash are offered once the window is up.
         savedEdit=null;
         if (previewEnabled && offerRecovery) { if (IsLoaded) Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); else { void Once(object? s, RoutedEventArgs a) { Loaded -= Once; Dispatcher.BeginInvoke(OfferRecovery, DispatcherPriority.ApplicationIdle); } Loaded += Once; } }
-        LoadLanes();
+        LoadLanes(); OpenTiming.Mark("LoadClip: lanes started");
         // Its last save comes back (only in the app itself, so the tests start clean).
-        if (previewEnabled && offerRecovery && AskToSave) OpenSavedEdit(); else MarkSaved();
+        if (previewEnabled && offerRecovery && AskToSave) OpenSavedEdit(); else MarkSaved(); OpenTiming.Mark("LoadClip: saved edit restored");
         return true;
     }
     private void ImportError(string message) { StatusLabel.Text=message; ImportStatus.Text=message; }

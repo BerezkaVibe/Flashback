@@ -18,6 +18,7 @@ internal static class AudioWaveforms
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
         foreach (var arg in new[] { "-hide_banner", "-nostdin", "-i", path }) info.ArgumentList.Add(arg);
         using var process = Process.Start(info) ?? throw new IOException("Could not read the audio tracks.");
+        OpenTiming.Mark("TitlesAsync: ffmpeg started");
         string text = await process.StandardError.ReadToEndAsync(token).ConfigureAwait(false);
         await process.WaitForExitAsync(token).ConfigureAwait(false);
         var titles = new List<string>(); bool audio = false;

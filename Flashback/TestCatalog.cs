@@ -35,6 +35,7 @@ internal static class TestCatalog
         new("--slider-test", "Sliders", "Editor", "The editor's sliders and their values.", UsesScreen: true),
         new("--frame-history-test", "Frame history", "Editor", "Stepping frame by frame and the history of frames shown.", UsesScreen: true),
         new("--background-test", "Editor in the background", "Editor", "CPU and memory with the editor in front, behind other windows, minimized and back.", UsesScreen: true),
+        new("--open-time-test", "Editor opening time", "Editor", "How long each step of opening a clip in the editor takes, and how long the window freezes meanwhile.", UsesScreen: true),
         new("--open-cpu-test", "CPU after opening", "Editor", "Which threads use the CPU, second by second, after the editor opens a clip and while it plays.", UsesScreen: true),
         new("--sound-drag-test", "Dragging sounds between rows", "Editor", "Drags a sound down and back up with the real mouse; it moves one row at a time.", UsesScreen: true),
         new("--limits-test", "0.9.6: limits, typed values, waveforms, settings", "Editor", "Exports at the new limits (16x, 0.05x, 60 s freezes, 500% volume, 12x zoom), typing exact values, sound waveforms and settings saving themselves.", UsesScreen: true),

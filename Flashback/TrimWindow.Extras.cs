@@ -66,16 +66,19 @@ public partial class TrimWindow
     // with app layers show Other apps and the microphone (when it was on), then a layer for each app.
     private async void LoadLanes()
     {
+        OpenTiming.Mark("LoadLanes: entered");
         waveformLoad?.Cancel(); waveformLoad = new CancellationTokenSource(); var token = waveformLoad.Token;
         TrackMixPanel.Visibility = media.HasSeparateTracks ? Visibility.Visible : Visibility.Collapsed;
         DesktopMix.Value = 100; MicrophoneMix.Value = 100; trackVolumes.Clear(); recordedLevels.Clear();
+        OpenTiming.Mark("LoadLanes: mix reset");
         var names = media.HasSeparateTracks ? new[] { ("Desktop", 1), ("Microphone", 2) } : media.HasAudio ? new[] { ("Audio", 0) } : Array.Empty<(string, int)>();
         var lanes = names.Select(n => (Name: n.Item1, Track: n.Item2, Apps: (IReadOnlyList<(string, double)>)Array.Empty<(string, double)>())).ToList();
         if (media.AudioTracks >= 3 + AppMixSource.Slots)
         {
             string path = source;
             IReadOnlyList<string> titles;
-            try { titles = await AudioWaveforms.TitlesAsync(path, token); } catch { titles = Array.Empty<string>(); }
+            OpenTiming.Mark("LoadLanes: asking for track names");
+            try { titles = await Task.Run(() => AudioWaveforms.TitlesAsync(path, token), token); } catch { titles = Array.Empty<string>(); }
             if (token.IsCancellationRequested || path != source) return;
             if (titles.Count >= 3 && titles[1] == "Other apps")
             {
